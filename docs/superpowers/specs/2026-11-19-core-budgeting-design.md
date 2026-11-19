@@ -114,7 +114,7 @@ All tables use UUID primary keys and `created_at` / `updated_at` timestamps unle
   - `kind`: `spending` | `balance` | `debt`
   - `cadence`: `weekly` | `monthly` | `yearly` | `custom` | `none`
   - `amount`, `mode` (`set_aside` | `refill`, used by spending targets)
-  - `due_weekday` (0–6), `due_day_of_month` (1–31 or null = last day), `due_date`
+  - `due_weekday` (0–6, 0 = Sunday), `due_day_of_month` (1–31 or null = last day), `due_date`
   - `repeat_unit` (`month` | `year` | null), `repeat_every` (int), `start_month`
   - `debt_mode` (`min_payment` | `fixed` | `payoff_by_date`)
   - `snoozed_month`
@@ -166,15 +166,16 @@ All amounts are PLN base. `m` = month, `c` = category.
 
 ### 5.2 Overspending (cash vs credit)
 For category `c` in month `m` with Available < 0, let `O = −Available(c,m)`:
-- `cashSpend` = max(0, −Σ amounts of `c`'s lines on cash-class accounts in `m`)
 - `creditSpend(k)` = max(0, −Σ amounts of `c`'s lines on credit account `k` in `m`)
-- **cashOver** = min(O, cashSpend). Cash is counted first (YNAB rule).
-- **creditOver** = min(O − cashOver, Σₖ creditSpend(k)), split across cards in proportion to creditSpend(k), with
-  largest-remainder rounding to the grosz.
-- **residual** = O − cashOver − creditOver (e.g. caused by a negative assignment); treated as cash overspending.
-- **Color**: red if cashOver + residual > 0, otherwise yellow (creditOver > 0).
-- **CashOverspent(m)** = Σ over all categories (including credit card payment and Uncategorized) of
-  cashOver + residual.
+- **creditOver** = min(O, Σₖ creditSpend(k)), split across cards in proportion to creditSpend(k), with
+  largest-remainder rounding to the grosz (ties go to the earlier card in input order).
+- **cashOver** = O − creditOver. This also covers overspending with no card spending behind it, e.g. from a negative
+  assignment.
+- **Why (YNAB rule):** available money covers cash spending first, because that cash has already left the bank.
+  So when overspending is mixed, the cash part is overspent first and the category shows **red**. Covering it removes
+  the cash part first, after which it shows **yellow** until fully covered.
+- **Color**: red if cashOver > 0, otherwise yellow if creditOver > 0.
+- **CashOverspent(m)** = Σ cashOver over all categories (including credit card payment and Uncategorized).
 
 ### 5.3 Credit card payment categories
 Each credit-class account `k` has payment category `p_k` (group kind `cc_payments`).
@@ -502,9 +503,9 @@ sessions.
   - Shown RTA(m) sums correctly against future assignments
   - schedule date generation is monotonic and clamped
 - Golden scenarios:
-  1. Available 100, cash spend 80, card spend 50 → Available −30 red; card payment category +50.
-  2. Available 10, cash 20, card 50 → cashOver 20, creditOver 40, card payment +10. Covering 20 → yellow −40;
-     covering 40 more → card payment +50.
+  1. Available 100, cash spend 80, card spend 50 → Available −30 yellow (creditOver 30); card payment +20.
+  2. Available 10, cash 20, card 50 → Available −60: cashOver 10 (red), creditOver 50, card payment +0. Covering 10 →
+     yellow −50, card payment still +0; covering 50 more → Available 0, card payment +50.
   3. Card refund in a category → category +X, card payment −X.
   4. Month ahead: RTA 200, assign 200 next month → current Shown RTA 0, next month RTA 0.
   5. Cash overspend 50 in January → February RTA −50, category carry 0.
