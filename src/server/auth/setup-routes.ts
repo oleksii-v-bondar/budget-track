@@ -1,0 +1,92 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { Hono } from 'hono';
+import {
+  type AuthStatus,
+  type RecoveryCodesResponse,
+  setupRequestSchema,
+  setupTotpRequestSchema,
+  type TotpSecretResponse,
+} from '../../shared/auth';
+import { monthIn } from '../clock';
+import type { Executor } from '../db/client';
+import { isUniqueViolation } from '../db/errors';
+import { seedBudget } from '../db/seed';
+import { appUser } from '../db/schema';
+import type { AppDeps } from '../http/app';
+import type { AppEnv } from '../http/env';
+import { AppError, DomainError } from '../http/errors';
+import { validate } from '../http/validate';
+import { hashPassword } from './passwords';
+import { generateRecoveryCodes, hashRecoveryCodes } from './recovery-codes';
+import { encryptSecret } from './secret-box';
+import { createSession, currentSession, setSessionCookie } from './sessions';
+import { newTotpSecret, totpUri, verifyTotp } from './totp';
+
+export async function isSetupComplete(db: Executor): Promise<boolean> {
+  const rows = await db.select({ id: appUser.id }).from(appUser).limit(1);
+  return rows.length > 0;
+}
+
+/** Constant-time comparison (hashing first makes the lengths equal). */
+function tokensMatch(given: string, expected: string): boolean {
+  const digest = (value: string) => createHash('sha256').update(value).digest();
+  return timingSafeEqual(digest(given), digest(expected));
+}
+
+const alreadySetUp = () => new AppError(409, 'already_setup', 'This budget is already set up. Sign in instead.');
+
+/** Spec §12 first-run setup: only while no user exists, and only with SETUP_TOKEN from the environment. */
+export function setupRoutes(deps: AppDeps) {
+  async function assertSetupAllowed(setupToken: string): Promise<void> {
+    if (await isSetupComplete(deps.db)) throw alreadySetUp();
+    if (!tokensMatch(setupToken, deps.config.setupToken)) {
+      throw new AppError(403, 'invalid_setup_token', 'That setup token is not correct.');
+    }
+  }
+
+  return new Hono<AppEnv>()
+    .get('/status', async (c) => {
+      const setupRequired = !(await isSetupComplete(deps.db));
+      const authenticated = !setupRequired && (await currentSession(c, deps)) !== null;
+      return c.json<AuthStatus>({ setupRequired, authenticated });
+    })
+    .post('/setup/totp', validate('json', setupTotpRequestSchema), async (c) => {
+      await assertSetupAllowed(c.req.valid('json').setupToken);
+      const secret = newTotpSecret();
+      return c.json<TotpSecretResponse>({ secret, uri: totpUri(secret) });
+    })
+    .post('/setup', validate('json', setupRequestSchema), async (c) => {
+      const body = c.req.valid('json');
+      await assertSetupAllowed(body.setupToken);
+      const now = deps.clock.now();
+      if (!(await verifyTotp(body.totpSecret, body.totpCode, now))) {
+        throw new DomainError(
+          'invalid_totp_code',
+          "That code didn't match. Check that your phone's clock is correct and try again.",
+        );
+      }
+      const recoveryCodes = generateRecoveryCodes();
+      const [passwordHash, recoveryCodeHashes] = await Promise.all([
+        hashPassword(body.password),
+        hashRecoveryCodes(recoveryCodes),
+      ]);
+      try {
+        await deps.db.transaction(async (tx) => {
+          await tx.insert(appUser).values({
+            passwordHash,
+            totpSecretEnc: encryptSecret(body.totpSecret, deps.config.encryptionKey),
+            recoveryCodeHashes,
+            budgetStartMonth: `${monthIn(deps.config.timeZone, now)}-01`,
+          });
+          await seedBudget(tx);
+        });
+      } catch (error) {
+        // Two setups racing: the singleton index lets only one win.
+        if (isUniqueViolation(error)) throw alreadySetUp();
+        throw error;
+      }
+      const { token } = await createSession(deps.db, now, c.req.header('user-agent'));
+      setSessionCookie(c, token, deps.config.cookieSecure);
+      return c.json<RecoveryCodesResponse>({ recoveryCodes }, 201);
+    });
+}
