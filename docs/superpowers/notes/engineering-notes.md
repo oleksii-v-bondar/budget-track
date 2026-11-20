@@ -64,6 +64,7 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - `withLoginLock(db, fn)` in `src/server/auth/rate-limit.ts` serialises sign-in and re-auth with
   `pg_advisory_xact_lock(727274001)`. Any new advisory lock needs a different key; list keys in this file:
   - `727274001`: login and re-authentication.
+  - `727274002`: user commands and undo/redo (`COMMAND_LOCK_KEY` in `src/server/commands/run-command.ts`).
 
 ### Engine
 - `src/engine` is pure: no I/O, no Node modules, no `Date.now()` / `new Date()` / `Math.random()`. ESLint enforces this.
