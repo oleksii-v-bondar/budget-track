@@ -25,7 +25,10 @@ export interface TransferSide {
   /** Native amount (source side negative, destination side positive). */
   amount: Money;
   currency: string;
-  /** Required when this side's currency is not the base currency and its base amount must be converted. */
+  /**
+   * Rate to the base currency. Only the source (`from`) side's rate is ever used: when neither side is in the base
+   * currency it is required there; otherwise both rates are ignored.
+   */
   rate: string | null;
 }
 

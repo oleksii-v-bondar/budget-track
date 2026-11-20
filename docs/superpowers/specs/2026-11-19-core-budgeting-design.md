@@ -103,6 +103,8 @@ All tables use UUID primary keys and `created_at` / `updated_at` timestamps unle
 - `account`: `name`, `type` (enum from §3), `currency` (ISO code, default `PLN`), `closed`, `sort_order`, `note`,
   `last_reconciled_at`, `last_reconciled_balance`.
   Loan-type columns: `interest_rate` (APR, `numeric(7,4)`), `min_payment`, `escrow_amount`, `paired_category_id`.
+  Credit-class accounts (`credit_card`, `line_of_credit`) also get optional `interest_rate` and `min_payment`
+  columns, used by debt targets on their credit card payment category.
 - `loan_interest_override`: `account_id`, `month`, `amount`. Exists only when the user edits the computed interest.
 
 ### 4.3 Categories and budget
@@ -254,7 +256,7 @@ The engine computes `need(c,m)`, `underfunded(c,m)` and `progress(c,m)` for cate
 | balance, by date D | ceil(max(0, A − Carry) / monthsLeft) | max(0, need − Assigned) |
 | debt, min_payment | account.min_payment | max(0, need − Assigned) |
 | debt, fixed | A | max(0, need − Assigned) |
-| debt, payoff_by_date D | amortized payment of \|balance at start of m\| at APR/12 over monthsLeft | max(0, need − Assigned) |
+| debt, payoff_by_date D | amortized payment of max(0, −balance at start of m) at APR/12 over monthsLeft, plus account.escrow_amount (loans only) | max(0, need − Assigned) |
 
 Yearly and custom targets:
 - **Next due date** = the first occurrence of D (advanced by `repeat_every` × `repeat_unit`) whose month ≥ m.
@@ -270,9 +272,11 @@ Other target rules:
 - Debt targets apply to credit card payment and loan-paired categories. They count only direct assignments, so
   for a credit card the amount is "in addition to funded spending".
 - **Progress** = (need − underfunded) / need, or Available / A for balance targets.
-- **Snooze:** if `snoozed_month = m`, underfunded is 0 and the category matches the "Snoozed" filter.
+- **Snooze:** if `snoozed_month = m`, underfunded is 0 and the category matches the "Snoozed" filter. Progress for a
+  snoozed target still reflects its real funding (it is computed from the unsnoozed underfunded amount).
 - **Available pill color**, in order: red = cash overspending; yellow = credit overspending or underfunded > 0;
-  green = Available > 0 or target met; grey otherwise.
+  green = Available > 0 or target met; grey otherwise. "Target met" requires need > 0, underfunded = 0 and the
+  target not snoozed in m.
 - **Overfunded filter:** has a target and Assigned(c,m) > need(c,m).
 
 ## 7. Auto-assign
@@ -283,7 +287,8 @@ Scope can be all visible categories, one group, or one category. Strategies:
 - **Assigned last month**: set Assigned(c,m) = Assigned(c,m−1).
 - **Spent last month**: set Assigned(c,m) = max(0, −Activity(c,m−1)).
 - **Average assigned / Average spent**: the average over the previous up to 12 months that exist since budget start
-  (excluding m), rounded to the grosz.
+  (excluding m), rounded to the grosz. Average spent = max(0, −round(average of net Activity(c, month))) over that
+  window, so net refunds reduce it.
 - **Reset available**: Assigned(c,m) −= Available(c,m), which brings Available to 0.
 - **Reset assigned**: Assigned(c,m) = 0.
 
@@ -292,19 +297,25 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 ## 8. Loans (tracking accounts with loan types)
 
 **Interest and escrow**
-- A **payment** is any inflow to the loan account in month `m`, typically a categorized transfer.
+- The engine's input per month is `LoanMonthInput` = {`transactionsTotal`, `paymentsTotal`}: Σ of all the loan
+  account's transaction amounts in m, and Σ of its inflows (payments) in m.
+- A **payment** is any inflow to the loan account in month `m`, typically a categorized transfer. Month `m` has a
+  payment iff `paymentsTotal` > 0.
 - If month `m` has at least one payment, the engine applies:
   - `interest(m)` = override(m) ?? round(|balance at start of m| × APR / 12)
   - `escrow(m)` = account.escrow_amount
 - **End-of-month balance** = start balance + Σ transaction amounts − interest(m) − escrow(m). Escrow covers fees and
   doesn't reduce principal.
-- Principal reduction per month = payments − interest − escrow.
+- Principal reduction per month = paymentsTotal − interest − escrow.
+- APR must be ≥ 0; the engine rejects a negative APR.
 - The register shows synthetic read-only "Interest charge" / "Escrow" rows per month. Editing the interest row writes
   a `loan_interest_override`.
 
 **Payoff and inspector**
 - **Projected payoff date**: amortize from the current balance at APR/12 using the debt target amount (or
   `min_payment` if there's no target). If the payment ≤ the monthly interest, show "Never".
+- **Amortized payment** (used by `payoff_by_date` targets): the minimal whole-grosz monthly payment that the
+  month-by-month projection (with interest rounded each month, as above) confirms pays the debt off within the term.
 - **Paired category**: when creating a loan, the user can opt in to a category in the "Debt Payments" group
   (`linked_account_id` = loan) with a `debt/min_payment` target.
 - The paired category's inspector shows balance, APR, minimum payment, projected payoff date and a **Record payment**

@@ -94,7 +94,11 @@ export function nextOccurrence(freq: Frequency, anchor: IsoDate, after: IsoDate)
   }
 }
 
-/** All occurrences from `nextDate` up to and including `today`, plus the schedule's new next date. */
+/**
+ * Occurrences from `nextDate` up to and including `today`, plus the schedule's new next date.
+ * At most `limit` dates are returned. When the limit is hit the list is partial and the returned `nextDate` may still
+ * be ≤ `today`, so callers loop until it is after `today` (or null).
+ */
 export function dueOccurrences(
   freq: Frequency,
   anchor: IsoDate,

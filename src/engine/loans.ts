@@ -130,7 +130,10 @@ export interface PayoffArgs {
   fromMonth: Month;
 }
 
-/** Month of the final payment when paying `payment` monthly, or "never" if the payment can't outpace interest. */
+/**
+ * Month of the final payment when paying `payment` monthly from `fromMonth`. Returns `fromMonth` when nothing is
+ * owed, and "never" if the payment can't outpace interest and escrow or the debt isn't paid off within 1200 months.
+ */
 export function projectPayoff(args: PayoffArgs): Month | 'never' {
   const count = paymentsToPayoff(args.debt, parseApr(args.apr), args.payment, args.escrow);
   if (count === null) return 'never';

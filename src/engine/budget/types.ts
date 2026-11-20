@@ -7,7 +7,14 @@ export interface BudgetCategory {
   linkedAccountId?: string;
 }
 
-/** Σ amount_base of on-budget ledger lines, grouped by month, category and account. */
+/**
+ * Σ amount_base of ledger lines, grouped by month, category and account. What P2 must pass:
+ * - on-budget lines only (cash and credit accounts; never tracking accounts)
+ * - excluding transfer lines between two on-budget accounts (budget↔budget), and the starting-balance lines of
+ *   credit and tracking accounts
+ * - on-budget, non-transfer, non-starting-balance lines with a null category mapped to the Uncategorized category's id
+ * - `month` formatted 'YYYY-MM'
+ */
 export interface ActivityRow {
   month: Month;
   /** Category id; the RTA category id marks income. */
@@ -17,7 +24,11 @@ export interface ActivityRow {
   amount: Money;
 }
 
-/** Σ card-side amount_base of transfers between a credit account and any on-budget account, per month. */
+/**
+ * Σ card-side amount_base of transfers between a credit account and any on-budget account (e.g. card payments and
+ * card-to-card balance transfers), per month and card. These transfer lines are excluded from `ActivityRow`.
+ * `month` is formatted 'YYYY-MM'.
+ */
 export interface CardTransferRow {
   month: Month;
   cardAccountId: string;

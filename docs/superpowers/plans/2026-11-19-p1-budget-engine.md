@@ -3111,3 +3111,54 @@ git commit -m "feat(engine): FX conversion, split and transfer base amounts, rev
 | §9 FX math (conversion, splits, transfers, revaluation) | 12 |
 | §10 scheduled-transaction dates | 11 |
 | §14 engine golden scenarios 1–11 + property tests | 5, 6, 7, 8, 9, 12 |
+
+---
+
+## Execution notes (deviations from this plan)
+
+The task bodies above are kept as written. These human-approved deviations were made while executing the plan; where
+they differ, the code on branch `p1-engine` is authoritative.
+
+- **Task 1 (lint boundary and tooling), commit `a439be4`:** `eslint.config.js` uses `defineConfig` and regex
+  patterns instead of globs. The server/web rule only matches paths that leave the directory (`../server`, `../web`),
+  so same-directory engine modules such as `./web` stay allowed. The I/O rule blocks `node:*` and every name in
+  `builtinModules`, not a hand-picked list. A new `no-restricted-globals` rule bans `process`, `fetch`, `Buffer`,
+  `require`, `__dirname`, `__filename`, `setTimeout`, `setInterval` and `XMLHttpRequest` in `src/engine`.
+  `@types/node` is pinned to `^22` to match `.nvmrc`. `tsconfig.json` no longer includes `eslint.config.js`.
+- **Task 3 (date validation), commit `8825f1d`:** `parseDate` rejects impossible dates such as `2026-02-30` (it checks
+  the real month length, not just ≤ 31). `addMonths`/`addDays` require an integer `n`. `dateInMonth` requires an
+  integer day from 1 to 31, and `countWeekdayInMonth` requires an integer weekday from 0 to 6.
+- **Task 8 (loans), commit `eb9361e`:**
+  - `LoanMonthInput` is `{ month, transactionsTotal, paymentsTotal }`, not a `hasPayment` flag. A month has a
+    payment iff `paymentsTotal > 0`. Principal paid = payments − interest − escrow (spec §8).
+  - `amortizedPayment` is simulation-based. It returns the minimal whole-grosz payment that the same month-by-month
+    projection as `projectPayoff` (with interest rounded each month) confirms pays off within the term. The float
+    annuity is only used as the starting estimate.
+  - Terms over 1200 months are capped. `months` must be an integer ≥ 1.
+  - APR validation (APR ≥ 0) was added in the final fix pass (A2 below).
+- **Task 9 (target validation), commit `d1c887a`:** `repeatEvery` must be an integer ≥ 1. Missing required fields
+  throw instead of falling back to defaults:
+  - a weekly target needs `dueWeekday`
+  - a spending target with cadence `none` is rejected
+  - a debt target needs `debtMode`
+- **Final whole-branch review fix pass, commit `a6679aa`:**
+  - A1: engine-boundary validation.
+    - `computeBudget` checks every month (`YYYY-MM`, via `assertMonth` in `dates.ts`) and every amount
+      (`Number.isSafeInteger`, via `assertMoney` in `money.ts`). This also rejects numeric strings from postgres
+      `sum()`.
+    - It also requires `startMonth ≤ throughMonth`.
+    - `computeLoanMonths`, the money arguments of `convertToBase`/`splitLineBases`/`transferBases`/`revaluationDiff`,
+      and the `underfunded` amounts in `autoAssign` must be safe integers too.
+  - A2: a shared `parseApr` in `loans.ts` rejects a negative APR in `monthlyInterest`, `amortizedPayment` and
+    `projectPayoff`. A negative APR could previously hang `amortizedPayment`.
+  - A3: `computeBudget` rejects duplicate category ids and two payment categories linked to the same credit account.
+  - A4: the debt `payoff_by_date` need adds the loan escrow (`TargetContext.debt.escrow`, default 0).
+  - A5: that need amortizes max(0, −balance), so an account in credit needs 0.
+  - A6: `computeBudget` rejects assignments to the Uncategorized category.
+  - A7: the auto-assign underfunded strategy clamps negative underfunded amounts to 0.
+  - A8: `nextOccurrence` uses an exhaustive switch (twice-a-month is an explicit branch) and throws
+    `Unknown frequency: <freq>` for bad values.
+  - A9: a fast-check property test for `nextOccurrence`.
+  - A10: `passWithNoTests` was removed from `vitest.config.ts`.
+- **Test count:** the fix rounds and the final pass added tests. The final suite is `Test Files 11 passed (11)`,
+  `Tests 174 passed (174)`, not the `118` expected in Task 12 Step 5.
