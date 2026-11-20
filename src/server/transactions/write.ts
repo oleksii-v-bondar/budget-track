@@ -1,10 +1,11 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { ChangeRecorder } from '../commands/recorder';
 import { payee, scheduledSubtransaction, scheduledTransaction, subtransaction, transaction } from '../db/schema';
+import type { Aggregate } from './aggregate';
 import type { Draft, LinePlan, Plan } from './plan';
 
 /** Spec §10: the transaction sheet pre-fills the category from the payee. */
-async function rememberCategory(rec: ChangeRecorder, plan: Plan): Promise<void> {
+export async function rememberCategory(rec: ChangeRecorder, plan: Plan): Promise<void> {
   if (!plan.payeeDefault) return;
   const { payeeId, categoryId } = plan.payeeDefault;
   await rec.update(payee, eq(payee.id, payeeId), { lastCategoryId: categoryId });
@@ -70,4 +71,38 @@ export async function insertSchedule(rec: ChangeRecorder, draft: Draft, plan: Pl
   }
   await rememberCategory(rec, plan);
   return schedule!.id;
+}
+
+/** Soft-deletes transactions (spec §13); their lines stay, and the ledger view drops them with their split. */
+export async function softDelete(rec: ChangeRecorder, ids: string[], now: Date): Promise<void> {
+  if (ids.length > 0) await rec.update(transaction, inArray(transaction.id, ids), { deletedAt: now });
+}
+
+/**
+ * Brings a saved transaction's rows in line with its new plan. A transfer side in the same account is updated in
+ * place (keeping its cleared, approved and flag); a transfer that moves to another account, or stops being one,
+ * loses its old side, and a new side is created. Split lines are updated in place.
+ */
+export async function syncPlan(rec: ChangeRecorder, agg: Aggregate, plan: Plan, now: Date): Promise<void> {
+  const id = agg.main.id;
+  const old = agg.counterpart;
+  const next = plan.counterpart;
+  if (old && next && old.accountId === next.accountId) {
+    await rec.update(transaction, eq(transaction.id, id), plan.main);
+    await rec.update(transaction, eq(transaction.id, old.id), next);
+  } else {
+    if (old) await softDelete(rec, [old.id], now);
+    await rec.update(transaction, eq(transaction.id, id), { ...plan.main, transferTxnId: null });
+    if (next) {
+      const [other] = await rec.insert(transaction, { ...next, transferTxnId: id });
+      await rec.update(transaction, eq(transaction.id, id), { transferTxnId: other!.id });
+    }
+  }
+  for (const [index, { line, counterpart }] of agg.lines.entries()) {
+    const { counterpart: nextCounterpart, ...nextLine } = plan.lines![index]!;
+    await rec.update(subtransaction, eq(subtransaction.id, line.id), nextLine);
+    if (counterpart && nextCounterpart) {
+      await rec.update(transaction, eq(transaction.id, counterpart.id), nextCounterpart);
+    }
+  }
 }

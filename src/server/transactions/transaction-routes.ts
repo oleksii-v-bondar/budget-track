@@ -4,13 +4,14 @@ import {
   createTransactionRequestSchema,
   type CreateTransactionResponse,
   type TransactionDto,
+  updateTransactionRequestSchema,
 } from '../../shared/api/transactions';
 import { type AuthedEnv, requireSession } from '../auth/sessions';
 import { todayIn } from '../clock';
 import { runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
-import { createTransaction, savedLabel } from './transaction-commands';
+import { createTransaction, editLabel, savedLabel, updateTransaction } from './transaction-commands';
 import { getTransaction } from './transaction-queries';
 
 /** /api/transactions (spec §10 "Transactions and related workflows"): every change is one undoable command. */
@@ -30,5 +31,12 @@ export function transactionRoutes(deps: AppDeps) {
     })
     .get('/:id', validate('param', idParamSchema), async (c) =>
       c.json<TransactionDto>(await getTransaction(deps.db, c.req.valid('param').id)),
-    );
+    )
+    .patch('/:id', validate('param', idParamSchema), validate('json', updateTransactionRequestSchema), async (c) => {
+      const { id } = c.req.valid('param');
+      const body = c.req.valid('json');
+      const context = { today: today(), now: deps.clock.now() };
+      await runCommand(deps, editLabel, (rec) => updateTransaction(rec, id, body, context));
+      return c.json<TransactionDto>(await getTransaction(deps.db, id));
+    });
 }

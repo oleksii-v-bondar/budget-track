@@ -81,6 +81,34 @@ export type CreateTransactionRequest = z.infer<typeof createTransactionRequestSc
 /** The request body as sent (fields with defaults are optional). */
 export type CreateTransactionInput = z.input<typeof createTransactionRequestSchema>;
 
+/**
+ * PATCH /api/transactions/:id: omitted fields stay as they are. On a transfer, date, amount and memo are mirrored to
+ * the other side (between currencies, the other side's amount changes only with `transferAmount`); cleared, approved
+ * and flag belong to each side. The counterpart of a split line takes only memo, cleared, approved and flag; the
+ * rest is edited on the split.
+ */
+export const updateTransactionRequestSchema = z
+  .object({
+    date: transactionDateSchema.optional(),
+    /** null removes the payee; a transfer payee makes (or retargets) a transfer. */
+    payeeId: idSchema.nullable().optional(),
+    payeeName: nameSchema.optional(),
+    categoryId: idSchema.nullable().optional(),
+    memo: memoSchema.optional(),
+    amount: moneySchema.optional(),
+    transferAmount: moneySchema.optional(),
+    fxRate: fxRateSchema.optional(),
+    cleared: userClearedSchema.optional(),
+    approved: z.boolean().optional(),
+    flag: flagSchema.nullable().optional(),
+  })
+  .refine((body) => body.payeeId === undefined || body.payeeName === undefined, {
+    path: ['payeeName'],
+    message: 'Choose a payee or type a new name, not both.',
+  });
+
+export type UpdateTransactionRequest = z.infer<typeof updateTransactionRequestSchema>;
+
 /** The other side of a transfer. */
 export interface TransferDto {
   accountId: string;

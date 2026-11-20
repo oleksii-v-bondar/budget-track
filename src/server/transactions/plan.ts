@@ -90,6 +90,19 @@ export interface Plan {
   payeeDefault: { payeeId: string; categoryId: string } | null;
 }
 
+/** What an edited transaction already has; edits may keep values that new transactions can't use. */
+export interface PlanContext {
+  existing?: {
+    payeeId: string | null;
+    /** Stored rates by currency, used when the request sends none. */
+    rates: Map<string, string>;
+    /** A plain transfer's other side: its amount stays unless `transferAmount` is sent. */
+    counterpart: { accountId: string; amount: Money } | null;
+    /** Accounts that already hold the transaction's rows (they may be closed). */
+    accountIds: Set<string>;
+  };
+}
+
 const rateColumns = (rate: string | null) => ({ fxRate: rate, fxRateManual: rate !== null });
 
 /**
@@ -97,7 +110,7 @@ const rateColumns = (rate: string | null) => ({ fxRate: rate, fxRateManual: rate
  * currencies take both native amounts. The sending side (the outflow; this side for 0) decides the base amounts:
  * a PLN side gives them directly, otherwise the sending currency's rate converts.
  */
-function transferSides(main: AccountInfo, other: AccountInfo, draft: Draft, rates: Rates) {
+function transferSides(main: AccountInfo, other: AccountInfo, draft: Draft, rates: Rates, context: PlanContext) {
   let otherAmount: Money;
   if (main.currency === other.currency) {
     if (draft.transferAmount !== null) {
@@ -109,21 +122,23 @@ function transferSides(main: AccountInfo, other: AccountInfo, draft: Draft, rate
     }
     otherAmount = -draft.amount;
   } else {
-    if (draft.transferAmount === null) {
+    const kept = context.existing?.counterpart;
+    const amount = draft.transferAmount ?? (kept?.accountId === other.id ? kept.amount : null);
+    if (amount === null) {
       throw new DomainError(
         'transfer_amount_required',
         `Enter the amount in ${other.currency} that "${other.name}" receives or sends.`,
         'transferAmount',
       );
     }
-    if (draft.amount === 0 || Math.sign(draft.transferAmount) !== -Math.sign(draft.amount)) {
+    if (draft.amount === 0 || Math.sign(amount) !== -Math.sign(draft.amount)) {
       throw new DomainError(
         'transfer_amount_sign',
         'The two sides of a transfer need opposite, non-zero amounts.',
         'transferAmount',
       );
     }
-    otherAmount = draft.transferAmount;
+    otherAmount = amount;
   }
   const here = { amount: draft.amount, currency: main.currency };
   const there = { amount: otherAmount, currency: other.currency };
@@ -144,6 +159,7 @@ async function planLines(
   main: AccountInfo,
   draft: Draft & { lines: DraftLine[] },
   rates: Rates,
+  open: (target: AccountInfo, field: string) => void,
 ): Promise<{ amountBase: Money; fxRate: string | null; lines: LinePlan[] }> {
   const total = draft.lines.reduce((sum, line) => sum + line.amount, 0);
   if (total !== draft.amount) {
@@ -183,7 +199,7 @@ async function planLines(
         field('payeeId'),
       );
     }
-    assertOpen(other, field('payeeId'));
+    open(other, field('payeeId'));
     const category = await placeTransferCategory(db, main, other, line.categoryId, field('categoryId'));
     lines.push({
       ...base,
@@ -206,12 +222,16 @@ async function planLines(
 }
 
 /** Validates a draft against spec §5.5 and §9 and computes the rows to write. */
-export async function planTransaction(db: Executor, draft: Draft): Promise<Plan> {
+export async function planTransaction(db: Executor, draft: Draft, context: PlanContext = {}): Promise<Plan> {
+  const existing = context.existing;
+  const open = (target: AccountInfo, field: string) => {
+    if (!existing?.accountIds.has(target.id)) assertOpen(target, field);
+  };
   const main = await requireAccount(db, draft.accountId, 'accountId');
-  assertOpen(main, 'accountId');
+  open(main, 'accountId');
   const payee = draft.payeeId === null ? null : await requirePayee(db, draft.payeeId, 'payeeId');
-  if (payee) assertNotSystemPayee(payee, 'payeeId');
-  const rates: Rates = { input: draft.fxRate, stored: new Map(), used: false };
+  if (payee && draft.payeeId !== existing?.payeeId) assertNotSystemPayee(payee, 'payeeId');
+  const rates: Rates = { input: draft.fxRate, stored: existing?.rates ?? new Map(), used: false };
   const row = {
     accountId: draft.accountId,
     date: draft.date,
@@ -233,7 +253,7 @@ export async function planTransaction(db: Executor, draft: Draft): Promise<Plan>
     if (draft.transferAmount !== null) {
       throw new DomainError('transfer_amount_not_allowed', 'Only transfers take a second amount.', 'transferAmount');
     }
-    const split = await planLines(db, main, { ...draft, lines: draft.lines }, rates);
+    const split = await planLines(db, main, { ...draft, lines: draft.lines }, rates, open);
     assertRateUsed(rates);
     return {
       main: {
@@ -257,9 +277,9 @@ export async function planTransaction(db: Executor, draft: Draft): Promise<Plan>
   if (payee?.transferAccountId) {
     const other = await requireAccount(db, payee.transferAccountId, 'payeeId');
     assertNotSelf(main, other, 'payeeId');
-    assertOpen(other, 'payeeId');
+    open(other, 'payeeId');
     const category = await placeTransferCategory(db, main, other, draft.categoryId, 'categoryId');
-    const sides = transferSides(main, other, draft, rates);
+    const sides = transferSides(main, other, draft, rates, context);
     assertRateUsed(rates);
     return {
       main: {
