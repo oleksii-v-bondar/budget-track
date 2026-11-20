@@ -4,6 +4,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { requestId } from 'hono/request-id';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ApiErrorBody } from '../../shared/http';
+import { accountRoutes } from '../accounts/account-routes';
 import { loginRoutes } from '../auth/login-routes';
 import { securityRoutes } from '../auth/security-routes';
 import { setupRoutes } from '../auth/setup-routes';
@@ -68,7 +69,8 @@ export function createApp(deps: AppDeps) {
     // Every router below is mounted on its own prefix and starts with .use('*', requireSession(deps)), so each new
     // route is private by default (app.test.ts walks app.routes to keep it that way).
     .route('/api/undo', undoRoutes(deps))
-    .route('/api/redo', redoRoutes(deps));
+    .route('/api/redo', redoRoutes(deps))
+    .route('/api/accounts', accountRoutes(deps));
 
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);
