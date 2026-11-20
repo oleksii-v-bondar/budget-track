@@ -155,9 +155,10 @@ describe('POST /api/budget/:month/auto-assign', () => {
         { month: '2026-11', categoryId: groceries.id, amount: 20_000 },
       ],
     });
-    // The budget starts in 2026-10, so the average covers October and November.
+    await assign('2026-11', groceries.id, 30_000);
+    // The budget starts in 2026-10, so the average covers October (20 zł) and November (30 zł).
     expect((await json(await autoAssign('2026-12', 'average_assigned', { type: 'category', id: groceries.id }))).body)
-      .toEqual({ assignments: [{ month: '2026-12', categoryId: groceries.id, amount: 20_000 }] });
+      .toEqual({ assignments: [{ month: '2026-12', categoryId: groceries.id, amount: 25_000 }] });
     expect((await json(await autoAssign('2026-11', 'reset_assigned'))).body).toEqual({
       assignments: [
         { month: '2026-11', categoryId: visa.paymentCategoryId, amount: 0 },
@@ -165,6 +166,50 @@ describe('POST /api/budget/:month/auto-assign', () => {
       ],
     });
     expect((await undoState()).undo).toEqual({ label: 'Auto-assign: Reset assigned' });
+  });
+
+  it('average spent: assigns what was spent on average in earlier months', async () => {
+    const spend = (date: string, amount: number) =>
+      insertTransaction(t.db, { accountId: checking.id, date, amount: -amount, categoryId: groceries.id });
+    await spend('2026-10-12', 3_000);
+    await spend('2026-11-12', 6_000);
+    // October and November, not just November's 60 zł.
+    expect((await json(await autoAssign('2026-12', 'average_spent', { type: 'category', id: groceries.id }))).body)
+      .toEqual({ assignments: [{ month: '2026-12', categoryId: groceries.id, amount: 4_500 }] });
+    expect((await undoState()).undo).toEqual({ label: 'Auto-assign: Average spent' });
+  });
+
+  it('underfunded skips snoozed targets', async () => {
+    await ctx.client.post(`/api/categories/${groceries.id}/target/snooze`, { month: '2026-11' });
+    // Groceries gets nothing although 25 zł is left to assign.
+    expect((await json(await autoAssign('2026-11', 'underfunded'))).body).toEqual({
+      assignments: [
+        { month: '2026-11', categoryId: visa.paymentCategoryId, amount: 5_000 },
+        { month: '2026-11', categoryId: rent.id, amount: 70_000 },
+      ],
+    });
+  });
+
+  it('handles targets whose underfunded amount is beyond the safe-integer range', async () => {
+    // 5 Mondays in November 2026: 1e16 underfunded, more than Number.MAX_SAFE_INTEGER.
+    const weekly = { kind: 'spending', cadence: 'weekly', amount: 2e15, dueWeekday: 1 };
+    expect((await ctx.client.send('PUT', `/api/categories/${groceries.id}/target`, weekly)).status).toBe(200);
+    await assign('2026-11', groceries.id, 1_000);
+    expect(await json(await autoAssign('2026-11', 'reset_assigned'))).toEqual({
+      status: 200,
+      body: { assignments: [{ month: '2026-11', categoryId: groceries.id, amount: 0 }] },
+    });
+    // Capped at Ready to Assign: Groceries gets the 95 zł left after Visa.
+    expect(await json(await autoAssign('2026-11', 'underfunded'))).toEqual({
+      status: 200,
+      body: {
+        assignments: [
+          { month: '2026-11', categoryId: visa.paymentCategoryId, amount: 5_000 },
+          { month: '2026-11', categoryId: groceries.id, amount: 95_000 },
+        ],
+      },
+    });
+    expect((await json<BudgetMonthDto>(await ctx.client.get('/api/budget/2026-11'))).body.rta.readyToAssign).toBe(0);
   });
 
   it('records nothing when no assignment changes', async () => {

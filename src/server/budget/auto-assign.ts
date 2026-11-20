@@ -65,8 +65,14 @@ export async function autoAssignMonth(
     month,
     categoryIds: categories.map((c) => c.id),
     budget: result,
-    // Snoozed targets and categories without a target are not underfunded.
-    underfunded: Object.fromEntries(categories.map((c) => [c.id, c.targetEvaluation?.underfunded ?? 0])),
+    // Snoozed targets and categories without a target are not underfunded. A huge target can be underfunded beyond
+    // the safe-integer range; clamping is harmless because the engine caps every amount at Ready to Assign.
+    underfunded:
+      request.strategy === 'underfunded'
+        ? Object.fromEntries(
+            categories.map((c) => [c.id, Math.min(c.targetEvaluation?.underfunded ?? 0, Number.MAX_SAFE_INTEGER)]),
+          )
+        : undefined,
   });
   for (const change of changes) await setAssigned(rec, change.categoryId, month, change.to);
   return changes;
