@@ -29,10 +29,11 @@ export function hashRecoveryCodes(codes: string[]): Promise<string[]> {
 export async function consumeRecoveryCode(hashes: string[], input: string): Promise<string[] | null> {
   const normalized = normalizeRecoveryCode(input);
   if (normalized.length !== GROUPS * GROUP_LENGTH) return null;
+  // Every hash is checked, even after a match, so the time taken doesn't reveal whether (or which) code matched.
+  let match = -1;
   for (const [index, candidate] of hashes.entries()) {
-    if (await verify(candidate, normalized).catch(() => false)) {
-      return hashes.filter((_, i) => i !== index);
-    }
+    const matches = await verify(candidate, normalized).catch(() => false);
+    if (matches && match === -1) match = index;
   }
-  return null;
+  return match === -1 ? null : hashes.filter((_, i) => i !== match);
 }

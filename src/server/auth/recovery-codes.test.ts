@@ -27,6 +27,12 @@ describe('recovery codes', () => {
     expect(await consumeRecoveryCode(remaining!, codes[0]!)).toHaveLength(1);
   });
 
+  it('keeps the other hashes in order when the last code matches', async () => {
+    const codes = generateRecoveryCodes(3);
+    const hashes = await hashRecoveryCodes(codes);
+    expect(await consumeRecoveryCode(hashes, codes[2]!)).toEqual(hashes.slice(0, 2));
+  });
+
   it('rejects unknown and malformed codes', async () => {
     const hashes = await hashRecoveryCodes(generateRecoveryCodes(2));
     expect(await consumeRecoveryCode(hashes, 'AAAA-AAAA-AAAA')).toBeNull();

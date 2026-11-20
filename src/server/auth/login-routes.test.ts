@@ -1,11 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as argon2 from '@node-rs/argon2';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appUser, session } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { type SetupResult, setUpBudget, TEST_PASSWORD } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { TestClient } from '../test/http-client';
 import { totpCode } from '../test/totp';
+import { RECOVERY_CODE_COUNT } from './recovery-codes';
 import { SESSION_COOKIE } from './sessions';
+
+// Counts argon2 verifications so a test can check that sign-in does the same work for right and wrong passwords.
+vi.mock('@node-rs/argon2', async (importOriginal) => {
+  const actual = await importOriginal<typeof argon2>();
+  return { ...actual, verify: vi.fn(actual.verify) };
+});
 
 let t: TestDatabase;
 let ctx: TestApp;
@@ -66,6 +74,34 @@ describe('POST /api/auth/login', () => {
     expect((await login(new TestClient(ctx.app), { password: TEST_PASSWORD, recoveryCode: code })).status).toBe(200);
   });
 
+  it('checks every recovery code whether or not the password is right', async () => {
+    const valid = setup.recoveryCodes[0]!;
+    const unknown = 'AAAA-AAAA-AAAA';
+    const attempts = [
+      { password: 'wrong password', recoveryCode: valid, status: 401 },
+      { password: 'wrong password', recoveryCode: unknown, status: 401 },
+      { password: TEST_PASSWORD, recoveryCode: unknown, status: 401 },
+      { password: TEST_PASSWORD, recoveryCode: valid, status: 200 },
+    ];
+    for (const { status, ...body } of attempts) {
+      vi.mocked(argon2.verify).mockClear();
+      expect((await login(new TestClient(ctx.app), body)).status).toBe(status);
+      expect(argon2.verify).toHaveBeenCalledTimes(1 + RECOVERY_CODE_COUNT);
+    }
+  });
+
+  it('lets only one of two simultaneous sign-ins use the same recovery code', async () => {
+    const code = setup.recoveryCodes[5]!;
+    const results = await Promise.all(
+      ['198.51.100.10', '198.51.100.11'].map((ip) =>
+        login(new TestClient(ctx.app, ip), { password: TEST_PASSWORD, recoveryCode: code }),
+      ),
+    );
+    expect(results.map((res) => res.status).sort((a, b) => a - b)).toEqual([200, 401]);
+    const [user] = await t.db.select().from(appUser);
+    expect(user!.recoveryCodeHashes).toHaveLength(RECOVERY_CODE_COUNT - 1);
+  });
+
   it('limits each IP to 5 attempts per minute', async () => {
     const attacker = new TestClient(ctx.app, '198.51.100.66');
     for (let i = 0; i < 5; i++) expect((await login(attacker, { password: 'guess', totpCode: '000000' })).status).toBe(401);
@@ -76,6 +112,16 @@ describe('POST /api/auth/login', () => {
     expect((await login(new TestClient(ctx.app, '198.51.100.67'), await withCode())).status).toBe(200);
     ctx.clock.advance(MINUTE + 1);
     expect((await login(attacker, await withCode())).status).toBe(200);
+  });
+
+  it('applies the per-IP limit to simultaneous attempts', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        login(new TestClient(ctx.app, '198.51.100.66'), { password: 'guess', totpCode: '000000' }),
+      ),
+    );
+    expect(results.filter((res) => res.status === 401)).toHaveLength(5);
+    expect(results.filter((res) => res.status === 429 && res.body.code === 'rate_limited')).toHaveLength(3);
   });
 
   it('locks sign-in for 15 minutes after 10 consecutive failures', async () => {
