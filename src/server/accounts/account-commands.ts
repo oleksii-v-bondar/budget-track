@@ -57,6 +57,11 @@ export async function createAccount(
   }
   await assertAccountNameFree(rec.tx, input.name);
   const accountClass = accountClassOf(input.type);
+  const foreign = input.currency !== BASE_CURRENCY;
+  // The schema requires fxRate exactly when the currency is foreign.
+  const rate = foreign ? input.fxRate! : null;
+  const amountBase = rate === null ? input.startingBalance : convertToBase(input.startingBalance, rate);
+  if (!Number.isSafeInteger(amountBase)) throw new DomainError('amount_too_large', 'That amount is too large.');
 
   const [created] = await rec.insert(account, {
     name: input.name,
@@ -71,9 +76,6 @@ export async function createAccount(
   const accountId = created!.id;
   await rec.insert(payee, { name: transferPayeeName(input.name), transferAccountId: accountId });
 
-  const foreign = input.currency !== BASE_CURRENCY;
-  // The schema requires fxRate exactly when the currency is foreign.
-  const rate = foreign ? input.fxRate! : null;
   await rec.insert(transaction, {
     accountId,
     date: startingDate,
@@ -81,7 +83,7 @@ export async function createAccount(
     // Cash starting balances are income; credit and tracking ones stay off the budget.
     categoryId: accountClass === 'cash' ? await systemCategoryId(rec.tx, 'rta') : null,
     amount: input.startingBalance,
-    amountBase: rate === null ? input.startingBalance : convertToBase(input.startingBalance, rate),
+    amountBase,
     fxRate: rate,
     // Entered by the user until the NBP lookup exists (P2d).
     fxRateManual: foreign,

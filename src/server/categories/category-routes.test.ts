@@ -186,7 +186,7 @@ describe('PUT /api/categories/order', () => {
 
 describe('DELETE /api/categories/:id', () => {
   const remove = (id: string, destinationCategoryId: string) =>
-    ctx.client.send('DELETE', `/api/categories/${id}`, { destinationCategoryId });
+    ctx.client.send('DELETE', `/api/categories/${id}?destinationCategoryId=${destinationCategoryId}`);
 
   it('moves everything to the destination, sums assignments per month, and is one undoable command', async () => {
     const food = await createGroup(ctx.client, 'Food');
@@ -292,6 +292,8 @@ describe('DELETE /api/categories/:id', () => {
       expect(await json(await remove(groceries.id, destination))).toEqual(invalid);
     }
     expect((await remove(gone.id, groceries.id)).status).toBe(404);
-    expect((await ctx.client.send('DELETE', `/api/categories/${groceries.id}`, {})).status).toBe(400);
+    const missing = await json(await ctx.client.send('DELETE', `/api/categories/${groceries.id}`));
+    expect(missing).toMatchObject({ status: 400, body: { fieldErrors: { destinationCategoryId: expect.any(Array) } } });
+    expect((await remove(groceries.id, 'not-an-id')).status).toBe(400);
   });
 });

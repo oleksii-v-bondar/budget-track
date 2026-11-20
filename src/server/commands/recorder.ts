@@ -69,6 +69,7 @@ export function primaryKeyOf(table: RecordedTable): string[] {
   const single = columns.filter(([, column]) => column.primary).map(([key]) => key);
   if (single.length > 0) return single;
   const names = getTableConfig(table).primaryKeys[0]?.columns.map((column) => column.name) ?? [];
+  if (names.length === 0) throw new Error(`Table ${getTableName(table)} has no primary key`);
   return names.map((name) => columns.find(([, column]) => column.name === name)![0]);
 }
 

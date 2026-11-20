@@ -151,6 +151,15 @@ describe('POST /api/accounts', () => {
     });
   });
 
+  it('refuses a foreign starting balance whose PLN amount is too large to store exactly', async () => {
+    const huge = { name: 'Huge', type: 'savings', currency: 'EUR', startingBalance: Number.MAX_SAFE_INTEGER };
+    expect(await json(await ctx.client.post('/api/accounts', { ...huge, fxRate: '4.25' }))).toEqual({
+      status: 422,
+      body: { code: 'amount_too_large', message: 'That amount is too large.' },
+    });
+    expect(await t.db.select().from(account)).toEqual([]);
+  });
+
   it("defaults the starting date to today in the budget's time zone and refuses future dates", async () => {
     // 23:30 UTC on 20 November is already 21 November in Warsaw.
     ctx.clock.advance(13.5 * 60 * 60 * 1000);
@@ -204,6 +213,14 @@ describe('POST /api/accounts', () => {
     expect(await errors({ type: 'savings', startingBalance: 1.5 })).toEqual({
       startingBalance: ['Enter a whole amount in minor units.'],
     });
+    expect(await errors({ type: 'cash', startingDate: '1969-12-31' })).toEqual({
+      startingDate: ['Use a date from 1970-01-01 on.'],
+    });
+    expect(await errors({ type: 'cash', startingDate: '1969-13-01' })).toEqual({
+      startingDate: ['Use the format YYYY-MM-DD.'],
+    });
+    const earliest = await createAccount(ctx.client, { name: 'Old', type: 'cash', startingDate: '1970-01-01' });
+    expect((await startingBalanceOf(earliest.id)).date).toBe('1970-01-01');
   });
 
   it('refuses a second account with the same name, ignoring case', async () => {

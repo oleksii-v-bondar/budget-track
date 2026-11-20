@@ -19,6 +19,12 @@ export const fxRateSchema = z
 /** APR in percent, numeric(7,4). */
 export const interestRateSchema = z.string().regex(/^\d{1,3}(\.\d{1,4})?$/, 'Enter the APR in percent, e.g. 6.5.');
 
+/** Starting balances can't be dated before 1970 (checked only once the format is valid). */
+const startingDateSchema = isoDateSchema.refine((date) => date >= '1970-01-01', {
+  error: 'Use a date from 1970-01-01 on.',
+  when: (payload) => payload.issues.length === 0,
+});
+
 /** Spec §4.2: which optional fields an account type takes. */
 export function accountFieldsAllowed(type: AccountType) {
   const loan = isLoanType(type);
@@ -34,7 +40,7 @@ export const createAccountRequestSchema = z
     /** Native minor units; negative for debt. */
     startingBalance: moneySchema,
     /** Defaults to today in the budget's time zone; may not be in the future. */
-    startingDate: isoDateSchema.optional(),
+    startingDate: startingDateSchema.optional(),
     /** Required for foreign currencies until the NBP lookup exists (P2d). */
     fxRate: fxRateSchema.optional(),
     note: noteSchema.optional(),

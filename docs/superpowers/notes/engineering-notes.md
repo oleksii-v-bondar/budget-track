@@ -26,14 +26,16 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - Node is 22.14 locally. Keep `@testcontainers/postgresql` on `^11.14`: v12 pulls undici 8, which needs Node ≥ 22.19.
 - Docker Desktop's Enhanced Container Isolation blocks Ryuk. `src/server/test/global-setup.ts` sets
   `TESTCONTAINERS_RYUK_DISABLED` and stops the container itself, including when setup fails.
-- Server tests: `createTestDatabase()` clones a migrated template DB for each call; `createTestApp(db, { now })` returns
-  `{ app, client, clock, config }`; `setUpBudget(testApp)` performs first-run setup and leaves `client` signed in;
-  `TestClient(app, ip)` keeps cookies and sends the CSRF header.
+- Server tests: `createTestDatabase()` clones a migrated template DB for each call (`{ empty: true }` gives an
+  unmigrated one); `createTestApp(db, { now })` returns `{ app, client, clock, config }`; `setUpBudget(testApp)`
+  performs first-run setup and leaves `client` signed in; `TestClient(app, ip)` keeps cookies and sends the CSRF
+  header.
 
 ### Drizzle / postgres.js
 - Driver errors are wrapped: the message is `Failed query: …`, and the original error is in `cause`. Use
   `isUniqueViolation(err)` from `src/server/db/errors.ts`, which walks the `cause` chain. In tests, assert on the cause
-  or on the constraint name.
+  or on the constraint name. `isIntegrityViolation(err)` matches any SQLSTATE class 23 error (FK, unique, not-null,
+  check); undo/redo maps those to 409 `undo_conflict`.
 - int8 is parsed to a safe JS integer, and a value outside the safe range throws. `sum()` returns `numeric`, which arrives
   as a string, so always cast in SQL: `sum(x)::bigint`. Never use `.mapWith(Number)`.
 - `date` columns use `mode: 'string'` (`'YYYY-MM-DD'`). Months are stored as `'YYYY-MM-01'`; the engine uses `'YYYY-MM'`,
@@ -43,6 +45,8 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   it uses must drop and recreate the view in custom SQL (`npx drizzle-kit generate --custom --name …`).
 - `npm run db:generate -- --name <name>` writes a migration. Nothing is deployed yet, but never rewrite committed
   migrations from now on: add new ones.
+- Undo history is cleared whenever a migration is applied: `runMigrations` deletes every `undo_entry` row, because the
+  row images describe the old schema. A migration never needs to rewrite `undo_entry.changes`.
 - Transactions: `db.transaction(async (tx) => …)`. Helpers should accept `Executor` (`Db | Tx`).
 
 ### Hono / zod

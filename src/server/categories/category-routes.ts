@@ -36,9 +36,9 @@ export function categoryRoutes(deps: AppDeps) {
       await runCommand(deps, (r: Named) => `Edit category "${r.name}"`, (rec) => updateCategory(rec, id, body));
       return c.json<CategoryDto>(await getCategory(deps.db, id));
     })
-    .delete('/:id', validate('param', idParamSchema), validate('json', deleteCategoryRequestSchema), async (c) => {
+    .delete('/:id', validate('param', idParamSchema), validate('query', deleteCategoryRequestSchema), async (c) => {
       const { id } = c.req.valid('param');
-      const { destinationCategoryId } = c.req.valid('json');
+      const { destinationCategoryId } = c.req.valid('query');
       await runCommand(
         deps,
         (r: Named) => `Delete category "${r.name}"`,

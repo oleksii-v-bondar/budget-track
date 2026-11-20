@@ -68,8 +68,8 @@ export const updateCategoryRequestSchema = z.object({
 export const reorderCategoriesRequestSchema = reorderRequestSchema.extend({ groupId: idSchema });
 
 /**
- * DELETE /api/categories/:id (spec §10): transactions, split lines, schedules, payee defaults and assignments move to
- * this live, normal category first.
+ * DELETE /api/categories/:id?destinationCategoryId=… (spec §10): transactions, split lines, schedules, payee defaults
+ * and assignments move to this live, normal category first. A query parameter, since DELETE bodies are unreliable.
  */
 export const deleteCategoryRequestSchema = z.object({ destinationCategoryId: idSchema });
 

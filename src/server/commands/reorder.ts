@@ -17,7 +17,7 @@ export async function applyOrder(
 ): Promise<void> {
   const rows = await rec.tx.select({ id: table.id }).from(table).where(scope);
   const known = new Set(rows.map((row) => row.id));
-  if (rows.length !== ids.length || !ids.every((id) => known.has(id))) {
+  if (rows.length !== ids.length || new Set(ids).size !== ids.length || !ids.every((id) => known.has(id))) {
     throw new DomainError('order_mismatch', 'The new order must list every item exactly once.');
   }
   for (const [index, id] of ids.entries()) {

@@ -1,6 +1,7 @@
 import { asc, desc, eq } from 'drizzle-orm';
 import type { UndoItem, UndoState } from '../../shared/api/undo';
 import type { Db, Executor, Tx } from '../db/client';
+import { isIntegrityViolation } from '../db/errors';
 import { undoEntry } from '../db/schema';
 import { AppError } from '../http/errors';
 import { type Change, fromImage, pkWhere, RECORDED_TABLES, sameData, toImage } from './recorder';
@@ -25,6 +26,9 @@ export async function historyState(db: Executor): Promise<UndoState> {
   return { undo: undo ?? null, redo: redo ?? null };
 }
 
+const conflict = (direction: Direction) =>
+  new AppError(409, 'undo_conflict', `Can't ${direction}: data changed since.`);
+
 /**
  * Replays changes one row at a time. Each row must still look exactly as the entry left it (ignoring timestamps);
  * otherwise the whole replay is refused and the transaction rolls back.
@@ -43,10 +47,7 @@ async function replay(tx: Tx, changes: Change[], direction: Direction): Promise<
       .for('update');
     const matches =
       current === undefined ? expected === null : expected !== null && sameData(toImage(table, current), expected);
-    if (!matches) {
-      const verb = direction === 'undo' ? 'undo' : 'redo';
-      throw new AppError(409, 'undo_conflict', `Can't ${verb}: data changed since.`);
-    }
+    if (!matches) throw conflict(direction);
     if (wanted === null) await tx.delete(table).where(where);
     else if (current === undefined) await tx.insert(table).values(fromImage(table, wanted) as never);
     else await tx.update(table).set(fromImage(table, wanted) as never).where(where);
@@ -54,6 +55,17 @@ async function replay(tx: Tx, changes: Change[], direction: Direction): Promise<
 }
 
 async function step(db: Db, direction: Direction): Promise<UndoItem> {
+  try {
+    return await replayNext(db, direction);
+  } catch (error) {
+    // Replay checks only the rows it writes; a row changed outside them (e.g. a new child of a row the undo deletes)
+    // shows up as a constraint violation. The transaction has rolled back, so report it like any other conflict.
+    if (isIntegrityViolation(error)) throw conflict(direction);
+    throw error;
+  }
+}
+
+function replayNext(db: Db, direction: Direction): Promise<UndoItem> {
   return db.transaction(async (tx) => {
     await lockCommands(tx);
     const [entry] = await tx

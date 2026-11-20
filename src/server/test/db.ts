@@ -20,10 +20,13 @@ async function admin(statement: string): Promise<void> {
   }
 }
 
-/** A fresh, fully migrated database cloned from the template created in global-setup. */
-export async function createTestDatabase(): Promise<TestDatabase> {
+/**
+ * A fresh, fully migrated database cloned from the template created in global-setup; `empty: true` skips the
+ * migrations (for testing them).
+ */
+export async function createTestDatabase(options: { empty?: boolean } = {}): Promise<TestDatabase> {
   const name = `t_${randomUUID().replaceAll('-', '')}`;
-  await admin(`CREATE DATABASE ${name} TEMPLATE ${TEMPLATE_DATABASE}`);
+  await admin(options.empty ? `CREATE DATABASE ${name}` : `CREATE DATABASE ${name} TEMPLATE ${TEMPLATE_DATABASE}`);
   const url = withDatabase(inject('pgAdminUrl'), name);
   const database = createDatabase(url, { max: 5 });
   return {

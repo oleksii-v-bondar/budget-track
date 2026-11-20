@@ -1,10 +1,11 @@
 import { eq, sql } from 'drizzle-orm';
+import { pgTable, text } from 'drizzle-orm/pg-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { account, assignment, category, categoryGroup, undoEntry } from '../db/schema';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { snapshot } from '../test/snapshot';
 import { historyState, redo, undo } from './history';
-import type { Change } from './recorder';
+import { type Change, primaryKeyOf, type RecordedTable } from './recorder';
 import { runCommand, UNDO_HISTORY_LIMIT } from './run-command';
 
 let t: TestDatabase;
@@ -127,6 +128,11 @@ describe('runCommand', () => {
     const everything = runCommand(deps(), 'Bad', (rec) => rec.delete(categoryGroup, undefined));
     await expect(everything).rejects.toThrow('Recorded updates and deletes need a WHERE condition');
   });
+
+  it('refuses tables without a primary key, whose rows undo could not find again', () => {
+    const keyless = pgTable('keyless', { name: text('name') });
+    expect(() => primaryKeyOf(keyless as unknown as RecordedTable)).toThrow('Table keyless has no primary key');
+  });
 });
 
 describe('undo and redo', () => {
@@ -206,6 +212,34 @@ describe('undo and redo', () => {
       code: 'undo_conflict',
       message: "Can't redo: data changed since.",
     });
+  });
+
+  it('refuse to undo or redo when another row still depends on the change, instead of failing', async () => {
+    const group = await createGroup('Bills');
+    // Written outside the recorder: undoing the create would delete the group this category belongs to.
+    await t.db.insert(category).values({ groupId: group.id, name: 'Rent' });
+    const state = await snapshot(t.db);
+    await expect(undo(t.db)).rejects.toMatchObject({
+      status: 409,
+      code: 'undo_conflict',
+      message: "Can't undo: data changed since.",
+    });
+    expect(await snapshot(t.db)).toEqual(state);
+    expect((await entries()).map((e) => e.state)).toEqual(['done']);
+
+    const [food] = await t.db.insert(categoryGroup).values({ name: 'Food' }).returning();
+    await runCommand(deps(), 'Create Groceries', (rec) =>
+      rec.insert(category, { groupId: food!.id, name: 'Groceries' }),
+    );
+    await undo(t.db);
+    // Redoing would insert a category whose group no longer exists.
+    await t.db.delete(categoryGroup).where(eq(categoryGroup.id, food!.id));
+    await expect(redo(t.db)).rejects.toMatchObject({
+      status: 409,
+      code: 'undo_conflict',
+      message: "Can't redo: data changed since.",
+    });
+    expect((await entries()).map((e) => e.state)).toEqual(['done', 'undone']);
   });
 
   it('ignore timestamp-only differences', async () => {

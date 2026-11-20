@@ -32,7 +32,7 @@ const earliestMonth = (dates: (IsoDate | null | undefined)[]): Month =>
  * The budget start can move later (e.g. when the only early account is deleted); earlier months that still hold an
  * assignment or a note stay editable so those rows can be changed or cleared.
  */
-async function firstEditableMonth(db: Executor): Promise<Month> {
+export async function firstEditableMonth(db: Executor): Promise<Month> {
   const [held] = await db.select({ date: sql<IsoDate | null>`min(${assignment.month})` }).from(assignment);
   const [noted] = await db.select({ date: sql<IsoDate | null>`min(${monthNote.month})` }).from(monthNote);
   return earliestMonth([monthStart(await budgetStartMonth(db)), held?.date, noted?.date]);
