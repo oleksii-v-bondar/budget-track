@@ -1,5 +1,7 @@
 import type { AccountDto, CreateAccountRequest } from '../../shared/api/accounts';
 import type { CategoryDto, CategoryGroupDto } from '../../shared/api/categories';
+import type { Db } from '../db/client';
+import { transaction } from '../db/schema';
 import type { TestClient } from './http-client';
 
 async function created<T>(res: Response, what: string): Promise<T> {
@@ -22,4 +24,16 @@ export async function createGroup(client: TestClient, name: string): Promise<Cat
 
 export async function createCategory(client: TestClient, groupId: string, name: string): Promise<CategoryDto> {
   return created(await client.post('/api/categories', { groupId, name }), 'createCategory');
+}
+
+export type NewTransaction = Partial<typeof transaction.$inferInsert> &
+  Pick<typeof transaction.$inferInsert, 'accountId' | 'date' | 'amount'>;
+
+/** Inserts a transaction straight into the database (the transactions API is P2c); `amountBase` defaults to `amount`. */
+export async function insertTransaction(db: Db, values: NewTransaction): Promise<typeof transaction.$inferSelect> {
+  const [row] = await db
+    .insert(transaction)
+    .values({ amountBase: values.amount, ...values })
+    .returning();
+  return row!;
 }
