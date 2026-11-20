@@ -78,8 +78,11 @@ export const appUser = pgTable(
     budgetStartMonth: day('budget_start_month').notNull(),
     ...timestamps,
   },
-  // At most one row: every row has the same value for the indexed constant expression.
-  () => [uniqueIndex('app_user_singleton').on(sql`(true)`)],
+  (t) => [
+    // At most one row: every row has the same value for the indexed constant expression.
+    uniqueIndex('app_user_singleton').on(sql`(true)`),
+    check('app_user_budget_start_first_of_month', sql`extract(day from ${t.budgetStartMonth}) = 1`),
+  ],
 );
 
 export const session = pgTable('session', {
@@ -220,6 +223,11 @@ export const target = pgTable(
     check('target_due_weekday_range', sql`${t.dueWeekday} IS NULL OR ${t.dueWeekday} BETWEEN 0 AND 6`),
     check('target_due_day_range', sql`${t.dueDayOfMonth} IS NULL OR ${t.dueDayOfMonth} BETWEEN 1 AND 31`),
     check('target_repeat_every_positive', sql`${t.repeatEvery} IS NULL OR ${t.repeatEvery} >= 1`),
+    check('target_start_month_first_of_month', sql`extract(day from ${t.startMonth}) = 1`),
+    check(
+      'target_snoozed_month_first_of_month',
+      sql`${t.snoozedMonth} IS NULL OR extract(day from ${t.snoozedMonth}) = 1`,
+    ),
   ],
 );
 

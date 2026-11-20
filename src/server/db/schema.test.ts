@@ -12,6 +12,16 @@ afterAll(async () => {
   await t.drop();
 });
 
+/** Drizzle wraps driver errors ("Failed query: ...") and keeps the original as `cause`; return both texts. */
+async function rejectionText(query: PromiseLike<unknown>): Promise<string> {
+  const error = await Promise.resolve(query).then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  expect(error).toBeInstanceOf(Error);
+  return `${(error as Error).message} ${String((error as Error).cause)}`;
+}
+
 describe('migrations', () => {
   it('create every table from spec §4', async () => {
     const rows = await t.db.execute<{ table_name: string }>(
@@ -60,6 +70,13 @@ describe('int8 handling', () => {
     // Drizzle wraps driver errors ("Failed query: ...") and keeps the original as `cause`.
     expect(String((error as Error | undefined)?.cause)).toContain('safe integer range');
   });
+
+  it('refuses to write numbers outside the safe integer range', async () => {
+    const query = t.db
+      .insert(account)
+      .values({ name: 'Too big', type: 'checking', minPayment: Number.MAX_SAFE_INTEGER + 2 });
+    expect(await rejectionText(query)).toContain('safe integer range');
+  });
 });
 
 describe('constraints', () => {
@@ -69,11 +86,20 @@ describe('constraints', () => {
     await expect(t.db.insert(appUser).values(row)).rejects.toThrow();
   });
 
+  it('keeps budget_start_month on the first day of a month', async () => {
+    const query = t.db
+      .insert(appUser)
+      .values({ passwordHash: 'x', totpSecretEnc: 'y', budgetStartMonth: '2026-11-15' });
+    // Check constraints run before the singleton index, so the name proves which rule rejected the row.
+    expect(await rejectionText(query)).toContain('app_user_budget_start_first_of_month');
+  });
+
   it('derives account_class from the account type exactly like accountClassOf', async () => {
     const rows = await t.db
       .insert(account)
       .values(ACCOUNT_TYPES.map((type) => ({ name: `acc-${type}`, type })))
       .returning({ type: account.type, accountClass: account.accountClass });
+    expect(rows).toHaveLength(ACCOUNT_TYPES.length);
     for (const row of rows) expect(row.accountClass).toBe(accountClassOf(row.type));
   });
 

@@ -22,12 +22,20 @@ function parseInt8(raw: string): number {
   return value;
 }
 
+/** The write-side twin of parseInt8: never send a number that could not be read back exactly. */
+function serializeInt8(value: unknown): string {
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) {
+    throw new Error(`int8 value ${value} is outside the safe integer range`);
+  }
+  return String(value);
+}
+
 export function createDatabase(url: string, options: { max?: number } = {}): Database {
   const client = postgres(url, {
     max: options.max ?? 10,
     onnotice: () => {},
     types: {
-      int8: { to: INT8_OID, from: [INT8_OID], serialize: (value: number) => String(value), parse: parseInt8 },
+      int8: { to: INT8_OID, from: [INT8_OID], serialize: serializeInt8, parse: parseInt8 },
     },
   });
   const db = drizzle({ client, schema });

@@ -1,5 +1,5 @@
 {
-  "id": "5cac9695-562b-414d-8479-5d0ba28171df",
+  "id": "2cdc93f0-c9d3-4fc5-89f8-75dbe131faf3",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -226,7 +226,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "app_user_budget_start_first_of_month": {
+          "name": "app_user_budget_start_first_of_month",
+          "value": "extract(day from \"app_user\".\"budget_start_month\") = 1"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.assignment": {
@@ -1501,6 +1506,14 @@
         "target_repeat_every_positive": {
           "name": "target_repeat_every_positive",
           "value": "\"target\".\"repeat_every\" IS NULL OR \"target\".\"repeat_every\" >= 1"
+        },
+        "target_start_month_first_of_month": {
+          "name": "target_start_month_first_of_month",
+          "value": "extract(day from \"target\".\"start_month\") = 1"
+        },
+        "target_snoozed_month_first_of_month": {
+          "name": "target_snoozed_month_first_of_month",
+          "value": "\"target\".\"snoozed_month\" IS NULL OR extract(day from \"target\".\"snoozed_month\") = 1"
         }
       },
       "isRLSEnabled": false

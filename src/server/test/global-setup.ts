@@ -20,22 +20,28 @@ export default async function setup(project: TestProject): Promise<() => Promise
   process.env.TESTCONTAINERS_RYUK_DISABLED ??= 'true';
   const { PostgreSqlContainer } = await import('@testcontainers/postgresql');
   const container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  const adminUrl = container.getConnectionUri();
-
-  const admin = createDatabase(adminUrl, { max: 1 });
+  // Without Ryuk nothing else would reap the container, so stop it if the rest of the setup fails.
   try {
-    await admin.db.execute(sql.raw(`CREATE DATABASE ${TEMPLATE_DATABASE}`));
-  } finally {
-    await admin.close();
-  }
-  const template = createDatabase(withDatabase(adminUrl, TEMPLATE_DATABASE), { max: 1 });
-  try {
-    await runMigrations(template.db, 'drizzle');
-  } finally {
-    await template.close();
-  }
+    const adminUrl = container.getConnectionUri();
 
-  project.provide('pgAdminUrl', adminUrl);
+    const admin = createDatabase(adminUrl, { max: 1 });
+    try {
+      await admin.db.execute(sql.raw(`CREATE DATABASE ${TEMPLATE_DATABASE}`));
+    } finally {
+      await admin.close();
+    }
+    const template = createDatabase(withDatabase(adminUrl, TEMPLATE_DATABASE), { max: 1 });
+    try {
+      await runMigrations(template.db, 'drizzle');
+    } finally {
+      await template.close();
+    }
+
+    project.provide('pgAdminUrl', adminUrl);
+  } catch (error) {
+    await container.stop();
+    throw error;
+  }
   return async () => {
     await container.stop();
   };

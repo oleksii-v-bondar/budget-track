@@ -44,7 +44,8 @@ CREATE TABLE "app_user" (
 	"base_currency" text DEFAULT 'PLN' NOT NULL,
 	"budget_start_month" date NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "app_user_budget_start_first_of_month" CHECK (extract(day from "app_user"."budget_start_month") = 1)
 );
 --> statement-breakpoint
 CREATE TABLE "assignment" (
@@ -199,7 +200,9 @@ CREATE TABLE "target" (
 	CONSTRAINT "target_amount_non_negative" CHECK ("target"."amount" >= 0),
 	CONSTRAINT "target_due_weekday_range" CHECK ("target"."due_weekday" IS NULL OR "target"."due_weekday" BETWEEN 0 AND 6),
 	CONSTRAINT "target_due_day_range" CHECK ("target"."due_day_of_month" IS NULL OR "target"."due_day_of_month" BETWEEN 1 AND 31),
-	CONSTRAINT "target_repeat_every_positive" CHECK ("target"."repeat_every" IS NULL OR "target"."repeat_every" >= 1)
+	CONSTRAINT "target_repeat_every_positive" CHECK ("target"."repeat_every" IS NULL OR "target"."repeat_every" >= 1),
+	CONSTRAINT "target_start_month_first_of_month" CHECK (extract(day from "target"."start_month") = 1),
+	CONSTRAINT "target_snoozed_month_first_of_month" CHECK ("target"."snoozed_month" IS NULL OR extract(day from "target"."snoozed_month") = 1)
 );
 --> statement-breakpoint
 CREATE TABLE "transaction" (
