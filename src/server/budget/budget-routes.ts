@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import {
   type AssignmentDto,
   assignmentParamSchema,
+  type BudgetMonthDto,
   type MonthNoteDto,
   monthNoteRequestSchema,
   monthParamSchema,
@@ -15,13 +16,26 @@ import { type Named, runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
 import { assertBudgetMonth, assignableCategory, assignedIn, moveMoney, setAssigned, setMonthNote } from './assignments';
+import { loadBudgetMonth } from './budget-month';
 
-/** /api/budget/:month (spec §3, §5.4): assigning, moving money and the month note; months are 'YYYY-MM'. */
+/**
+ * /api/budget/:month (spec §3, §5.4, §11): the month view, assigning, moving money and the month note; months are
+ * 'YYYY-MM'.
+ */
 export function budgetRoutes(deps: AppDeps) {
   const today = () => todayIn(deps.config.timeZone, deps.clock.now());
 
   return new Hono<AuthedEnv>()
     .use('*', requireSession(deps))
+    .get('/:month', validate('param', monthParamSchema), async (c) => {
+      const { month } = c.req.valid('param');
+      // One read-only snapshot for all the month view's queries.
+      const { view } = await deps.db.transaction((tx) => loadBudgetMonth(tx, month, today()), {
+        isolationLevel: 'repeatable read',
+        accessMode: 'read only',
+      });
+      return c.json<BudgetMonthDto>(view);
+    })
     .put(
       '/:month/assignments/:categoryId',
       validate('param', assignmentParamSchema),

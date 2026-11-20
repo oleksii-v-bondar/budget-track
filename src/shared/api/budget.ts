@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import type { CategoryGroupKind, CategoryKind } from './categories';
 import { idSchema, moneySchema, monthSchema, noteSchema, positiveMoneySchema } from './common';
+import type { TargetDto, TargetEvaluationDto } from './targets';
 
 export const monthParamSchema = z.object({ month: monthSchema });
 export const assignmentParamSchema = z.object({ month: monthSchema, categoryId: idSchema });
@@ -36,4 +38,76 @@ export interface MoveMoneyResponse {
 export interface MonthNoteDto {
   month: string;
   note: string | null;
+}
+
+/** Spec §6: the color of a category's Available pill. */
+export type PillColor = 'red' | 'yellow' | 'green' | 'grey';
+
+/** Spec §5.4: how Ready to Assign comes about in a month. */
+export interface RtaBreakdownDto {
+  /** Leftover of the previous month (negative leftovers carry forward). */
+  leftoverPrev: number;
+  income: number;
+  assignedThisMonth: number;
+  assignedFuture: number;
+  cashOverspentPrev: number;
+  /** leftoverPrev + income − assignedThisMonth − cashOverspentPrev */
+  leftover: number;
+  /** The banner amount: leftover − assignedFuture. */
+  readyToAssign: number;
+}
+
+/** One budget row (spec §5, §6, §11); amounts are PLN minor units. */
+export interface BudgetCategoryDto {
+  id: string;
+  name: string;
+  /** `uncategorized` only for the Uncategorized row; Ready to Assign never appears. */
+  kind: CategoryKind;
+  hidden: boolean;
+  note: string | null;
+  /** The account of a credit card payment or paired loan category. */
+  linkedAccountId: string | null;
+  carry: number;
+  assigned: number;
+  activity: number;
+  available: number;
+  cashOverspent: number;
+  creditOverspent: number;
+  pill: PillColor;
+  target: TargetDto | null;
+  /** Null without a target, or before the target's start month. */
+  targetEvaluation: TargetEvaluationDto | null;
+  /** Credit card payment categories: "Need X to pay in full" (spec §5.3); null for every other category. */
+  needToPayInFull: number | null;
+}
+
+export interface BudgetGroupDto {
+  id: string;
+  name: string;
+  kind: CategoryGroupKind;
+  hidden: boolean;
+  /** Live categories in display order, hidden ones included (the UI lists them under "Hidden categories"). */
+  categories: BudgetCategoryDto[];
+}
+
+/** GET /api/budget/:month — everything the Budget screen shows for one month (spec §11). */
+export interface BudgetMonthDto {
+  month: string;
+  /** Spec §5.1: the earlier of the configured start month and the month of the earliest transaction. */
+  budgetStartMonth: string;
+  /**
+   * The month switcher's lower bound: the budget start, or an earlier month that still holds an assignment or a note
+   * (left behind when the budget start moved later).
+   */
+  firstMonth: string;
+  /** Today's month in the budget's time zone. */
+  currentMonth: string;
+  /** The month switcher's upper bound: the current month + 24. */
+  lastMonth: string;
+  note: string | null;
+  rta: RtaBreakdownDto;
+  /** Every live group except the internal one, in display order. */
+  groups: BudgetGroupDto[];
+  /** Spec §3: present only while Uncategorized has activity or money in this month. */
+  uncategorized: BudgetCategoryDto | null;
 }
