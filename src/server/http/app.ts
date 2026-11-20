@@ -17,6 +17,7 @@ import type { Config } from '../config';
 import type { Db } from '../db/client';
 import type { Logger } from '../logger';
 import { payeeRoutes } from '../payees/payee-routes';
+import { transactionRoutes } from '../transactions/transaction-routes';
 import type { ClientIpResolver } from './client-ip';
 import type { AppEnv } from './env';
 import { AppError, errorHandler } from './errors';
@@ -78,7 +79,8 @@ export function createApp(deps: AppDeps) {
     .route('/api/category-groups', groupRoutes(deps))
     .route('/api/categories', categoryRoutes(deps))
     .route('/api/budget', budgetRoutes(deps))
-    .route('/api/payees', payeeRoutes(deps));
+    .route('/api/payees', payeeRoutes(deps))
+    .route('/api/transactions', transactionRoutes(deps));
 
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);

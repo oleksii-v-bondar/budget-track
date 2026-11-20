@@ -1,8 +1,10 @@
+import { asc, type SQL } from 'drizzle-orm';
 import type { AccountDto, CreateAccountRequest } from '../../shared/api/accounts';
 import type { CategoryDto, CategoryGroupDto } from '../../shared/api/categories';
 import type { PayeeDto } from '../../shared/api/payees';
+import type { CreateTransactionInput, CreateTransactionResponse, TransactionDto } from '../../shared/api/transactions';
 import type { Db } from '../db/client';
-import { transaction } from '../db/schema';
+import { ledgerLine, transaction } from '../db/schema';
 import type { TestClient } from './http-client';
 
 async function created<T>(res: Response, what: string): Promise<T> {
@@ -29,6 +31,22 @@ export async function createCategory(client: TestClient, groupId: string, name: 
 
 export async function createPayee(client: TestClient, name: string): Promise<PayeeDto> {
   return created(await client.post('/api/payees', { name }), 'createPayee');
+}
+
+/** Books a transaction through the API (defaults: today, no payee, uncategorized) and returns it. */
+export async function createTransaction(
+  client: TestClient,
+  body: CreateTransactionInput,
+): Promise<TransactionDto> {
+  const res = await client.post('/api/transactions', body);
+  const saved = await created<CreateTransactionResponse>(res, 'createTransaction');
+  if (saved.kind !== 'transaction') throw new Error('createTransaction: the transaction was scheduled');
+  return saved.transaction;
+}
+
+/** What the budget sees: `v_ledger_line` rows (spec §4.6), by date and base amount. */
+export function ledgerLines(db: Db, where?: SQL) {
+  return db.select().from(ledgerLine).where(where).orderBy(asc(ledgerLine.date), asc(ledgerLine.amountBase));
 }
 
 export type NewTransaction = Partial<typeof transaction.$inferInsert> &

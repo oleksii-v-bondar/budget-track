@@ -230,7 +230,7 @@ describe('POST /api/budget/:month/auto-assign', () => {
     });
     expect(await bad({ strategy: 'underfunded' })).toMatchObject({ fieldErrors: { scope: [expect.any(String)] } });
     expect(await bad({ strategy: 'underfunded', scope: { type: 'group' } })).toMatchObject({
-      fieldErrors: { scope: [expect.any(String)] },
+      fieldErrors: { 'scope.id': [expect.any(String)] },
     });
     const unknown = crypto.randomUUID();
     expect(await json(await autoAssign('2026-11', 'underfunded', { type: 'group', id: unknown }))).toEqual({

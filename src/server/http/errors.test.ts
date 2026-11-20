@@ -49,6 +49,37 @@ describe('errorHandler', () => {
     expect(Object.keys(body.fieldErrors).sort()).toEqual(['amount', 'name']);
   });
 
+  it('keys field errors by their full path, so nested fields keep theirs', async () => {
+    const schema = z.object({ lines: z.array(z.object({ amount: z.int() })).min(2), memo: z.string() });
+    const { app } = appWith((a) => a.post('/x', validate('json', schema), (c) => c.json(c.req.valid('json'))));
+    const res = await app.request('/x', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ lines: [{ amount: 1 }, { amount: 'x' }], memo: 1 }),
+    });
+    expect(await res.json()).toEqual({
+      code: 'validation',
+      message: 'Some fields are invalid.',
+      fieldErrors: {
+        'lines.1.amount': ['Invalid input: expected number, received string'],
+        memo: ['Invalid input: expected string, received number'],
+      },
+      formErrors: [],
+    });
+  });
+
+  it('puts the field of a DomainError into fieldErrors', async () => {
+    const { app } = appWith((a) =>
+      a.get('/x', () => Promise.reject(new DomainError('split_sum', 'Lines must add up.', 'lines.0.amount'))),
+    );
+    const res = await app.request('/x');
+    expect(await res.json()).toEqual({
+      code: 'split_sum',
+      message: 'Lines must add up.',
+      fieldErrors: { 'lines.0.amount': ['Lines must add up.'] },
+    });
+  });
+
   it('maps malformed JSON to 400', async () => {
     const { app } = appWith((a) => a.post('/x', validate('json', z.object({})), (c) => c.json({})));
     const res = await app.request('/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' });

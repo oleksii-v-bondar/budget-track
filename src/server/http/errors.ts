@@ -18,22 +18,31 @@ export class AppError extends Error {
   }
 }
 
-/** A violated business rule (spec §13): HTTP 422. */
+/**
+ * A violated business rule (spec §13): HTTP 422. `field` names the request field it concerns, as a dotted path
+ * (e.g. `lines.1.categoryId`); the body then also carries `fieldErrors: { [field]: [message] }`.
+ */
 export class DomainError extends AppError {
-  constructor(code: string, message: string) {
-    super(422, code, message);
+  constructor(code: string, message: string, field?: string) {
+    super(422, code, message, field === undefined ? {} : { fieldErrors: { [field]: [message] } });
     this.name = 'DomainError';
   }
 }
 
-/** Request validation failure (spec §13): HTTP 400 `{ code: "validation", fieldErrors, formErrors }`. */
+/**
+ * Request validation failure (spec §13): HTTP 400 `{ code: "validation", fieldErrors, formErrors }`. Field errors are
+ * keyed by the dotted issue path, so nested fields keep theirs (`lines.1.amount`); `z.flattenError` would report
+ * only the top-level key.
+ */
 export class ValidationError extends AppError {
   constructor(error: z.core.$ZodError) {
-    const flat = z.flattenError(error);
-    super(400, 'validation', 'Some fields are invalid.', {
-      fieldErrors: flat.fieldErrors as Record<string, string[]>,
-      formErrors: flat.formErrors,
-    });
+    const fieldErrors: Record<string, string[]> = {};
+    const formErrors: string[] = [];
+    for (const issue of error.issues) {
+      if (issue.path.length === 0) formErrors.push(issue.message);
+      else (fieldErrors[issue.path.map(String).join('.')] ??= []).push(issue.message);
+    }
+    super(400, 'validation', 'Some fields are invalid.', { fieldErrors, formErrors });
     this.name = 'ValidationError';
   }
 }
