@@ -7,3 +7,4 @@ export { computeBudget, cardPaymentShortfall } from './budget/compute';
 export * from './loans';
 export * from './targets';
 export * from './autoAssign';
+export * from './schedule';
