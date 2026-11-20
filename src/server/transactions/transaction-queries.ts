@@ -4,8 +4,10 @@ import { BASE_CURRENCY } from '../../shared/api/accounts';
 import type { RegisterQuery, RegisterResponse, SplitLineDto, TransactionDto } from '../../shared/api/transactions';
 import { effectiveRate, type Money } from '../../engine';
 import { getAccount } from '../accounts/account-queries';
+import { uncategorizedActivity } from '../budget/budget-input';
 import type { Executor } from '../db/client';
-import { account, category, payee, subtransaction, transaction } from '../db/schema';
+import { systemCategoryId } from '../db/lookups';
+import { account, category, ledgerLine, payee, subtransaction, transaction } from '../db/schema';
 import { AppError } from '../http/errors';
 
 const transferAccount = alias(account, 'transfer_account');
@@ -132,10 +134,14 @@ const lineWhere = (condition: SQL) => sql`exists (
   left join ${category} sc on sc.id = s.category_id
   where s.txn_id = ${transaction.id} and s.deleted_at is null and ${condition})`;
 
+/** The row (or one of its split lines) is Uncategorized activity, by the budget's own rule. */
+const uncategorizedWhere = sql`exists (
+  select 1 from ${ledgerLine} where ${ledgerLine.txnId} = ${transaction.id} and ${uncategorizedActivity})`;
+
 /** ILIKE pattern for a literal substring: %, _ and \ in the text match only themselves. */
 const containing = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
-function registerWhere(query: RegisterQuery): SQL | undefined {
+function registerWhere(query: RegisterQuery, uncategorized: boolean): SQL | undefined {
   const pattern = query.q === undefined ? null : containing(query.q);
   return and(
     query.accountId ? eq(transaction.accountId, query.accountId) : undefined,
@@ -151,9 +157,11 @@ function registerWhere(query: RegisterQuery): SQL | undefined {
     query.to ? lte(transaction.date, query.to) : undefined,
     query.minAmount === undefined ? undefined : gte(transaction.amount, query.minAmount),
     query.maxAmount === undefined ? undefined : lte(transaction.amount, query.maxAmount),
-    query.categoryId
-      ? or(eq(transaction.categoryId, query.categoryId), lineWhere(sql`s.category_id = ${query.categoryId}`))
-      : undefined,
+    query.categoryId === undefined
+      ? undefined
+      : uncategorized
+        ? uncategorizedWhere
+        : or(eq(transaction.categoryId, query.categoryId), lineWhere(sql`s.category_id = ${query.categoryId}`)),
     query.payeeId
       ? or(eq(transaction.payeeId, query.payeeId), lineWhere(sql`s.payee_id = ${query.payeeId}`))
       : undefined,
@@ -166,11 +174,16 @@ function registerWhere(query: RegisterQuery): SQL | undefined {
   );
 }
 
-/** Spec §10 "Search" and §11 Register: one page of matching transactions, plus the account's balances. */
+/**
+ * Spec §10 "Search" and §11 Register: one page of matching transactions, plus the account's balances. Callers run it
+ * in one read-only transaction, so the balances and the rows come from one snapshot.
+ */
 export async function listRegister(db: Executor, query: RegisterQuery): Promise<RegisterResponse> {
   const balances = query.accountId ? await getAccount(db, query.accountId) : null;
+  const uncategorized =
+    query.categoryId !== undefined && query.categoryId === (await systemCategoryId(db, 'uncategorized'));
   const limit = query.limit ?? DEFAULT_PAGE_SIZE;
-  const rows = await loadTransactions(db, registerWhere(query), limit + 1);
+  const rows = await loadTransactions(db, registerWhere(query, uncategorized), limit + 1);
   const page = rows.slice(0, limit);
   const last = page.at(-1);
   return {

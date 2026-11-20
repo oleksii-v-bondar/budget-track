@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { RegisterResponse, TransactionDto } from '../../shared/api/transactions';
+import type { BudgetMonthDto } from '../../shared/api/budget';
+import type { CreateTransactionInput, RegisterResponse, TransactionDto } from '../../shared/api/transactions';
 import { transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
@@ -96,12 +97,13 @@ describe('GET /api/transactions', () => {
     const all = (await register({ accountId: checking.id })).transactions;
     expect(all.map((txn) => txn.date)).toEqual([...all.map((txn) => txn.date)].sort().reverse());
 
+    // Pages of 2 break inside today's three rows, so the cursor needs the id to continue within a date.
     const seen: TransactionDto[] = [];
     let cursor: string | null = null;
     do {
-      const query = { accountId: checking.id, limit: '3', ...(cursor ? { cursor } : {}) };
+      const query = { accountId: checking.id, limit: '2', ...(cursor ? { cursor } : {}) };
       const page: RegisterResponse = await register(query);
-      expect(page.transactions.length).toBeLessThanOrEqual(3);
+      expect(page.transactions.length).toBeLessThanOrEqual(2);
       seen.push(...page.transactions);
       cursor = page.nextCursor;
     } while (cursor);
@@ -117,14 +119,19 @@ describe('GET /api/transactions', () => {
   });
 
   it('searches text in payees, memos and categories, split lines included', async () => {
-    await setUp();
+    const { checking } = await setUp();
+    // Unescaped, "50%" would also match "500 zł", and "C:\d" would match "C:d" but not "C:\docs".
+    for (const memo of ['500 zł', 'C:\\docs']) {
+      await createTransaction(ctx.client, { accountId: checking.id, amount: -1, memo });
+    }
     expect(memos(await register({ q: 'BIED' }))).toEqual(['mixed', 'weekly']);
     expect(memos(await register({ q: 'groc' }))).toEqual(['mixed', 'weekly']);
     expect(memos(await register({ q: 'saving' }))).toEqual(['saving', 'saving']);
     expect(memos(await register({ q: 'Transfer : mBank' }))).toEqual(['saving']);
-    // % is a literal: only the split line's memo "50% off" matches.
+    // %, _ and \ are literals: only the split line's memo "50% off" has "50%".
     expect(memos(await register({ q: '50%' }))).toEqual(['mixed']);
     expect(memos(await register({ q: '_' }))).toEqual([]);
+    expect(memos(await register({ q: 'C:\\d' }))).toEqual(['C:\\docs']);
   });
 
   it('filters by dates, amounts, account, category, payee, flag, cleared state and approval', async () => {
@@ -144,17 +151,78 @@ describe('GET /api/transactions', () => {
     expect((await register({})).balances).toBeNull();
   });
 
+  it('lists the Uncategorized activity of the month view under the Uncategorized category', async () => {
+    const opened = { startingDate: '2026-11-01' };
+    const checking = await createAccount(ctx.client, { name: 'mBank', startingBalance: 100_000, ...opened });
+    const savings = await createAccount(ctx.client, { name: 'Savings', type: 'savings', ...opened });
+    const card = await createAccount(ctx.client, {
+      name: 'Visa',
+      type: 'credit_card',
+      startingBalance: -20_000,
+      ...opened,
+    });
+    const house = await createAccount(ctx.client, { name: 'House', type: 'other_asset', ...opened });
+    const groceries = await createCategory(ctx.client, (await createGroup(ctx.client, 'Food')).id, 'Groceries');
+    const add = (body: CreateTransactionInput) => createTransaction(ctx.client, body);
+    await add({ accountId: checking.id, date: '2026-11-03', memo: 'plain', amount: -700 });
+    await add({ accountId: card.id, date: '2026-11-04', memo: 'card', amount: -1_100 });
+    // Not activity: transfers between budget accounts, tracking accounts, starting balances and categorized rows.
+    await add({ accountId: checking.id, date: '2026-11-05', payeeId: savings.transferPayeeId, amount: -5_000 });
+    await add({ accountId: checking.id, date: '2026-11-06', payeeId: card.transferPayeeId, amount: -2_000 });
+    await add({ accountId: house.id, date: '2026-11-07', memo: 'tracking', amount: -900 });
+    await add({
+      accountId: checking.id,
+      date: '2026-11-08',
+      memo: 'split',
+      amount: -600,
+      lines: [
+        { amount: -100 },
+        { amount: -200, categoryId: groceries.id },
+        { amount: -300, payeeId: savings.transferPayeeId },
+      ],
+    });
+    await add({
+      accountId: checking.id,
+      date: '2026-11-09',
+      memo: 'categorized split',
+      amount: -100,
+      lines: [
+        { amount: -40, categoryId: groceries.id },
+        { amount: -60, categoryId: groceries.id },
+      ],
+    });
+    await add({ accountId: checking.id, date: '2026-11-10', categoryId: groceries.id, amount: -400 });
+
+    const month = await json<BudgetMonthDto>(await ctx.client.get('/api/budget/2026-11'));
+    const uncategorized = month.body.uncategorized!;
+    const page = await register({ categoryId: uncategorized.id, from: '2026-11-01', to: '2026-11-30' });
+    expect(memos(page)).toEqual(['split', 'card', 'plain']);
+    const lines = page.transactions.flatMap((txn) =>
+      txn.isSplit ? txn.lines.filter((line) => line.categoryId === null && line.transfer === null) : [txn],
+    );
+    const total = lines.reduce((sum, line) => sum + line.amountBase, 0);
+    expect(total).toBe(uncategorized.activity);
+    expect(total).toBe(-100 - 1_100 - 700);
+  });
+
   it('leaves out deleted transactions and refuses invalid filters', async () => {
     const { checking, weekly } = await setUp();
     await t.db.update(transaction).set({ deletedAt: new Date() }).where(eq(transaction.id, weekly.id));
     expect(memos(await register({ accountId: checking.id }))).toEqual(['mixed', 'saving', null]);
 
-    const errors = async (query: string) =>
-      (await json<{ fieldErrors: Record<string, string[]> }>(await ctx.client.get(`/api/transactions?${query}`))).body
-        .fieldErrors;
+    const errors = async (query: string) => {
+      const res = await json<{ fieldErrors: Record<string, string[]> }>(
+        await ctx.client.get(`/api/transactions?${query}`),
+      );
+      expect(res.status).toBe(400);
+      return res.body.fieldErrors;
+    };
     expect(await errors('from=2026-11-15&to=2026-11-10')).toEqual({
       to: ['The end date must not be before the start date.'],
     });
+    expect(await errors('from=0000-01-01')).toEqual({ from: ['Use a date from 1970-01-01 on.'] });
+    expect(await errors(`cursor=2026-13-45_${weekly.id}`)).toEqual({ cursor: ['Invalid cursor.'] });
+    expect(await errors(`cursor=2026-11-10_${'-'.repeat(36)}`)).toEqual({ cursor: ['Invalid cursor.'] });
     expect(await errors('minAmount=1.5')).toEqual({ minAmount: ['Enter a whole amount in minor units.'] });
     expect(Object.keys(await errors('flag=pink&cleared=maybe'))).toEqual(['flag', 'cleared']);
     expect(await json(await ctx.client.get(`/api/transactions?accountId=${crypto.randomUUID()}`))).toEqual({

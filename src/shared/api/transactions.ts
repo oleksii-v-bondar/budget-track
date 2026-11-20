@@ -135,11 +135,16 @@ const queryMoneySchema = z
   .transform(Number)
   .pipe(moneySchema);
 
-/** An opaque page position: the (date, id) of the last row of the previous page. */
-export const registerCursorSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}_[0-9a-f-]{36}$/i, 'Invalid cursor.')
-  .transform((cursor) => ({ date: cursor.slice(0, 10), id: cursor.slice(11).toLowerCase() }));
+/** An opaque page position: the (date, id) of the last row of the previous page, as `YYYY-MM-DD_<id>`. */
+export const registerCursorSchema = z.string().transform((cursor, ctx) => {
+  const date = transactionDateSchema.safeParse(cursor.slice(0, 10));
+  const id = idSchema.safeParse(cursor.slice(11));
+  if (cursor[10] !== '_' || !date.success || !id.success) {
+    ctx.addIssue({ code: 'custom', message: 'Invalid cursor.' });
+    return z.NEVER;
+  }
+  return { date: date.data, id: id.data };
+});
 
 /**
  * GET /api/transactions (spec §10 "Search and bulk operations", §11 Register): newest first by (date desc, id desc),
@@ -152,12 +157,17 @@ export const registerQuerySchema = z
     /** Case-insensitive text in the payee, memo or category name, including split lines. */
     q: z.string().trim().min(1).max(100).optional(),
     /** Inclusive date range. */
-    from: isoDateSchema.optional(),
-    to: isoDateSchema.optional(),
+    from: transactionDateSchema.optional(),
+    to: transactionDateSchema.optional(),
     /** Inclusive range of the signed native amount. */
     minAmount: queryMoneySchema.optional(),
     maxAmount: queryMoneySchema.optional(),
-    /** The transaction's category or one of its split lines'. */
+    /**
+     * The transaction's category or one of its split lines'. The Uncategorized category lists what the budget counts
+     * as its activity: lines in budget accounts without a category that are neither transfers nor starting balances
+     * (split lines included). Card payment categories hold no transactions; the client lists their activity with
+     * `accountId=<linkedAccountId>`.
+     */
     categoryId: idSchema.optional(),
     /** The transaction's payee or one of its split lines'. */
     payeeId: idSchema.optional(),

@@ -30,9 +30,15 @@ export function transactionRoutes(deps: AppDeps) {
 
   return new Hono<AuthedEnv>()
     .use('*', requireSession(deps))
-    .get('/', validate('query', registerQuerySchema), async (c) =>
-      c.json<RegisterResponse>(await listRegister(deps.db, c.req.valid('query'))),
-    )
+    .get('/', validate('query', registerQuerySchema), async (c) => {
+      const query = c.req.valid('query');
+      // One read-only snapshot, so the balances match the rows.
+      const page = await deps.db.transaction((tx) => listRegister(tx, query), {
+        isolationLevel: 'repeatable read',
+        accessMode: 'read only',
+      });
+      return c.json<RegisterResponse>(page);
+    })
     .post('/', validate('json', createTransactionRequestSchema), async (c) => {
       const body = c.req.valid('json');
       const saved = await runCommand(deps, savedLabel, (rec) => createTransaction(rec, body, today()));

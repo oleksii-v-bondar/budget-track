@@ -78,6 +78,10 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   `db.transaction(fn, { isolationLevel: 'repeatable read', accessMode: 'read only' })` so every query sees one
   snapshot. Auto-assign calls it with `rec.tx` inside `runCommand`; closing a card calls `loadBudgetInput` and
   `computeBudget` directly with `rec.tx`.
+- `uncategorizedActivity` (`budget-input.ts`) is the one predicate for Uncategorized activity on `v_ledger_line`. The
+  register (`GET /api/transactions?categoryId=<Uncategorized>`) uses it too, so the Budget screen's Activity tab lists
+  exactly the lines the budget counts. Like the budget read routes, the register reads its balances and rows in one
+  read-only repeatable-read transaction.
 - `setAssigned`/`addAssigned` don't check the category; callers go through `assignableCategory` or the month view,
   which never lists Ready to Assign or Uncategorized.
 - Auto-assign passes the month view's `underfunded` amounts to the engine only for the `underfunded` strategy, clamped

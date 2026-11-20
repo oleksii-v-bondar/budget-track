@@ -8,6 +8,19 @@ import { firstEditableMonth } from './assignments';
 /** A transfer between two on-budget accounts (cash or credit): budget-neutral, so never activity (spec §5.5). */
 const isBudgetTransfer = sql`(${ledgerLine.isTransfer} and ${ledgerLine.counterAccountClass} in ('cash', 'credit'))`;
 
+const onBudget = inArray(ledgerLine.accountClass, ['cash', 'credit']);
+
+/**
+ * Spec §3: on-budget, non-transfer, non-starting-balance lines without a category are Uncategorized activity. The
+ * register lists the same lines for the Uncategorized category.
+ */
+export const uncategorizedActivity = and(
+  onBudget,
+  isNull(ledgerLine.categoryId),
+  not(ledgerLine.isTransfer),
+  not(ledgerLine.isStartingBalance),
+)!;
+
 const total = sql<number>`sum(${ledgerLine.amountBase})::bigint`;
 
 interface BudgetCategories {
@@ -61,7 +74,7 @@ export async function loadBudgetInput(
   { throughMonth, today }: { throughMonth: Month; today: IsoDate },
 ): Promise<BudgetInput> {
   const { rtaCategoryId, uncategorizedId, categories } = await budgetCategories(db);
-  const booked = and(inArray(ledgerLine.accountClass, ['cash', 'credit']), lte(ledgerLine.date, today));
+  const booked = and(onBudget, lte(ledgerLine.date, today));
 
   const activity = await db
     .select({
@@ -84,8 +97,7 @@ export async function loadBudgetInput(
             not(isBudgetTransfer),
             not(and(ledgerLine.isStartingBalance, eq(ledgerLine.accountClass, 'credit'))!),
           ),
-          // Spec §3: on-budget, non-transfer, non-starting-balance lines without a category are Uncategorized.
-          and(isNull(ledgerLine.categoryId), not(ledgerLine.isTransfer), not(ledgerLine.isStartingBalance)),
+          uncategorizedActivity,
         ),
       ),
     )
