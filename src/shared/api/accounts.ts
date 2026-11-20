@@ -69,6 +69,19 @@ export const createAccountRequestSchema = z
 
 export type CreateAccountRequest = z.infer<typeof createAccountRequestSchema>;
 
+/** PATCH /api/accounts/:id. Omitted fields stay as they are; null (or an empty note) clears a field. */
+export const updateAccountRequestSchema = z.object({
+  name: nameSchema.optional(),
+  note: noteSchema.nullable().optional(),
+  /** Only within the account's class, and loans only to other loan types. */
+  type: z.enum(ACCOUNT_TYPES).optional(),
+  interestRate: interestRateSchema.nullable().optional(),
+  minPayment: nonNegativeMoneySchema.nullable().optional(),
+  escrowAmount: nonNegativeMoneySchema.nullable().optional(),
+});
+
+export type UpdateAccountRequest = z.infer<typeof updateAccountRequestSchema>;
+
 export interface AccountBalances {
   /** Cleared and reconciled transactions. */
   cleared: number;

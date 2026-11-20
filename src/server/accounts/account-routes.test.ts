@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AccountDto } from '../../shared/api/accounts';
 import { systemCategoryId, systemGroupId, systemPayeeId } from '../db/lookups';
-import { category, payee, target, transaction } from '../db/schema';
+import { account, assignment, category, payee, target, transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
@@ -256,5 +256,183 @@ describe('GET /api/accounts', () => {
       ['Euro', 2, sums(1_300, -200), sums(5_540, -860)],
     ]);
     expect(res.body.accounts[0]!.id).toBe(cash.id);
+  });
+});
+
+describe('PATCH /api/accounts/:id', () => {
+  it('renames the transfer payee and payment category with the account, and edits note and credit fields', async () => {
+    const card = await createAccount(ctx.client, { name: 'Visa', type: 'credit_card', note: 'old' });
+    const res = await json<AccountDto>(
+      await ctx.client.send('PATCH', `/api/accounts/${card.id}`, {
+        name: 'Visa Gold',
+        type: 'line_of_credit',
+        note: '',
+        interestRate: '21.5',
+        minPayment: 7_500,
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      name: 'Visa Gold',
+      type: 'line_of_credit',
+      note: null,
+      interestRate: '21.5000',
+      minPayment: 7_500,
+    });
+    const [transferPayee] = await t.db.select().from(payee).where(eq(payee.id, card.transferPayeeId));
+    const [payment] = await t.db.select().from(category).where(eq(category.id, card.paymentCategoryId!));
+    expect([transferPayee!.name, payment!.name]).toEqual(['Transfer : Visa Gold', 'Visa Gold']);
+
+    await ctx.client.post('/api/undo');
+    expect((await json<AccountDto>(await ctx.client.get('/api/accounts'))).body).toMatchObject({
+      accounts: [{ name: 'Visa', type: 'credit_card', note: 'old', interestRate: null }],
+    });
+  });
+
+  it("renames a loan's paired category and clears fields with null", async () => {
+    const loan = await createAccount(ctx.client, {
+      name: 'Mortgage',
+      type: 'mortgage',
+      minPayment: 1,
+      escrowAmount: 2,
+      createPairedCategory: true,
+    });
+    const res = await json<AccountDto>(
+      await ctx.client.send('PATCH', `/api/accounts/${loan.id}`, { name: 'Home loan', escrowAmount: null }),
+    );
+    expect(res.body).toMatchObject({ name: 'Home loan', escrowAmount: null, minPayment: 1 });
+    const [paired] = await t.db.select().from(category).where(eq(category.id, loan.pairedCategoryId!));
+    expect(paired!.name).toBe('Home loan');
+  });
+
+  it('changes the type only within its class, and a loan only to another loan type', async () => {
+    const checking = await createAccount(ctx.client, { name: 'mBank' });
+    const loan = await createAccount(ctx.client, { name: 'Car', type: 'auto_loan' });
+    const patch = (id: string, body: object) => ctx.client.send('PATCH', `/api/accounts/${id}`, body);
+    expect((await json<AccountDto>(await patch(checking.id, { type: 'savings' }))).body.type).toBe('savings');
+    expect((await json<AccountDto>(await patch(loan.id, { type: 'personal_loan' }))).body.type).toBe('personal_loan');
+    const refused = {
+      status: 422,
+      body: {
+        code: 'account_type_change',
+        message: "An account's type can only change within its class, and a loan only to another loan type.",
+      },
+    };
+    expect(await json(await patch(checking.id, { type: 'credit_card' }))).toEqual(refused);
+    expect(await json(await patch(loan.id, { type: 'other_asset' }))).toEqual(refused);
+  });
+
+  it('refuses fields the type does not take, a taken name and unknown accounts', async () => {
+    const checking = await createAccount(ctx.client, { name: 'mBank' });
+    await createAccount(ctx.client, { name: 'Savings', type: 'savings' });
+    const patch = (id: string, body: object) => ctx.client.send('PATCH', `/api/accounts/${id}`, body);
+    expect(await json(await patch(checking.id, { minPayment: 100 }))).toEqual({
+      status: 422,
+      body: { code: 'account_field_not_allowed', message: 'Only loans and credit accounts have a minimum payment.' },
+    });
+    expect(await json(await patch(checking.id, { name: 'savings' }))).toMatchObject({
+      status: 422,
+      body: { code: 'account_name_taken' },
+    });
+    expect((await json(await patch(checking.id, { name: 'MBANK' }))).status).toBe(200);
+    expect(await json(await patch(crypto.randomUUID(), { note: 'x' }))).toEqual({
+      status: 404,
+      body: { code: 'not_found', message: 'Account not found.' },
+    });
+    expect((await patch('not-a-uuid', { note: 'x' })).status).toBe(400);
+  });
+});
+
+describe('closing and reopening', () => {
+  it('closes an account only at a zero balance, and reopens it', async () => {
+    const full = await createAccount(ctx.client, { name: 'Cash', type: 'cash', startingBalance: 1_000 });
+    expect(await json(await ctx.client.post(`/api/accounts/${full.id}/close`))).toEqual({
+      status: 422,
+      body: { code: 'account_balance_not_zero', message: 'Bring the balance to 0 before closing the account.' },
+    });
+
+    const empty = await createAccount(ctx.client, { name: 'Old savings', type: 'savings' });
+    const closed = await json<AccountDto>(await ctx.client.post(`/api/accounts/${empty.id}/close`));
+    expect([closed.status, closed.body.closed]).toEqual([200, true]);
+    expect((await json(await ctx.client.get('/api/undo'))).body).toMatchObject({
+      undo: { label: 'Close account "Old savings"' },
+    });
+    const reopened = await json<AccountDto>(await ctx.client.post(`/api/accounts/${empty.id}/reopen`));
+    expect([reopened.status, reopened.body.closed]).toEqual([200, false]);
+  });
+});
+
+describe('DELETE /api/accounts/:id', () => {
+  it('removes an account that only has its starting balance, with everything created with it', async () => {
+    const card = await createAccount(ctx.client, { name: 'Visa', type: 'credit_card', startingBalance: -5_000 });
+    await t.db.insert(assignment).values({ categoryId: card.paymentCategoryId!, month: '2026-11-01', amount: 5_000 });
+    const loan = await createAccount(ctx.client, {
+      name: 'Mortgage',
+      type: 'mortgage',
+      minPayment: 1,
+      createPairedCategory: true,
+    });
+    const before = await snapshot(t.db);
+
+    for (const id of [card.id, loan.id]) {
+      expect(await json(await ctx.client.send('DELETE', `/api/accounts/${id}`))).toEqual({ status: 200, body: { id } });
+    }
+    expect(await t.db.select().from(account)).toEqual([]);
+    expect(await t.db.select().from(category).where(eq(category.linkedAccountId, card.id))).toEqual([]);
+    expect(await t.db.select().from(payee).where(eq(payee.id, card.transferPayeeId))).toEqual([]);
+    const after = await snapshot(t.db);
+
+    await ctx.client.post('/api/undo');
+    await ctx.client.post('/api/undo');
+    expect(await snapshot(t.db)).toEqual(before);
+    await ctx.client.post('/api/redo');
+    await ctx.client.post('/api/redo');
+    expect(await snapshot(t.db)).toEqual(after);
+  });
+
+  it('refuses while anything else refers to the account or its linked category', async () => {
+    const checking = await createAccount(ctx.client, { name: 'mBank' });
+    const savings = await createAccount(ctx.client, { name: 'Savings', type: 'savings' });
+    const loan = await createAccount(ctx.client, {
+      name: 'Car',
+      type: 'auto_loan',
+      minPayment: 1,
+      createPairedCategory: true,
+    });
+    const line = { date: '2026-11-20', amount: -100, amountBase: -100 };
+    await t.db.insert(transaction).values([
+      { ...line, accountId: checking.id, deletedAt: new Date() },
+      { ...line, accountId: savings.id, transferAccountId: checking.id },
+      { ...line, accountId: savings.id, categoryId: loan.pairedCategoryId },
+    ]);
+    const inUse = {
+      status: 422,
+      body: { code: 'account_in_use', message: 'This account has transactions. Close it instead.' },
+    };
+    for (const id of [checking.id, savings.id, loan.id]) {
+      expect(await json(await ctx.client.send('DELETE', `/api/accounts/${id}`))).toEqual(inUse);
+    }
+  });
+});
+
+describe('PUT /api/accounts/order', () => {
+  it('stores the new order, which must list every account once', async () => {
+    const a = await createAccount(ctx.client, { name: 'A' });
+    const b = await createAccount(ctx.client, { name: 'B' });
+    const c = await createAccount(ctx.client, { name: 'C', type: 'cash' });
+    const order = (ids: string[]) => ctx.client.send('PUT', '/api/accounts/order', { ids });
+
+    expect(await json(await order([c.id, a.id, b.id]))).toEqual({ status: 200, body: { ids: [c.id, a.id, b.id] } });
+    const listed = await json<{ accounts: AccountDto[] }>(await ctx.client.get('/api/accounts'));
+    expect(listed.body.accounts.map((x) => [x.name, x.sortOrder])).toEqual([
+      ['C', 1],
+      ['A', 2],
+      ['B', 3],
+    ]);
+    expect(await json(await order([a.id, b.id]))).toEqual({
+      status: 422,
+      body: { code: 'order_mismatch', message: 'The new order must list every item exactly once.' },
+    });
+    expect((await order([a.id, a.id, b.id])).status).toBe(400);
   });
 });
