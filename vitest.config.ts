@@ -8,7 +8,9 @@ export default defineConfig({
         test: {
           name: 'server',
           include: ['src/server/**/*.test.ts', 'src/shared/**/*.test.ts'],
+          globalSetup: ['src/server/test/global-setup.ts'],
           testTimeout: 30_000,
+          hookTimeout: 180_000,
         },
       },
     ],
