@@ -3,10 +3,10 @@ import type { CreateTransactionRequest, UpdateTransactionRequest } from '../../s
 import type { IsoDate } from '../../engine';
 import type { ChangeRecorder } from '../commands/recorder';
 import { payee, subtransaction, transaction } from '../db/schema';
-import { DomainError } from '../http/errors';
+import { AppError, DomainError } from '../http/errors';
 import { findOrCreatePayee } from '../payees/payee-commands';
 import { accountsOf, type Aggregate, draftOf, loadAggregate, storedRates } from './aggregate';
-import { type Draft, planTransaction } from './plan';
+import { type Draft, type DraftLine, type Plan, planTransaction, type RowPlan } from './plan';
 import { findAccount } from './rules';
 import { insertPlan, insertSchedule, rememberCategory, syncPlan } from './write';
 
@@ -82,8 +82,43 @@ async function payeeNameOf(rec: ChangeRecorder, id: string | null): Promise<stri
 export const editLabel = (r: { payeeName: string | null }) =>
   r.payeeName === null ? 'Edit transaction' : `Edit transaction "${r.payeeName}"`;
 
+type TxnRow = Aggregate['main'];
+
+/** Spec §10 "Reconciled transactions": does the change move a reconciled row's amount, date, account or transfer? */
+function touchesReconciled(row: TxnRow | null, next: RowPlan | null): boolean {
+  if (row?.cleared !== 'reconciled') return false;
+  return (
+    next === null ||
+    next.amount !== row.amount ||
+    next.date !== row.date ||
+    next.accountId !== row.accountId ||
+    next.transferAccountId !== row.transferAccountId
+  );
+}
+
+/** 409 unless the client confirmed a change to reconciled rows (the UI asks first). */
+export function assertConfirmed(touches: boolean, confirmed: boolean): void {
+  if (touches && !confirmed) {
+    throw new AppError(409, 'confirm_reconciled', 'This changes a reconciled transaction. Confirm to go ahead.');
+  }
+}
+
+/** Reconciled rows the edit changes: un-reconciling, replaced lines, and mirrored or removed transfer sides count. */
+function editTouchesReconciled(agg: Aggregate, plan: Plan, replaceLines: boolean): boolean {
+  const { main, counterpart } = agg;
+  const sameSide = plan.counterpart && plan.counterpart.accountId === counterpart?.accountId ? plan.counterpart : null;
+  return (
+    touchesReconciled(main, plan.main) ||
+    (main.cleared === 'reconciled' && (plan.main.cleared !== 'reconciled' || replaceLines)) ||
+    touchesReconciled(counterpart, sameSide) ||
+    agg.lines.some(({ counterpart: lineSide }, index) =>
+      touchesReconciled(lineSide, replaceLines ? null : (plan.lines?.[index]?.counterpart ?? null)),
+    )
+  );
+}
+
 /** Fields that a split line's counterpart takes; everything else belongs to the split (spec §10 "Splits"). */
-const COUNTERPART_FIELDS = new Set(['memo', 'cleared', 'approved', 'flag']);
+const COUNTERPART_FIELDS = new Set(['memo', 'cleared', 'approved', 'flag', 'confirmReconciled']);
 
 /** The counterpart of a split line: its memo mirrors the line's; cleared, approved and flag are its own. */
 async function updateLineCounterpart(
@@ -102,6 +137,8 @@ async function updateLineCounterpart(
       field,
     );
   }
+  const unreconciles = agg.main.cleared === 'reconciled' && patch.cleared !== undefined;
+  assertConfirmed(unreconciles, patch.confirmReconciled);
   const memo = patch.memo === undefined ? undefined : patch.memo || null;
   await rec.update(transaction, eq(transaction.id, agg.main.id), {
     memo,
@@ -112,9 +149,26 @@ async function updateLineCounterpart(
   await rec.update(subtransaction, eq(subtransaction.id, agg.owner.line.id), { memo });
 }
 
+const sameLines = (a: DraftLine[] | null, b: DraftLine[] | null) =>
+  a === b ||
+  (a !== null &&
+    b !== null &&
+    a.length === b.length &&
+    a.every(
+      (line, i) =>
+        line.amount === b[i]!.amount &&
+        line.payeeId === b[i]!.payeeId &&
+        line.categoryId === b[i]!.categoryId &&
+        line.memo === b[i]!.memo,
+    ));
+
 /** The saved draft with the request's changes applied. */
 async function applyPatch(rec: ChangeRecorder, agg: Aggregate, patch: UpdateTransactionRequest): Promise<Draft> {
   const current = draftOf(agg);
+  const lines =
+    patch.lines === undefined
+      ? current.lines
+      : (patch.lines?.map((line) => ({ ...line, memo: line.memo || null })) ?? null);
   const payeeId =
     patch.payeeName !== undefined
       ? await findOrCreatePayee(rec, patch.payeeName)
@@ -123,15 +177,19 @@ async function applyPatch(rec: ChangeRecorder, agg: Aggregate, patch: UpdateTran
         : current.payeeId;
   return {
     ...current,
+    accountId: patch.accountId ?? current.accountId,
     date: patch.date ?? current.date,
     payeeId,
-    // A new payee keeps this row's own category, not the other side's: the transfer it belonged to is gone.
+    // New lines leave the split itself uncategorized; a new payee keeps this row's own category, not the other
+    // side's: the transfer it belonged to is gone.
     categoryId:
       patch.categoryId !== undefined
         ? patch.categoryId
-        : payeeId !== current.payeeId
-          ? agg.main.categoryId
-          : current.categoryId,
+        : patch.lines
+          ? null
+          : payeeId !== current.payeeId
+            ? agg.main.categoryId
+            : current.categoryId,
     memo: patch.memo === undefined ? current.memo : patch.memo || null,
     amount: patch.amount ?? current.amount,
     transferAmount: patch.transferAmount ?? null,
@@ -139,17 +197,41 @@ async function applyPatch(rec: ChangeRecorder, agg: Aggregate, patch: UpdateTran
     cleared: patch.cleared ?? current.cleared,
     approved: patch.approved ?? current.approved,
     flag: patch.flag !== undefined ? patch.flag : current.flag,
+    lines,
   };
 }
 
-/** A starting balance (spec §10) keeps its payee and category, and can't become a split or a transfer. */
+/** A starting balance (spec §10) keeps its account, payee and category, and can't become a split or a transfer. */
 function assertStartingBalanceKept(agg: Aggregate, draft: Draft): void {
   const { main } = agg;
-  if (main.isStartingBalance && (draft.payeeId !== main.payeeId || draft.categoryId !== main.categoryId)) {
+  if (!main.isStartingBalance) return;
+  const changed = (
+    [
+      ['accountId', draft.accountId !== main.accountId],
+      ['payeeId', draft.payeeId !== main.payeeId],
+      ['categoryId', draft.categoryId !== main.categoryId],
+      ['lines', draft.lines !== null],
+    ] as const
+  ).find(([, differs]) => differs);
+  if (changed) {
     throw new DomainError(
       'starting_balance',
-      "A starting balance keeps its payee and category; change its amount, date or memo instead.",
-      draft.payeeId !== main.payeeId ? 'payeeId' : 'categoryId',
+      'A starting balance keeps its account, payee and category; change its amount, date or memo instead.',
+      changed[0],
+    );
+  }
+}
+
+/** Moving a transaction keeps its amounts, so only accounts in the same currency qualify. */
+async function assertSameCurrency(rec: ChangeRecorder, agg: Aggregate, draft: Draft): Promise<void> {
+  if (draft.accountId === agg.main.accountId) return;
+  const from = await findAccount(rec.tx, agg.main.accountId);
+  const to = await findAccount(rec.tx, draft.accountId);
+  if (to && to.currency !== from!.currency) {
+    throw new DomainError(
+      'move_currency',
+      `A transaction can only move to another ${from!.currency} account.`,
+      'accountId',
     );
   }
 }
@@ -178,6 +260,7 @@ export async function updateTransaction(
     );
   }
   assertStartingBalanceKept(agg, draft);
+  await assertSameCurrency(rec, agg, draft);
   const plan = await planTransaction(rec.tx, draft, {
     existing: {
       payeeId: agg.main.payeeId,
@@ -186,7 +269,9 @@ export async function updateTransaction(
       accountIds: accountsOf(agg),
     },
   });
-  await syncPlan(rec, agg, plan, context.now);
+  const replaceLines = !sameLines(draftOf(agg).lines, draft.lines);
+  assertConfirmed(editTouchesReconciled(agg, plan, replaceLines), patch.confirmReconciled);
+  await syncPlan(rec, agg, plan, context.now, replaceLines);
   if (draft.payeeId !== agg.main.payeeId || draft.categoryId !== agg.main.categoryId) {
     await rememberCategory(rec, plan);
   }

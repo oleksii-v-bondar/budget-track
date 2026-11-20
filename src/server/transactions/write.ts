@@ -78,12 +78,26 @@ export async function softDelete(rec: ChangeRecorder, ids: string[], now: Date):
   if (ids.length > 0) await rec.update(transaction, inArray(transaction.id, ids), { deletedAt: now });
 }
 
+/** Soft-deletes a split's live lines and the counterparts of its transfer lines. */
+async function softDeleteLines(rec: ChangeRecorder, agg: Aggregate, now: Date): Promise<void> {
+  const ids = agg.lines.map(({ line }) => line.id);
+  if (ids.length > 0) await rec.update(subtransaction, inArray(subtransaction.id, ids), { deletedAt: now });
+  await softDelete(rec, agg.lines.flatMap(({ counterpart }) => (counterpart ? [counterpart.id] : [])), now);
+}
+
 /**
  * Brings a saved transaction's rows in line with its new plan. A transfer side in the same account is updated in
  * place (keeping its cleared, approved and flag); a transfer that moves to another account, or stops being one,
- * loses its old side, and a new side is created. Split lines are updated in place.
+ * loses its old side, and a new side is created. Split lines are updated in place, unless `replaceLines` is set:
+ * then the old lines and their counterparts are soft-deleted and the plan's lines are created.
  */
-export async function syncPlan(rec: ChangeRecorder, agg: Aggregate, plan: Plan, now: Date): Promise<void> {
+export async function syncPlan(
+  rec: ChangeRecorder,
+  agg: Aggregate,
+  plan: Plan,
+  now: Date,
+  replaceLines: boolean,
+): Promise<void> {
   const id = agg.main.id;
   const old = agg.counterpart;
   const next = plan.counterpart;
@@ -97,6 +111,11 @@ export async function syncPlan(rec: ChangeRecorder, agg: Aggregate, plan: Plan, 
       const [other] = await rec.insert(transaction, { ...next, transferTxnId: id });
       await rec.update(transaction, eq(transaction.id, id), { transferTxnId: other!.id });
     }
+  }
+  if (replaceLines) {
+    await softDeleteLines(rec, agg, now);
+    if (plan.lines) await insertLines(rec, id, plan.lines);
+    return;
   }
   for (const [index, { line, counterpart }] of agg.lines.entries()) {
     const { counterpart: nextCounterpart, ...nextLine } = plan.lines![index]!;

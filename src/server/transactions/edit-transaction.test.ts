@@ -306,3 +306,139 @@ describe('PATCH /api/transactions/:id', () => {
     }
   });
 });
+
+describe('reconciled transactions', () => {
+  const reconcile = (...ids: string[]) =>
+    t.db.update(transaction).set({ cleared: 'reconciled' }).where(inArray(transaction.id, ids));
+  const confirmNeeded = {
+    status: 409,
+    body: { code: 'confirm_reconciled', message: 'This changes a reconciled transaction. Confirm to go ahead.' },
+  };
+
+  it('asks to confirm a new amount, date, account or transfer, or un-reconciling', async () => {
+    const { checking, savings, groceries } = await setUp();
+    const wallet = await createAccount(ctx.client, { name: 'Wallet', type: 'cash' });
+    const txn = await createTransaction(ctx.client, { accountId: checking.id, amount: -100 });
+    await reconcile(txn.id);
+
+    for (const body of [
+      { amount: -101 },
+      { date: '2026-11-19' },
+      { accountId: wallet.id },
+      { payeeId: savings.transferPayeeId },
+      { cleared: 'cleared' },
+    ]) {
+      expect(await json(await patch(txn.id, body))).toEqual(confirmNeeded);
+    }
+    expect(await edit(txn.id, { memo: 'checked', flag: 'green', categoryId: groceries.id })).toMatchObject({
+      cleared: 'reconciled',
+    });
+    expect(await edit(txn.id, { amount: -101, confirmReconciled: true })).toMatchObject({
+      amount: -101,
+      cleared: 'reconciled',
+    });
+    expect(await edit(txn.id, { cleared: 'uncleared', confirmReconciled: true })).toMatchObject({
+      cleared: 'uncleared',
+    });
+  });
+
+  it('also guards the reconciled other side of a transfer and of a split line', async () => {
+    const { checking, savings, groceries } = await setUp();
+    const sent = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      payeeId: savings.transferPayeeId,
+      amount: -100,
+    });
+    await reconcile(sent.transfer!.transactionId);
+    expect(await json(await patch(sent.id, { date: '2026-11-19' }))).toEqual(confirmNeeded);
+    expect(await json(await patch(sent.id, { payeeName: 'Shop' }))).toEqual(confirmNeeded);
+    expect((await patch(sent.id, { memo: 'mirrored, but not guarded' })).status).toBe(200);
+
+    const split = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      amount: -300,
+      lines: [
+        { amount: -100, categoryId: groceries.id },
+        { amount: -200, payeeId: savings.transferPayeeId },
+      ],
+    });
+    const lineSide = split.lines[1]!.transfer!.transactionId;
+    await reconcile(lineSide);
+    expect(await json(await patch(split.id, { lines: [{ amount: -150 }, { amount: -150 }] }))).toEqual(confirmNeeded);
+    expect(await json(await patch(split.id, { date: '2026-11-19' }))).toEqual(confirmNeeded);
+    expect(await json(await patch(lineSide, { cleared: 'cleared' }))).toEqual(confirmNeeded);
+    expect((await patch(lineSide, { cleared: 'cleared', confirmReconciled: true })).status).toBe(200);
+  });
+});
+
+describe('moving a transaction to another account', () => {
+  it('moves it within its currency, keeping transfer sides and split lines linked', async () => {
+    const { checking, savings, groceries } = await setUp();
+    const wallet = await createAccount(ctx.client, { name: 'Wallet', type: 'cash' });
+    const txn = await createTransaction(ctx.client, { accountId: checking.id, categoryId: groceries.id, amount: -100 });
+    expect(await edit(txn.id, { accountId: wallet.id })).toMatchObject({ accountId: wallet.id, accountName: 'Wallet' });
+    expect((await ledgerLines(t.db, eq(ledgerLine.txnId, txn.id)))[0]!.accountId).toBe(wallet.id);
+
+    const sent = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      payeeId: savings.transferPayeeId,
+      amount: -500,
+    });
+    await edit(sent.id, { accountId: wallet.id });
+    expect(await get(sent.transfer!.transactionId)).toMatchObject({
+      id: sent.transfer!.transactionId,
+      accountId: savings.id,
+      payeeName: 'Transfer : Wallet',
+      transfer: { accountId: wallet.id, transactionId: sent.id },
+    });
+
+    const split = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      amount: -300,
+      lines: [
+        { amount: -100, categoryId: groceries.id },
+        { amount: -200, payeeId: savings.transferPayeeId },
+      ],
+    });
+    const moved = await edit(split.id, { accountId: wallet.id });
+    expect(moved.lines.map((l) => l.id)).toEqual(split.lines.map((l) => l.id));
+    expect(await get(split.lines[1]!.transfer!.transactionId)).toMatchObject({
+      payeeName: 'Transfer : Wallet',
+      transfer: { accountId: wallet.id, transactionId: split.id },
+    });
+  });
+
+  it('re-checks the rules of spec §5.5 in the new account', async () => {
+    const { checking, savings, groceries } = await setUp();
+    const euro = await createAccount(ctx.client, { name: 'Revolut', currency: 'EUR', fxRate: '4.25' });
+    const loan = await createAccount(ctx.client, { name: 'Car', type: 'auto_loan' });
+    const old = await createAccount(ctx.client, { name: 'Old', type: 'savings' });
+    await ctx.client.post(`/api/accounts/${old.id}/close`);
+    const txn = await createTransaction(ctx.client, { accountId: checking.id, categoryId: groceries.id, amount: -100 });
+    const code = async (id: string, body: object) => (await json<{ code: string }>(await patch(id, body))).body.code;
+
+    expect(await json(await patch(txn.id, { accountId: euro.id }))).toMatchObject({
+      status: 422,
+      body: { code: 'move_currency', message: 'A transaction can only move to another PLN account.' },
+    });
+    expect(await code(txn.id, { accountId: old.id })).toBe('account_closed');
+    expect(await code(txn.id, { accountId: loan.id })).toBe('category_not_allowed');
+    expect(await edit(txn.id, { accountId: loan.id, categoryId: null })).toMatchObject({ accountId: loan.id });
+
+    const sent = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      payeeId: savings.transferPayeeId,
+      amount: -500,
+    });
+    expect(await code(sent.id, { accountId: savings.id })).toBe('transfer_to_self');
+    const [opening] = await t.db.select().from(transaction).where(eq(transaction.isStartingBalance, true));
+    expect(await code(opening!.id, { accountId: savings.id })).toBe('starting_balance');
+    const split = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      amount: -300,
+      lines: [{ amount: -100 }, { amount: -200, payeeId: savings.transferPayeeId }],
+    });
+    expect(await code(split.lines[1]!.transfer!.transactionId, { accountId: checking.id })).toBe('split_counterpart');
+    expect(await code(split.id, { accountId: savings.id })).toBe('transfer_to_self');
+  });
+});

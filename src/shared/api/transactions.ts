@@ -86,9 +86,14 @@ export type CreateTransactionInput = z.input<typeof createTransactionRequestSche
  * the other side (between currencies, the other side's amount changes only with `transferAmount`); cleared, approved
  * and flag belong to each side. The counterpart of a split line takes only memo, cleared, approved and flag; the
  * rest is edited on the split.
+ *
+ * Changing the amount, account, date or transfer of a reconciled transaction (or un-reconciling it) needs
+ * `confirmReconciled: true`; otherwise the answer is 409 `confirm_reconciled`.
  */
 export const updateTransactionRequestSchema = z
   .object({
+    /** Another account in the same currency. */
+    accountId: idSchema.optional(),
     date: transactionDateSchema.optional(),
     /** null removes the payee; a transfer payee makes (or retargets) a transfer. */
     payeeId: idSchema.nullable().optional(),
@@ -101,10 +106,17 @@ export const updateTransactionRequestSchema = z
     cleared: userClearedSchema.optional(),
     approved: z.boolean().optional(),
     flag: flagSchema.nullable().optional(),
+    /** New lines replace the split's lines (unless they equal them); null turns a split into a plain transaction. */
+    lines: splitLinesSchema.nullable().optional(),
+    confirmReconciled: z.boolean().default(false),
   })
   .refine((body) => body.payeeId === undefined || body.payeeName === undefined, {
     path: ['payeeName'],
     message: 'Choose a payee or type a new name, not both.',
+  })
+  .refine((body) => !body.lines || !body.categoryId, {
+    path: ['categoryId'],
+    message: "A split's categories go on its lines.",
   });
 
 export type UpdateTransactionRequest = z.infer<typeof updateTransactionRequestSchema>;
