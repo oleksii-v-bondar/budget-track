@@ -9,11 +9,23 @@ function addTo(map: Map<string, Money>, k: string, amount: Money): void {
   map.set(k, (map.get(k) ?? 0) + amount);
 }
 
+/** "Need X to pay in full": card debt not covered by its payment category's Available. */
+export function cardPaymentShortfall(cardBalance: Money, paymentAvailable: Money): Money {
+  return Math.max(0, -cardBalance - paymentAvailable);
+}
+
 /** Computes every budget month from the (widened) start month through the (widened) end month. */
 export function computeBudget(input: BudgetInput): BudgetResult {
   const { rtaCategoryId } = input;
   const known = new Map(input.categories.map((c) => [c.id, c]));
   if (known.has(rtaCategoryId)) throw new Error('The RTA category must not be listed in categories');
+  const regular = input.categories.filter((c) => c.kind !== 'cc_payment');
+  const payment = input.categories.filter((c) => c.kind === 'cc_payment');
+  const cardIds = new Set<string>();
+  for (const p of payment) {
+    if (!p.linkedAccountId) throw new Error(`Credit card payment category ${p.id} has no linkedAccountId`);
+    cardIds.add(p.linkedAccountId);
+  }
 
   let first = input.startMonth;
   let last = input.throughMonth;
@@ -40,15 +52,27 @@ export function computeBudget(input: BudgetInput): BudgetResult {
       addTo(income, row.month, row.amount);
       continue;
     }
-    if (!known.has(row.categoryId)) throw new Error(`Activity in unknown category ${row.categoryId}`);
+    const cat = known.get(row.categoryId);
+    if (!cat) throw new Error(`Activity in unknown category ${row.categoryId}`);
+    if (cat.kind === 'cc_payment') {
+      throw new Error(`Transactions cannot be categorized to credit card payment category ${row.categoryId}`);
+    }
     const k = key(row.month, row.categoryId);
     if (row.accountClass === 'cash') {
       addTo(cashLines, k, row.amount);
     } else {
+      if (!cardIds.has(row.accountId)) throw new Error(`Credit account ${row.accountId} has no payment category`);
       let byCard = cardLines.get(k);
       if (!byCard) cardLines.set(k, (byCard = new Map()));
       addTo(byCard, row.accountId, row.amount);
     }
+  }
+
+  const cardTransfers = new Map<string, Money>();
+  for (const t of input.cardTransfers ?? []) {
+    if (!cardIds.has(t.cardAccountId)) throw new Error(`Credit account ${t.cardAccountId} has no payment category`);
+    widen(t.month);
+    addTo(cardTransfers, key(t.month, t.cardAccountId), t.amount);
   }
 
   const months = monthRange(first, last);
@@ -63,9 +87,10 @@ export function computeBudget(input: BudgetInput): BudgetResult {
   let prev: MonthBudget | undefined;
   for (const month of months) {
     const categories: Record<string, CategoryMonth> = {};
+    const fundedFlow = new Map<string, Money>();
     let cashOverspentTotal = 0;
 
-    for (const c of input.categories) {
+    for (const c of regular) {
       const k = key(month, c.id);
       const byCard = cardLines.get(k) ?? new Map<string, Money>();
       const cards = [...byCard.keys()];
@@ -82,6 +107,8 @@ export function computeBudget(input: BudgetInput): BudgetResult {
       cards.forEach((card, i) => {
         const over = split.creditOverByCard[i] ?? 0;
         if (over > 0) creditOverByCard[card] = over;
+        // Funded spending (or a refund, when negative) moves into the card's payment category.
+        addTo(fundedFlow, card, -(byCard.get(card) ?? 0) - over);
       });
       cashOverspentTotal += split.cashOver;
       categories[c.id] = {
@@ -93,6 +120,27 @@ export function computeBudget(input: BudgetInput): BudgetResult {
         cashOverspent: split.cashOver,
         creditOverspent: split.creditOver,
         creditOverByCard,
+      };
+    }
+
+    for (const p of payment) {
+      const card = p.linkedAccountId as string;
+      const k = key(month, p.id);
+      const activity = (fundedFlow.get(card) ?? 0) - (cardTransfers.get(key(month, card)) ?? 0);
+      const carry = Math.max(0, prev?.categories[p.id]?.available ?? 0);
+      const asg = assigned.get(k) ?? 0;
+      const available = carry + asg + activity;
+      const cashOverspent = Math.max(0, -available);
+      cashOverspentTotal += cashOverspent;
+      categories[p.id] = {
+        categoryId: p.id,
+        carry,
+        assigned: asg,
+        activity,
+        available,
+        cashOverspent,
+        creditOverspent: 0,
+        creditOverByCard: {},
       };
     }
 

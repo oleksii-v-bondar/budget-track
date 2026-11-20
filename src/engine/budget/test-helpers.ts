@@ -1,4 +1,4 @@
-import type { ActivityRow, AssignmentRow, BudgetCategory, BudgetInput } from './types';
+import type { ActivityRow, AssignmentRow, BudgetCategory, BudgetInput, CardTransferRow } from './types';
 
 export const RTA = 'rta';
 
@@ -10,6 +10,7 @@ export function budgetInput(partial: Partial<BudgetInput>): BudgetInput {
     categories: [],
     assignments: [],
     activity: [],
+    cardTransfers: [],
     ...partial,
   };
 }
@@ -24,4 +25,16 @@ export function cashLine(month: string, categoryId: string, amount: number, acco
 
 export function assign(month: string, categoryId: string, amount: number): AssignmentRow {
   return { month, categoryId, amount };
+}
+
+export function cardLine(month: string, categoryId: string, amount: number, accountId = 'visa'): ActivityRow {
+  return { month, categoryId, accountId, accountClass: 'credit', amount };
+}
+
+export function cardPayment(cardAccountId: string): BudgetCategory {
+  return { id: `pay-${cardAccountId}`, kind: 'cc_payment', linkedAccountId: cardAccountId };
+}
+
+export function cardTransfer(month: string, cardAccountId: string, amount: number): CardTransferRow {
+  return { month, cardAccountId, amount };
 }

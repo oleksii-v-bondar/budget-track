@@ -2,7 +2,9 @@ import type { Money, Month } from '../types';
 
 export interface BudgetCategory {
   id: string;
-  kind: 'normal' | 'uncategorized';
+  kind: 'normal' | 'uncategorized' | 'cc_payment';
+  /** For `cc_payment` categories: the credit account this category pays. */
+  linkedAccountId?: string;
 }
 
 /** Σ amount_base of on-budget ledger lines, grouped by month, category and account. */
@@ -12,6 +14,13 @@ export interface ActivityRow {
   categoryId: string;
   accountId: string;
   accountClass: 'cash' | 'credit';
+  amount: Money;
+}
+
+/** Σ card-side amount_base of transfers between a credit account and any on-budget account, per month. */
+export interface CardTransferRow {
+  month: Month;
+  cardAccountId: string;
   amount: Money;
 }
 
@@ -31,6 +40,7 @@ export interface BudgetInput {
   categories: BudgetCategory[];
   assignments: AssignmentRow[];
   activity: ActivityRow[];
+  cardTransfers?: CardTransferRow[];
 }
 
 export interface CategoryMonth {
