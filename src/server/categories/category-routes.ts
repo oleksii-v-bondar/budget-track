@@ -3,15 +3,16 @@ import {
   type CategoryDto,
   type CategoryListResponse,
   createCategoryRequestSchema,
+  deleteCategoryRequestSchema,
   reorderCategoriesRequestSchema,
   updateCategoryRequestSchema,
 } from '../../shared/api/categories';
-import { idParamSchema, type ReorderResponse } from '../../shared/api/common';
+import { idParamSchema, type IdResponse, type ReorderResponse } from '../../shared/api/common';
 import { type AuthedEnv, requireSession } from '../auth/sessions';
 import { type Named, runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
-import { createCategory, reorderCategories, updateCategory } from './category-commands';
+import { createCategory, deleteCategory, reorderCategories, updateCategory } from './category-commands';
 import { getCategory, listCategoryGroups } from './category-queries';
 
 /** /api/categories (spec §10 "Categories"): every change is one undoable command. */
@@ -34,5 +35,15 @@ export function categoryRoutes(deps: AppDeps) {
       const body = c.req.valid('json');
       await runCommand(deps, (r: Named) => `Edit category "${r.name}"`, (rec) => updateCategory(rec, id, body));
       return c.json<CategoryDto>(await getCategory(deps.db, id));
+    })
+    .delete('/:id', validate('param', idParamSchema), validate('json', deleteCategoryRequestSchema), async (c) => {
+      const { id } = c.req.valid('param');
+      const { destinationCategoryId } = c.req.valid('json');
+      await runCommand(
+        deps,
+        (r: Named) => `Delete category "${r.name}"`,
+        (rec) => deleteCategory(rec, id, destinationCategoryId, deps.clock.now()),
+      );
+      return c.json<IdResponse>({ id });
     });
 }

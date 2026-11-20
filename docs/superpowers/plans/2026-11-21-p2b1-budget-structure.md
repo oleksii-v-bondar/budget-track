@@ -3862,7 +3862,7 @@ Spec §3, §4.3 and §5.4.
 
 **Month note:** setting an empty note deletes it.
 
-**Month range:** months run from the budget start to the current month + 24 (the P2 carry-over cap and the UI's navigation limit). Per §5.1, the budget start is the earlier of `app_user.budget_start_month` and the month of the earliest live transaction.
+**Month range:** months run from the first editable month to the current month + 24 (the P2 carry-over cap and the UI's navigation limit). Per §5.1, the budget start is the earlier of `app_user.budget_start_month` and the month of the earliest live transaction. The first editable month (`firstEditableMonth`) is the earliest of the budget start, the earliest `assignment.month` and the earliest `month_note.month`: the budget start can move later (e.g. when the only early account is deleted), and months before it that still hold an assignment or a note stay editable so those rows can be changed or cleared.
 
 **Files:**
 - Create: `src/shared/api/budget.ts`, `src/server/budget/assignments.ts`, `src/server/budget/budget-routes.ts`
@@ -4878,7 +4878,7 @@ Choices made where the spec is silent, ambiguous or in conflict with the brief:
 22. **Category kinds.** Both DTOs carry a `kind`: groups `normal | cc_payments | debt_payments | internal`, categories `normal | rta | uncategorized | cc_payment | debt_payment`. The list includes the Internal group so the client sees system rows explicitly.
 23. **Group rules.** Credit Card Payments and Debt Payments can be hidden and reordered but not renamed or deleted (`system_group`); Internal accepts no change. A moved category is appended to its new group.
 24. **Category delete** re-points soft-deleted transactions too. The destination must be live, normal and different (`invalid_destination`). System categories (`system_category`) and linked categories (`linked_category`) can't be deleted.
-25. **Assignment range:** from min(`budget_start_month`, month of the earliest live transaction) per §5.1 to the current month + 24 (422 `month_out_of_range`). Negative amounts are allowed (§5.2 mentions negative assignments), and so are hidden, credit card payment and paired categories. Overflow beyond 2^53 is 422 `amount_too_large`.
+25. **Assignment range:** from the first editable month to the current month + 24 (422 `month_out_of_range`). The first editable month is the earliest of the budget start (min(`budget_start_month`, month of the earliest live transaction) per §5.1), the earliest `assignment.month` and the earliest `month_note.month`, so rows left before a budget start that moved later can still be changed or cleared. Negative amounts are allowed (§5.2 mentions negative assignments), and so are hidden, credit card payment and paired categories. Overflow beyond 2^53 is 422 `amount_too_large`.
 26. **Move money** doesn't check Available, so a source can go negative, as in YNAB. `from = to` is a 400, and so is `null → null`.
 27. **Text fields:** names are trimmed and 1–100 characters; notes are trimmed and up to 2000 characters, and an empty note is stored as null (or deletes the month note).
 28. **Command label typing:** a label function must annotate its parameter (`(r: Named) => …`); TypeScript can't infer it from `fn` because both arguments are context-sensitive.

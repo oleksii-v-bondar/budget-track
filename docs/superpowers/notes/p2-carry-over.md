@@ -21,11 +21,6 @@ These items were found in the P1 final review and deferred. Fold them into the P
 ## Validation and behaviour
 - `autoAssign` should throw when `month` isn't in the computed budget instead of treating it as empty.
 - Validate the schedule anchor date (`nextOccurrence` returns an anchor ahead of `after` unchecked).
-- Cap the assignment month range server-side (e.g. no more than 24 months ahead). `computeBudget` widens its range
-  to the latest assignment.
-- Spec §10 allows deleting a closed card's payment category, but its historic card lines then make `computeBudget`
-  throw ("has no payment category"). Either forbid the deletion or keep soft-deleted payment categories in the
-  engine input.
 - Build a month-view adapter that creates `TargetContext` (carry, assigned, available, `assignedIn`, debt data incl.
   escrow) from a `BudgetResult`.
 - Validate the sign of `TargetDef.amount`. Make a `null` spending `mode` default to `set_aside` explicitly.
@@ -40,27 +35,13 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - Engine purity lint now also blocks dynamic `import()`, `globalThis.*`, `Date.now()`, `new Date()` and `Math.random()`.
 
 ## From P2a final review
-- P2b first task: make every new router deny-by-default (`.use('*', requireSession)` on its own prefix) + a test
-  walking `app.routes` expecting 401 for every /api route outside /api/auth.
-- P2b: cast SQL sums `::bigint` (never `.mapWith(Number)`).
-- P2b: DB cascades (scheduled_subtransaction ON DELETE CASCADE, transaction.scheduled_id SET NULL) bypass the undo
-  ChangeRecorder; record children explicitly or remove the cascades.
-- P2b: timestamps come from two clocks; exclude timestamps from undo conflict checks.
-- P2b: exclude transfer/system payees from `payee_name_live`; add partial unique indexes on payee.system_kind, live
-  category.linked_account_id, non-normal category_group.kind; seed system payees.
-- P2b: category_group has no deleted_at but soft-deleted categories reference it; decide group deletion.
-- P2b: v_ledger_line month is 'YYYY-MM-01' and the engine uses 'YYYY-MM' (adapter); any migration touching view
+- P2b2: v_ledger_line month is 'YYYY-MM-01' and the engine uses 'YYYY-MM' (adapter); any migration touching view
   columns must drop/recreate the view.
-- P2b: enforce date ≤ today on write (§5.6); the view does not filter future dates.
-- P2b: nested validation errors lose paths in z.flattenError; return issue paths for nested bodies (split lines).
-- P2b: FK indexes on transaction.category_id/payee_id; `.$type<AccountClass>()` on account.accountClass and the view
-  class columns.
-- P2b: todayIn should use formatToParts instead of the en-CA format.
-- P2b: ledger view test gaps (deleted split parent with live lines; amount ≠ amount_base).
-- P2b: amend spec §4 "unless noted" for tables without timestamps.
+- P2c: enforce date ≤ today on transaction writes (§5.6); the view does not filter future dates. (Starting balances
+  already enforce it.)
+- P2c: nested validation errors lose paths in z.flattenError; return issue paths for nested bodies (split lines).
 - P2c: shutdown hardening (SIGTERM during migrations, close timeout, exit code on db close failure, `init: true` in
   compose).
-- P2c: keep a registry of advisory-lock keys (login uses 727274001).
 - P3: TOTP replay protection (store the last used timeStep).
 - P3: /status should refresh the cookie; clear stale cookie on 401; Retry-After on 429; friendly .max messages.
 - P3: global lockout DoS — amend spec (device cookies, count failures since last success/lockout) before internet
@@ -69,3 +50,38 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - P3: rate-limit setup-token attempts.
 - P3: CSP img-src blocks data: QR → render SVG; web tsconfig DOM lib; SPA fallback for non-/api paths; document single
   trusted proxy.
+
+## Resolved in P2b1
+- Every router outside /api/auth is mounted on its own prefix behind `.use('*', requireSession)`; `app.test.ts`
+  walks `app.routes` and expects 401 for each one.
+- Migration 0002: `payee_name_live` skips transfer/system payees; partial unique indexes on `payee.system_kind`, live
+  `category.linked_account_id` and non-normal `category_group.kind`; `category_group.deleted_at`; FK indexes on
+  `transaction.category_id`/`payee_id` and `subtransaction.category_id`; timestamps are `timestamptz(3)`; no FK has an
+  ON DELETE action any more; the three system payees are inserted (idempotent). `.$type<AccountClass>()` on
+  `account.accountClass` and the view's class columns.
+- Undo conflict checks ignore `created_at`/`updated_at`.
+- `todayIn` builds the date from `formatToParts`; ledger view tests cover a deleted split parent and amount ≠
+  amount_base; spec §4 lists the tables without UUIDs or timestamps.
+- Assignment months are capped server-side to [first editable month, current month + 24]. The first editable month is
+  the earliest of the budget start, the earliest assignment month and the earliest month-note month, so rows left
+  before a budget start that moved later can still be changed or cleared.
+- Advisory-lock keys are listed in `engineering-notes.md` (727274001 login, 727274002 commands and undo/redo).
+- Credit card payment (and paired loan) categories can't be deleted on their own, so `computeBudget` never sees card
+  lines without a payment category.
+
+## From P2b1
+- P2b2: hide a credit card payment category automatically when its account is closed with Available = 0 (spec §10);
+  it needs the budget read model. Closing currently only sets `account.closed`.
+- P2b2: a paired loan category's `debt/min_payment` target reads `account.min_payment`, which PATCH can clear (null);
+  the month view must treat null as 0.
+- P2b2: reuse `budgetStartMonth()` and `MONTHS_AHEAD` from `src/server/budget/assignments.ts` for the month view and
+  auto-assign, and `setAssigned`/`addAssigned` for auto-assign writes.
+- P2c: deleting an account is refused while soft-deleted transactions still reference it; decide whether account
+  deletion should purge soft-deleted history.
+- P2c: undo/redo replays row by row (two queries per changed row); bulk operations over thousands of rows may need
+  batching.
+- P2d: foreign keys have no ON DELETE actions. Deleting a scheduled transaction must delete its
+  `scheduled_subtransaction` rows and clear `transaction.scheduled_id` through the ChangeRecorder.
+- P2d: the scheduled-transaction job writes outside `runCommand` (no undo entry, redo kept) but should hold
+  `lockCommands()` (advisory key 727274002) so it can't interleave with an undo replay.
+- P2d: `fxRate` is required to create a foreign-currency account; make it optional once the NBP lookup exists.

@@ -67,6 +67,12 @@ export const updateCategoryRequestSchema = z.object({
 /** PUT /api/categories/order: every live category of one group, in the new order. */
 export const reorderCategoriesRequestSchema = reorderRequestSchema.extend({ groupId: idSchema });
 
+/**
+ * DELETE /api/categories/:id (spec §10): transactions, split lines, schedules, payee defaults and assignments move to
+ * this live, normal category first.
+ */
+export const deleteCategoryRequestSchema = z.object({ destinationCategoryId: idSchema });
+
 export type UpdateGroupRequest = z.infer<typeof updateGroupRequestSchema>;
 export type CreateCategoryRequest = z.infer<typeof createCategoryRequestSchema>;
 export type UpdateCategoryRequest = z.infer<typeof updateCategoryRequestSchema>;

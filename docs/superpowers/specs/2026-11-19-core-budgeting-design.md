@@ -405,10 +405,12 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 
 **Categories**
 - Create, rename, reorder (drag), hide, and move between groups.
-- **Delete** requires choosing a destination category. Transactions, lines, schedules and assignments move there
-  (assignments summed per month), then the category is soft-deleted together with its target.
-- A group can be deleted only when empty.
-- Credit card payment categories can't be deleted while their account is open; they are hidden automatically when the
+- **Delete** requires choosing a destination category (a live, normal one). Transactions, lines, schedules, payees'
+  last-used category and assignments move there (assignments summed per month), then the category is soft-deleted
+  together with its target.
+- A group can be deleted only when it has no live categories; groups are soft-deleted.
+- Credit card payment and paired loan categories follow their account: they can't be renamed, moved or deleted on
+  their own (deleting the account removes them). Credit card payment categories are hidden automatically when the
   account is closed with Available = 0.
 
 **Accounts**

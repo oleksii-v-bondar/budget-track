@@ -1,25 +1,41 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { CategoryKind, CreateCategoryRequest, UpdateCategoryRequest } from '../../shared/api/categories';
+import { addAssigned } from '../budget/assignments';
 import type { ChangeRecorder } from '../commands/recorder';
 import { applyOrder } from '../commands/reorder';
 import type { Executor } from '../db/client';
 import { nextSortOrder } from '../db/lookups';
-import { category, categoryGroup } from '../db/schema';
+import {
+  assignment,
+  category,
+  categoryGroup,
+  payee,
+  scheduledSubtransaction,
+  scheduledTransaction,
+  subtransaction,
+  target,
+  transaction,
+} from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
 import { categoryKindOf } from './category-queries';
 
 type CategoryRow = typeof category.$inferSelect;
 
-/** A live category with its kind, locked for the rest of the command. */
-export async function loadCategory(db: Executor, id: string): Promise<CategoryRow & { kind: CategoryKind }> {
+/** A live category with its kind, locked for the rest of the command; null if there is none. */
+async function findCategory(db: Executor, id: string): Promise<(CategoryRow & { kind: CategoryKind }) | null> {
   const [row] = await db
     .select({ category, groupKind: categoryGroup.kind })
     .from(category)
     .innerJoin(categoryGroup, eq(categoryGroup.id, category.groupId))
     .where(and(eq(category.id, id), isNull(category.deletedAt)))
     .for('update', { of: category });
+  return row ? { ...row.category, kind: categoryKindOf(row.category, row.groupKind) } : null;
+}
+
+export async function loadCategory(db: Executor, id: string): Promise<CategoryRow & { kind: CategoryKind }> {
+  const row = await findCategory(db, id);
   if (!row) throw new AppError(404, 'not_found', 'Category not found.');
-  return { ...row.category, kind: categoryKindOf(row.category, row.groupKind) };
+  return row;
 }
 
 /** Categories can only be created in, and moved to, a live group the user owns. */
@@ -85,4 +101,43 @@ export async function reorderCategories(rec: ChangeRecorder, groupId: string, id
     throw new DomainError('invalid_group', 'Choose one of your own category groups.');
   }
   await applyOrder(rec, category, and(eq(category.groupId, groupId), isNull(category.deletedAt)), ids);
+}
+
+/**
+ * Spec §10: moves every transaction, split line, schedule, payee default and assignment (summed per month) to the
+ * destination, then deletes the target and soft-deletes the category. Children are re-pointed explicitly, never by
+ * cascades, so undo sees each row.
+ */
+export async function deleteCategory(
+  rec: ChangeRecorder,
+  id: string,
+  destinationId: string,
+  now: Date,
+): Promise<{ name: string }> {
+  const doomed = await loadCategory(rec.tx, id);
+  if (doomed.kind === 'rta' || doomed.kind === 'uncategorized') {
+    throw new DomainError('system_category', "System categories can't be changed.");
+  }
+  if (doomed.kind !== 'normal') {
+    throw new DomainError('linked_category', "This category belongs to an account and can't be deleted.");
+  }
+  const destination = destinationId === id ? null : await findCategory(rec.tx, destinationId);
+  if (destination?.kind !== 'normal') {
+    throw new DomainError(
+      'invalid_destination',
+      'Choose another regular category to receive the money and transactions.',
+    );
+  }
+
+  const to = { categoryId: destinationId };
+  await rec.update(transaction, eq(transaction.categoryId, id), to);
+  await rec.update(subtransaction, eq(subtransaction.categoryId, id), to);
+  await rec.update(scheduledTransaction, eq(scheduledTransaction.categoryId, id), to);
+  await rec.update(scheduledSubtransaction, eq(scheduledSubtransaction.categoryId, id), to);
+  await rec.update(payee, eq(payee.lastCategoryId, id), { lastCategoryId: destinationId });
+  const moved = await rec.delete(assignment, eq(assignment.categoryId, id));
+  for (const row of moved) await addAssigned(rec, destinationId, row.month.slice(0, 7), row.amount);
+  await rec.delete(target, eq(target.categoryId, id));
+  await rec.update(category, eq(category.id, id), { deletedAt: now });
+  return { name: doomed.name };
 }

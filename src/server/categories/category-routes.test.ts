@@ -2,11 +2,21 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CategoryDto, CategoryListResponse } from '../../shared/api/categories';
 import { systemCategoryId, systemGroupId } from '../db/lookups';
-import { category } from '../db/schema';
+import {
+  assignment,
+  category,
+  payee,
+  scheduledSubtransaction,
+  scheduledTransaction,
+  subtransaction,
+  target,
+  transaction,
+} from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { createAccount, createCategory, createGroup } from '../test/fixtures';
+import { snapshot } from '../test/snapshot';
 
 let t: TestDatabase;
 let ctx: TestApp;
@@ -171,5 +181,117 @@ describe('PUT /api/categories/order', () => {
     const internal = await systemGroupId(t.db, 'internal');
     const system = [await systemCategoryId(t.db, 'uncategorized'), await systemCategoryId(t.db, 'rta')];
     expect((await json(await order(internal, system))).body).toMatchObject({ code: 'invalid_group' });
+  });
+});
+
+describe('DELETE /api/categories/:id', () => {
+  const remove = (id: string, destinationCategoryId: string) =>
+    ctx.client.send('DELETE', `/api/categories/${id}`, { destinationCategoryId });
+
+  it('moves everything to the destination, sums assignments per month, and is one undoable command', async () => {
+    const food = await createGroup(ctx.client, 'Food');
+    const groceries = await createCategory(ctx.client, food.id, 'Groceries');
+    const dining = await createCategory(ctx.client, food.id, 'Dining out');
+    const checking = await createAccount(ctx.client, { name: 'mBank' });
+    const assign = (categoryId: string, month: string, amount: number) =>
+      ctx.client.send('PUT', `/api/budget/${month}/assignments/${categoryId}`, { amount });
+    await assign(groceries.id, '2026-11', 5_000);
+    await assign(groceries.id, '2026-12', 3_000);
+    await assign(dining.id, '2026-11', 2_000);
+    await assign(dining.id, '2026-12', -3_000);
+    await t.db.insert(target).values({
+      categoryId: groceries.id,
+      kind: 'spending',
+      cadence: 'monthly',
+      amount: 50_000,
+      startMonth: '2026-11-01',
+    });
+    const line = { accountId: checking.id, date: '2026-11-20', amount: -100, amountBase: -100 };
+    const [txn, deletedTxn, split] = await t.db
+      .insert(transaction)
+      .values([
+        { ...line, categoryId: groceries.id },
+        { ...line, categoryId: groceries.id, deletedAt: new Date() },
+        { ...line, isSplit: true },
+      ])
+      .returning();
+    const [splitLine] = await t.db
+      .insert(subtransaction)
+      .values({ txnId: split!.id, amount: -100, amountBase: -100, categoryId: groceries.id })
+      .returning();
+    const [schedule] = await t.db
+      .insert(scheduledTransaction)
+      .values({
+        accountId: checking.id,
+        categoryId: groceries.id,
+        amount: -100,
+        frequency: 'monthly',
+        anchorDate: '2026-12-01',
+        nextDate: '2026-12-01',
+      })
+      .returning();
+    const [scheduleLine] = await t.db
+      .insert(scheduledSubtransaction)
+      .values({ scheduledId: schedule!.id, amount: -100, categoryId: groceries.id })
+      .returning();
+    const [shop] = await t.db.insert(payee).values({ name: 'Biedronka', lastCategoryId: groceries.id }).returning();
+    const before = await snapshot(t.db);
+
+    expect(await json(await remove(groceries.id, dining.id))).toEqual({ status: 200, body: { id: groceries.id } });
+
+    const categoryOf = async (table: typeof transaction | typeof subtransaction, id: string) =>
+      (await t.db.select({ categoryId: table.categoryId }).from(table).where(eq(table.id, id)))[0]!.categoryId;
+    for (const id of [txn!.id, deletedTxn!.id]) expect(await categoryOf(transaction, id)).toBe(dining.id);
+    expect(await categoryOf(subtransaction, splitLine!.id)).toBe(dining.id);
+    const schedules = await t.db.select({ categoryId: scheduledTransaction.categoryId }).from(scheduledTransaction);
+    const scheduleLines = await t.db
+      .select({ categoryId: scheduledSubtransaction.categoryId })
+      .from(scheduledSubtransaction)
+      .where(eq(scheduledSubtransaction.id, scheduleLine!.id));
+    expect([...schedules, ...scheduleLines]).toEqual([{ categoryId: dining.id }, { categoryId: dining.id }]);
+    expect((await t.db.select().from(payee).where(eq(payee.id, shop!.id)))[0]!.lastCategoryId).toBe(dining.id);
+    // 2026-12: 3 000 + (−3 000) = 0, so the row is gone (assignments are sparse).
+    expect(await t.db.select().from(assignment)).toEqual([
+      { categoryId: dining.id, month: '2026-11-01', amount: 7_000 },
+    ]);
+    expect(await t.db.select().from(target)).toEqual([]);
+    const [deleted] = await t.db.select().from(category).where(eq(category.id, groceries.id));
+    expect(deleted!.deletedAt).toEqual(ctx.clock.now());
+    expect((await list()).flatMap((g) => g.categories.map((c) => c.name))).not.toContain('Groceries');
+    const after = await snapshot(t.db);
+
+    expect((await json(await ctx.client.post('/api/undo'))).body).toMatchObject({
+      undone: { label: 'Delete category "Groceries"' },
+    });
+    expect(await snapshot(t.db)).toEqual(before);
+    await ctx.client.post('/api/redo');
+    expect(await snapshot(t.db)).toEqual(after);
+  });
+
+  it('refuses system and account-linked categories, and destinations that are not live normal categories', async () => {
+    const food = await createGroup(ctx.client, 'Food');
+    const groceries = await createCategory(ctx.client, food.id, 'Groceries');
+    const gone = await createCategory(ctx.client, food.id, 'Gone');
+    await t.db.update(category).set({ deletedAt: new Date() }).where(eq(category.id, gone.id));
+    const card = await createAccount(ctx.client, { name: 'Visa', type: 'credit_card' });
+    const rta = await systemCategoryId(t.db, 'rta');
+
+    expect((await json(await remove(rta, groceries.id))).body).toMatchObject({ code: 'system_category' });
+    expect(await json(await remove(card.paymentCategoryId!, groceries.id))).toEqual({
+      status: 422,
+      body: { code: 'linked_category', message: "This category belongs to an account and can't be deleted." },
+    });
+    const invalid = {
+      status: 422,
+      body: {
+        code: 'invalid_destination',
+        message: 'Choose another regular category to receive the money and transactions.',
+      },
+    };
+    for (const destination of [groceries.id, card.paymentCategoryId!, rta, gone.id, crypto.randomUUID()]) {
+      expect(await json(await remove(groceries.id, destination))).toEqual(invalid);
+    }
+    expect((await remove(gone.id, groceries.id)).status).toBe(404);
+    expect((await ctx.client.send('DELETE', `/api/categories/${groceries.id}`, {})).status).toBe(400);
   });
 });
