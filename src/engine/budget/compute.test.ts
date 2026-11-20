@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { computeBudget } from './compute';
 import { RTA, assign, budgetInput, cashLine, category } from './test-helpers';
+import type { BudgetInput } from './types';
 
 const groceries = category('groceries');
 const rent = category('rent');
@@ -93,6 +94,14 @@ describe('computeBudget: categories and Ready to Assign', () => {
     expect(result.byMonth['2026-01']?.categories['uncat']).toMatchObject({ available: -700, cashOverspent: 700 });
   });
 
+  it('rejects assigning money to the Uncategorized category', () => {
+    expect(() =>
+      computeBudget(
+        budgetInput({ categories: [category('uncat', 'uncategorized')], assignments: [assign('2026-01', 'uncat', 700)] }),
+      ),
+    ).toThrow('Cannot assign to the Uncategorized category');
+  });
+
   it('widens the month range to cover all data', () => {
     const result = computeBudget(
       budgetInput({
@@ -113,5 +122,74 @@ describe('computeBudget: categories and Ready to Assign', () => {
 
   it('rejects listing the RTA category as a regular category', () => {
     expect(() => computeBudget(budgetInput({ categories: [category(RTA)] }))).toThrow('RTA');
+  });
+});
+
+describe('computeBudget: input validation', () => {
+  // postgres sum() returns numeric columns as strings, so a missed cast would reach the engine as '100'.
+  const asMoney = (value: unknown) => value as number;
+
+  it.each([
+    ['a string', asMoney('100'), '100'],
+    ['a fractional', 100.5, '100.5'],
+    ['an unsafe', 2 ** 53, String(2 ** 53)],
+  ])('rejects %s amount in every row type', (_, amount, shown) => {
+    expect(() => computeBudget(budgetInput({ activity: [cashLine('2026-01', RTA, amount)] }))).toThrow(
+      `activity amount must be a safe integer amount, got ${shown}`,
+    );
+    expect(() =>
+      computeBudget(budgetInput({ categories: [groceries], assignments: [assign('2026-01', 'groceries', amount)] })),
+    ).toThrow(`assignment amount must be a safe integer amount, got ${shown}`);
+    expect(() =>
+      computeBudget(
+        budgetInput({
+          categories: [{ id: 'pay-visa', kind: 'cc_payment', linkedAccountId: 'visa' }],
+          cardTransfers: [{ month: '2026-01', cardAccountId: 'visa', amount }],
+        }),
+      ),
+    ).toThrow(`card transfer amount must be a safe integer amount, got ${shown}`);
+  });
+
+  it('rejects months that are not YYYY-MM', () => {
+    expect(() => computeBudget(budgetInput({ startMonth: '2026-01-01' }))).toThrow('Invalid month: "2026-01-01"');
+    expect(() => computeBudget(budgetInput({ throughMonth: '2026-13' }))).toThrow('Invalid month: "2026-13"');
+    // Rows inside [start, through] would otherwise be keyed under a month that never matches and silently dropped.
+    const sixMonths = (partial: Partial<BudgetInput>) =>
+      budgetInput({
+        throughMonth: '2026-06',
+        categories: [groceries, { id: 'pay-visa', kind: 'cc_payment', linkedAccountId: 'visa' }],
+        ...partial,
+      });
+    expect(() => computeBudget(sixMonths({ activity: [cashLine('2026-03-15', RTA, 1)] }))).toThrow(
+      'Invalid month: "2026-03-15"',
+    );
+    expect(() => computeBudget(sixMonths({ assignments: [assign('2026-02-01', 'groceries', 1)] }))).toThrow(
+      'Invalid month: "2026-02-01"',
+    );
+    expect(() =>
+      computeBudget(sixMonths({ cardTransfers: [{ month: '2026-04-30', cardAccountId: 'visa', amount: 1 }] })),
+    ).toThrow('Invalid month: "2026-04-30"');
+  });
+
+  it('rejects a start month after the through month', () => {
+    expect(() => computeBudget(budgetInput({ startMonth: '2026-03', throughMonth: '2026-02' }))).toThrow(
+      'startMonth 2026-03 must not be after throughMonth 2026-02',
+    );
+  });
+
+  it('rejects duplicate category ids', () => {
+    expect(() => computeBudget(budgetInput({ categories: [groceries, rent, category('groceries')] }))).toThrow(
+      'Duplicate category id groceries',
+    );
+  });
+
+  it('rejects two payment categories for the same credit account', () => {
+    const categories = [
+      { id: 'pay-visa', kind: 'cc_payment', linkedAccountId: 'visa' },
+      { id: 'pay-visa-2', kind: 'cc_payment', linkedAccountId: 'visa' },
+    ] as const;
+    expect(() => computeBudget(budgetInput({ categories: [...categories] }))).toThrow(
+      'Credit account visa has more than one payment category',
+    );
   });
 });

@@ -1,7 +1,14 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { addMonths } from './dates';
-import { amortizedPayment, computeLoanMonths, monthlyInterest, projectPayoff } from './loans';
+import {
+  amortizedPayment,
+  computeLoanMonths,
+  monthlyInterest,
+  projectPayoff,
+  type LoanMonthInput,
+  type LoanParams,
+} from './loans';
 
 describe('monthlyInterest', () => {
   it('is |balance| × APR / 12, rounded half away from zero', () => {
@@ -53,6 +60,22 @@ describe('computeLoanMonths', () => {
     expect(() =>
       computeLoanMonths({ apr: '6', escrow: 0 }, [{ month: '2026-01', transactionsTotal: -100, paymentsTotal: -100 }]),
     ).toThrow('paymentsTotal must be ≥ 0');
+  });
+
+  it('rejects amounts that are not safe integers', () => {
+    const run = (params: Partial<LoanParams>, month: Partial<LoanMonthInput>) =>
+      computeLoanMonths({ apr: '6', escrow: 0, ...params }, [
+        { month: '2026-01', transactionsTotal: -100, paymentsTotal: 0, ...month },
+      ]);
+    const asMoney = (value: unknown) => value as number;
+    expect(() => run({}, { transactionsTotal: asMoney('-100') })).toThrow(
+      'transactionsTotal must be a safe integer amount, got -100',
+    );
+    expect(() => run({}, { paymentsTotal: 100.5 })).toThrow('paymentsTotal must be a safe integer amount, got 100.5');
+    expect(() => run({ escrow: asMoney('20') }, {})).toThrow('escrow must be a safe integer amount, got 20');
+    expect(() => run({ interestOverrides: { '2026-01': 0.5 } }, {})).toThrow(
+      'interestOverrides[2026-01] must be a safe integer amount, got 0.5',
+    );
   });
 });
 
@@ -117,6 +140,21 @@ describe('amortizedPayment', () => {
       ),
       { numRuns: 300 },
     );
+  });
+});
+
+describe('negative APR', () => {
+  // A negative rate shrinks the debt on its own; amortizedPayment('-2400', even months) used to loop forever.
+  it.each(['-6', '-2400'])('rejects APR %s everywhere without hanging', (apr) => {
+    const message = `APR must be ≥ 0, got "${apr}"`;
+    expect(() => monthlyInterest(-100_000, apr)).toThrow(message);
+    expect(() => amortizedPayment(1_000_000, apr, 12)).toThrow(message);
+    expect(() => projectPayoff({ debt: -1_000_000, apr, payment: 100_000, escrow: 0, fromMonth: '2026-01' })).toThrow(
+      message,
+    );
+    expect(() =>
+      computeLoanMonths({ apr, escrow: 0 }, [{ month: '2026-01', transactionsTotal: 100, paymentsTotal: 100 }]),
+    ).toThrow(message);
   });
 });
 

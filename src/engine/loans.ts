@@ -1,10 +1,17 @@
 import { addMonths } from './dates';
-import { ceilDiv, parseDecimal, roundDiv } from './money';
+import { assertMoney, ceilDiv, parseDecimal, roundDiv } from './money';
 import type { Money, Month } from './types';
 
 const APR_SCALE = 4;
 const MONTHLY_APR_DIVISOR = 12n * 100n * 10n ** BigInt(APR_SCALE);
 const MAX_PAYOFF_MONTHS = 1200;
+
+/** Parses a percentage APR such as "6.5" at scale 4; a negative APR is rejected. */
+function parseApr(apr: string): bigint {
+  const scaled = parseDecimal(apr, APR_SCALE);
+  if (scaled < 0n) throw new Error(`APR must be ≥ 0, got "${apr}"`);
+  return scaled;
+}
 
 function interestAt(balance: Money, scaledApr: bigint): Money {
   return Number(roundDiv(BigInt(Math.abs(balance)) * scaledApr, MONTHLY_APR_DIVISOR));
@@ -12,7 +19,7 @@ function interestAt(balance: Money, scaledApr: bigint): Money {
 
 /** Interest for one month: |balance| × APR / 12, rounded half away from zero. `apr` is a percentage, e.g. "6.5". */
 export function monthlyInterest(balance: Money, apr: string): Money {
-  return interestAt(balance, parseDecimal(apr, APR_SCALE));
+  return interestAt(balance, parseApr(apr));
 }
 
 /** Number of monthly payments needed to clear `debt` (0 if nothing is owed), or null if it never clears. */
@@ -38,7 +45,7 @@ export function amortizedPayment(principal: Money, apr: string, months: number):
   if (!Number.isInteger(months) || months < 1) {
     throw new Error(`amortizedPayment: months must be an integer ≥ 1, got ${months}`);
   }
-  const scaledApr = parseDecimal(apr, APR_SCALE);
+  const scaledApr = parseApr(apr);
   if (principal <= 0) return 0;
   const horizon = Math.min(months, MAX_PAYOFF_MONTHS);
   const rate = Number(scaledApr) / Number(MONTHLY_APR_DIVISOR);
@@ -84,8 +91,14 @@ export interface LoanMonth {
  * Interest and escrow are charged only in months with a payment; principal paid = payments − interest − escrow.
  */
 export function computeLoanMonths(params: LoanParams, months: LoanMonthInput[]): LoanMonth[] {
+  assertMoney(params.escrow, 'escrow');
+  for (const [month, interest] of Object.entries(params.interestOverrides ?? {})) {
+    assertMoney(interest, `interestOverrides[${month}]`);
+  }
   let balance = 0;
   return months.map((m) => {
+    assertMoney(m.transactionsTotal, 'transactionsTotal');
+    assertMoney(m.paymentsTotal, 'paymentsTotal');
     if (m.paymentsTotal < 0) throw new Error('paymentsTotal must be ≥ 0');
     const hasPayment = m.paymentsTotal > 0;
     const startBalance = balance;
@@ -119,7 +132,7 @@ export interface PayoffArgs {
 
 /** Month of the final payment when paying `payment` monthly, or "never" if the payment can't outpace interest. */
 export function projectPayoff(args: PayoffArgs): Month | 'never' {
-  const count = paymentsToPayoff(args.debt, parseDecimal(args.apr, APR_SCALE), args.payment, args.escrow);
+  const count = paymentsToPayoff(args.debt, parseApr(args.apr), args.payment, args.escrow);
   if (count === null) return 'never';
   return addMonths(args.fromMonth, Math.max(0, count - 1));
 }

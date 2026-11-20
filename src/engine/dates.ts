@@ -20,6 +20,11 @@ function parseMonth(month: Month): { year: number; month: number } {
   return { year, month: m };
 }
 
+/** Throws `Invalid month: "<month>"` unless `month` is a valid 'YYYY-MM'. */
+export function assertMonth(month: Month): void {
+  parseMonth(month);
+}
+
 function parseDate(date: IsoDate): { year: number; month: number; day: number } {
   const match = DATE_RE.exec(date);
   const year = Number(match?.[1]);

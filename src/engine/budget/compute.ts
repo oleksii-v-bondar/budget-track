@@ -1,7 +1,8 @@
-import { monthRange } from '../dates';
+import { assertMonth, monthRange } from '../dates';
+import { assertMoney } from '../money';
 import type { Money, Month } from '../types';
 import { splitOverspending } from './overspending';
-import type { BudgetInput, BudgetResult, CategoryMonth, MonthBudget } from './types';
+import type { BudgetCategory, BudgetInput, BudgetResult, CategoryMonth, MonthBudget } from './types';
 
 const key = (month: Month, id: string) => `${month}|${id}`;
 
@@ -17,13 +18,25 @@ export function cardPaymentShortfall(cardBalance: Money, paymentAvailable: Money
 /** Computes every budget month from the (widened) start month through the (widened) end month. */
 export function computeBudget(input: BudgetInput): BudgetResult {
   const { rtaCategoryId } = input;
-  const known = new Map(input.categories.map((c) => [c.id, c]));
+  assertMonth(input.startMonth);
+  assertMonth(input.throughMonth);
+  if (input.startMonth > input.throughMonth) {
+    throw new Error(`startMonth ${input.startMonth} must not be after throughMonth ${input.throughMonth}`);
+  }
+  const known = new Map<string, BudgetCategory>();
+  for (const c of input.categories) {
+    if (known.has(c.id)) throw new Error(`Duplicate category id ${c.id}`);
+    known.set(c.id, c);
+  }
   if (known.has(rtaCategoryId)) throw new Error('The RTA category must not be listed in categories');
   const regular = input.categories.filter((c) => c.kind !== 'cc_payment');
   const payment = input.categories.filter((c) => c.kind === 'cc_payment');
   const cardIds = new Set<string>();
   for (const p of payment) {
     if (!p.linkedAccountId) throw new Error(`Credit card payment category ${p.id} has no linkedAccountId`);
+    if (cardIds.has(p.linkedAccountId)) {
+      throw new Error(`Credit account ${p.linkedAccountId} has more than one payment category`);
+    }
     cardIds.add(p.linkedAccountId);
   }
 
@@ -37,7 +50,11 @@ export function computeBudget(input: BudgetInput): BudgetResult {
   const assigned = new Map<string, Money>();
   const assignedTotal = new Map<Month, Money>();
   for (const a of input.assignments) {
-    if (!known.has(a.categoryId)) throw new Error(`Assignment to unknown category ${a.categoryId}`);
+    assertMonth(a.month);
+    assertMoney(a.amount, 'assignment amount');
+    const cat = known.get(a.categoryId);
+    if (!cat) throw new Error(`Assignment to unknown category ${a.categoryId}`);
+    if (cat.kind === 'uncategorized') throw new Error('Cannot assign to the Uncategorized category');
     widen(a.month);
     addTo(assigned, key(a.month, a.categoryId), a.amount);
     addTo(assignedTotal, a.month, a.amount);
@@ -47,6 +64,8 @@ export function computeBudget(input: BudgetInput): BudgetResult {
   const cashLines = new Map<string, Money>();
   const cardLines = new Map<string, Map<string, Money>>();
   for (const row of input.activity) {
+    assertMonth(row.month);
+    assertMoney(row.amount, 'activity amount');
     widen(row.month);
     if (row.categoryId === rtaCategoryId) {
       addTo(income, row.month, row.amount);
@@ -70,6 +89,8 @@ export function computeBudget(input: BudgetInput): BudgetResult {
 
   const cardTransfers = new Map<string, Money>();
   for (const t of input.cardTransfers ?? []) {
+    assertMonth(t.month);
+    assertMoney(t.amount, 'card transfer amount');
     if (!cardIds.has(t.cardAccountId)) throw new Error(`Credit account ${t.cardAccountId} has no payment category`);
     widen(t.month);
     addTo(cardTransfers, key(t.month, t.cardAccountId), t.amount);

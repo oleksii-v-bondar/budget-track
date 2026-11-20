@@ -130,6 +130,19 @@ describe('debt targets', () => {
     expect(evaluateTarget(t, ctx({ debt }))?.need).toBe(106_619);
   });
 
+  it('pay off by date adds the loan escrow to the amortized payment', () => {
+    const t = target({ kind: 'debt', cadence: 'none', mode: null, debtMode: 'payoff_by_date', dueDate: '2055-12-01' });
+    const mortgage = { minPayment: 0, apr: '6', balanceAtMonthStart: -10_000_000, escrow: 20_000 };
+    // 100 000 zł at 6 % due 2055-12 is 360 payments from 2026-01. amortizedPayment(10_000_000, '6', 360) = 59_956
+    // (pinned in loans.test.ts), plus the 20_000 escrow = 79_956.
+    expect(evaluateTarget(t, ctx({ month: '2026-01', debt: mortgage }))?.need).toBe(79_956);
+  });
+
+  it('pay off by date needs nothing when the account is in credit', () => {
+    const t = target({ kind: 'debt', cadence: 'none', mode: null, debtMode: 'payoff_by_date', dueDate: '2026-12-01' });
+    expect(evaluateTarget(t, ctx({ debt: { ...debt, balanceAtMonthStart: 50_000 } }))?.need).toBe(0);
+  });
+
   it('requires debt context', () => {
     const t = target({ kind: 'debt', cadence: 'none', mode: null, debtMode: 'min_payment' });
     expect(() => evaluateTarget(t, ctx({}))).toThrow('debt');

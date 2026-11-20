@@ -1,6 +1,6 @@
 import type { BudgetResult, CategoryMonth } from './budget/types';
 import { addMonths } from './dates';
-import { roundDiv } from './money';
+import { assertMoney, roundDiv } from './money';
 import type { Money, Month } from './types';
 
 export type AutoAssignStrategy =
@@ -56,6 +56,9 @@ export function autoAssign(args: AutoAssignArgs): AssignmentChange[] {
   const history = previousMonths(budget, month);
   let remaining = budget.byMonth[month]?.rta.readyToAssign ?? 0;
   if (strategy === 'underfunded' && !args.underfunded) throw new Error('The underfunded strategy needs underfunded amounts');
+  for (const [categoryId, amount] of Object.entries(args.underfunded ?? {})) {
+    assertMoney(amount, `underfunded.${categoryId}`);
+  }
 
   const changes: AssignmentChange[] = [];
   for (const categoryId of args.categoryIds) {
@@ -63,7 +66,7 @@ export function autoAssign(args: AutoAssignArgs): AssignmentChange[] {
     let to: Money;
     switch (strategy) {
       case 'underfunded': {
-        const amount = Math.min(args.underfunded?.[categoryId] ?? 0, Math.max(0, remaining));
+        const amount = Math.min(Math.max(0, args.underfunded?.[categoryId] ?? 0), Math.max(0, remaining));
         remaining -= amount;
         to = current.assigned + amount;
         break;

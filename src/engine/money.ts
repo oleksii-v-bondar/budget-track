@@ -1,5 +1,10 @@
 import type { Money } from './types';
 
+/** Throws unless `value` is a safe integer amount; also rejects numeric strings such as postgres sum() results. */
+export function assertMoney(value: Money, field: string): void {
+  if (!Number.isSafeInteger(value)) throw new Error(`${field} must be a safe integer amount, got ${String(value)}`);
+}
+
 /** n / d rounded half away from zero. */
 export function roundDiv(n: bigint, d: bigint): bigint {
   if (d === 0n) throw new Error('Division by zero');

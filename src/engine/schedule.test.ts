@@ -1,5 +1,7 @@
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { dueOccurrences, nextOccurrence } from './schedule';
+import { addDays, diffDays } from './dates';
+import { dueOccurrences, nextOccurrence, type Frequency } from './schedule';
 
 describe('nextOccurrence: day-based frequencies', () => {
   it('steps by a fixed number of days from the anchor', () => {
@@ -42,6 +44,53 @@ describe('nextOccurrence: month-based frequencies', () => {
   it('once: only the anchor', () => {
     expect(nextOccurrence('once', '2026-01-10', '2026-01-09')).toBe('2026-01-10');
     expect(nextOccurrence('once', '2026-01-10', '2026-01-10')).toBeNull();
+  });
+});
+
+describe('nextOccurrence: properties', () => {
+  const REPEATING: Frequency[] = [
+    'daily',
+    'weekly',
+    'every_other_week',
+    'twice_a_month',
+    'every_4_weeks',
+    'monthly',
+    'every_other_month',
+    'every_3_months',
+    'every_4_months',
+    'twice_a_year',
+    'yearly',
+    'every_other_year',
+  ];
+  const EPOCH = '2020-01-01';
+  const dayIn = (from: string, to: string) =>
+    fc.integer({ min: diffDays(EPOCH, from), max: diffDays(EPOCH, to) }).map((n) => addDays(EPOCH, n));
+  const anchorArb = dayIn('2020-01-01', '2030-12-31');
+  // `after` may fall before the anchor as well as long after it.
+  const afterArb = dayIn('2019-01-01', '2031-12-31');
+
+  it.each(REPEATING)('%s: the next date is after `after`, not before the anchor, and keeps advancing', (freq) => {
+    fc.assert(
+      fc.property(anchorArb, afterArb, (anchor, after) => {
+        const next = nextOccurrence(freq, anchor, after);
+        expect(next).not.toBeNull();
+        expect(next! > after).toBe(true);
+        expect(next! >= anchor).toBe(true);
+        expect(nextOccurrence(freq, anchor, next!)! > next!).toBe(true);
+      }),
+      { numRuns: 100 },
+    );
+  });
+});
+
+describe('unknown frequencies', () => {
+  // A bad value read from the database used to fall through to the twice-a-month rule.
+  const bad = 'fortnightly' as Frequency;
+
+  it('throws instead of guessing a schedule', () => {
+    expect(() => nextOccurrence(bad, '2026-01-10', '2026-01-10')).toThrow('Unknown frequency: fortnightly');
+    expect(() => nextOccurrence(bad, '2026-03-01', '2026-01-01')).toThrow('Unknown frequency: fortnightly');
+    expect(() => dueOccurrences(bad, '2026-01-10', '2026-01-10', '2026-03-01')).toThrow('Unknown frequency: fortnightly');
   });
 });
 

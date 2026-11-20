@@ -53,6 +53,15 @@ describe('autoAssign', () => {
     ).toEqual([]);
   });
 
+  it('underfunded: ignores negative underfunded amounts instead of un-assigning', () => {
+    const small = computeBudget(
+      budgetInput({ categories: [category('a'), category('b')], activity: [cashLine('2026-01', RTA, 100)] }),
+    );
+    expect(
+      autoAssign({ strategy: 'underfunded', month: '2026-01', categoryIds: ['a', 'b'], budget: small, underfunded: { a: -50, b: 500 } }),
+    ).toEqual([{ categoryId: 'b', from: 0, to: 100 }]);
+  });
+
   it('assigned last month', () => {
     expect(autoAssign({ strategy: 'assigned_last_month', month: '2026-03', categoryIds: all, budget })).toEqual([
       { categoryId: 'groceries', from: 10_000, to: 50_000 },
@@ -89,6 +98,15 @@ describe('autoAssign', () => {
     expect(autoAssign({ strategy: 'assigned_last_month', month: '2026-01', categoryIds: ['groceries'], budget })).toEqual([
       { categoryId: 'groceries', from: 30_000, to: 0 },
     ]);
+  });
+
+  it('rejects underfunded amounts that are not safe integers', () => {
+    const run = (underfunded: Record<string, number>) =>
+      autoAssign({ strategy: 'underfunded', month: '2026-03', categoryIds: all, budget, underfunded });
+    expect(() => run({ groceries: '100' as unknown as number })).toThrow(
+      'underfunded.groceries must be a safe integer amount, got 100',
+    );
+    expect(() => run({ rent: 100.5 })).toThrow('underfunded.rent must be a safe integer amount, got 100.5');
   });
 
   it('requires underfunded amounts for the underfunded strategy', () => {

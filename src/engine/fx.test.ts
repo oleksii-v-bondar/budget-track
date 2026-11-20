@@ -51,6 +51,24 @@ describe('transferBases', () => {
   });
 });
 
+describe('money argument validation', () => {
+  const asMoney = (value: unknown) => value as number;
+  const pln = (amount: number) => ({ amount, currency: 'PLN', rate: null });
+
+  it('rejects string and fractional amounts', () => {
+    expect(() => convertToBase(asMoney('100'), '4')).toThrow('amount must be a safe integer amount, got 100');
+    expect(() => convertToBase(100.5, '4')).toThrow('amount must be a safe integer amount, got 100.5');
+    expect(() => splitLineBases(asMoney('100'), [100], '1')).toThrow('parentBase must be a safe integer amount, got 100');
+    expect(() => splitLineBases(100, [50, 50.5], '1')).toThrow('line amount must be a safe integer amount, got 50.5');
+    expect(() => transferBases('PLN', pln(asMoney('-100')), pln(100))).toThrow(
+      'from.amount must be a safe integer amount, got -100',
+    );
+    expect(() => transferBases('PLN', pln(-100), pln(100.5))).toThrow('to.amount must be a safe integer amount, got 100.5');
+    expect(() => revaluationDiff(asMoney('100'), '4', 400)).toThrow('nativeBalance must be a safe integer amount, got 100');
+    expect(() => revaluationDiff(100, '4', 400.5)).toThrow('bookedBase must be a safe integer amount, got 400.5');
+  });
+});
+
 describe('effectiveRate and revaluationDiff', () => {
   it('formats the implied rate with 6 decimals', () => {
     expect(effectiveRate(9_300, -40_000)).toBe('4.301075');
