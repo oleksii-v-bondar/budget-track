@@ -59,4 +59,8 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...validEnv, SETUP_TOKEN: 'short' })).toThrow('SETUP_TOKEN');
     expect(() => loadConfig({ ...validEnv, COOKIE_SECURE: 'yes' })).toThrow('COOKIE_SECURE');
   });
+
+  it('rejects setup tokens longer than 256 characters', () => {
+    expect(() => loadConfig({ ...validEnv, SETUP_TOKEN: 'a'.repeat(257) })).toThrow('SETUP_TOKEN');
+  });
 });

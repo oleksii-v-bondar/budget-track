@@ -18,7 +18,7 @@ const EnvSchema = z.object({
   ENCRYPTION_KEY: z
     .string()
     .regex(/^[A-Za-z0-9+/]{43}=$/, 'must be 32 random bytes, base64-encoded (openssl rand -base64 32)'),
-  SETUP_TOKEN: z.string().min(16, 'must be at least 16 characters'),
+  SETUP_TOKEN: z.string().min(16, 'must be at least 16 characters').max(256, 'must be at most 256 characters'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   TZ: z.string().default('Europe/Warsaw').refine(isValidTimeZone, 'must be an IANA time zone, e.g. Europe/Warsaw'),
   COOKIE_SECURE: booleanString.default(true),

@@ -68,8 +68,10 @@ on each request; at single-user scale (≈10 years × 150 categories) this is we
 - Dates are calendar dates (`date` type, no time). Months are represented as the first day of the month.
 - Sign convention: positive = inflow, negative = outflow, from the account's perspective.
 
-**Config (env):** `DATABASE_URL`, `SESSION_SECRET`, `ENCRYPTION_KEY` (32-byte key, base64, AES-256-GCM for the TOTP
-secret), `SETUP_TOKEN`, `TZ=Europe/Warsaw`, `PORT`.
+**Config (env):** `DATABASE_URL`, `ENCRYPTION_KEY` (32-byte key, base64, AES-256-GCM for the TOTP secret), `SETUP_TOKEN`,
+`TZ=Europe/Warsaw`, `PORT`, `COOKIE_SECURE` (default true), `TRUST_PROXY` (default false; take the client IP from
+`X-Forwarded-For`), `LOG_LEVEL`, `MIGRATIONS_DIR`. Sessions are opaque random tokens stored hashed, so no
+session-signing secret is needed.
 
 ## 3. Domain concepts
 
@@ -102,6 +104,7 @@ All tables use UUID primary keys and `created_at` / `updated_at` timestamps unle
 ### 4.2 Accounts
 - `account`: `name`, `type` (enum from §3), `currency` (ISO code, default `PLN`), `closed`, `sort_order`, `note`,
   `last_reconciled_at`, `last_reconciled_balance`.
+  `account_class` is a generated column (cash / credit / tracking) derived from `type`.
   Loan-type columns: `interest_rate` (APR, `numeric(7,4)`), `min_payment`, `escrow_amount`, `paired_category_id`.
   Credit-class accounts (`credit_card`, `line_of_credit`) also get optional `interest_rate` and `min_payment`
   columns, used by debt targets on their credit card payment category.
@@ -138,7 +141,7 @@ All tables use UUID primary keys and `created_at` / `updated_at` timestamps unle
   - `deleted_at`
 - `subtransaction`: `txn_id`, `amount`, `amount_base`, `category_id`, `payee_id`, `memo`, `transfer_account_id`,
   `transfer_txn_id`, `sort_order`, `deleted_at`.
-- `scheduled_transaction`: same template fields as `transaction` (no cleared/approved), plus `frequency`,
+- `scheduled_transaction`: same template fields as `transaction` except cleared/approved and `amount_base` (the PLN amount is computed when an occurrence is entered), plus `frequency`,
   `anchor_date`, `next_date`.
   Frequencies: `once`, `daily`, `weekly`, `every_other_week`, `twice_a_month`, `every_4_weeks`, `monthly`,
   `every_other_month`, `every_3_months`, `every_4_months`, `twice_a_year`, `yearly`, `every_other_year`.
@@ -153,6 +156,7 @@ All tables use UUID primary keys and `created_at` / `updated_at` timestamps unle
 row per line: `account_id`, `account_class`, `date`, `month`, `category_id`, `amount_base`,
 `is_transfer`, `counter_account_class`, `txn_id`, `subtxn_id`. Split parents are excluded, and their lines inherit the
 parent's account and date. All engine aggregates come from this view.
+The view also exposes the native `amount` and `is_starting_balance`.
 
 ## 5. Budget engine rules
 
@@ -534,6 +538,7 @@ sessions.
 - Scheduled job catch-up across multiple missed occurrences.
 - Auth: setup guard, TOTP, recovery codes, rate limiting/lockout, CSRF header.
 - NBP client against a stubbed HTTP server (weekend fallback, 404, timeout).
+- Testcontainers runs with Ryuk disabled (Docker Desktop's Enhanced Container Isolation blocks it); the global teardown stops the container.
 
 **Web**
 - Component tests (Vitest + Testing Library) for the amount keypad expression parser, split editor and category picker.

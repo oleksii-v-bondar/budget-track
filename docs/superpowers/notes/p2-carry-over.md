@@ -2,10 +2,6 @@
 
 These items were found in the P1 final review and deferred. Fold them into the P2 plan.
 
-## Engine purity lint
-- In `src/engine`, also block dynamic `import()`, `globalThis.process`, and the non-deterministic `Date.now()`,
-  `new Date()` (with no arguments) and `Math.random()`. The current rules only cover static imports and bare globals.
-
 ## Public API
 - Consider named exports in `src/engine/index.ts` instead of `export *`. Internals such as `roundDiv` and
   `allocate` have preconditions that they don't validate and shouldn't be part of the public surface.
@@ -39,3 +35,6 @@ These items were found in the P1 final review and deferred. Fold them into the P
   and `reset_available` strategies can produce an assignment for Uncategorized, which `computeBudget` rejects.
 - Validate `TargetContext.debt` numbers (`minPayment`, `balanceAtMonthStart`, `escrow`) as safe integers at the
   server boundary or in `evaluateTarget`.
+
+## Resolved in P2a
+- Engine purity lint now also blocks dynamic `import()`, `globalThis.*`, `Date.now()`, `new Date()` and `Math.random()`.
