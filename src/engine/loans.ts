@@ -91,6 +91,7 @@ export interface LoanMonth {
  * Interest and escrow are charged only in months with a payment; principal paid = payments − interest − escrow.
  */
 export function computeLoanMonths(params: LoanParams, months: LoanMonthInput[]): LoanMonth[] {
+  const scaledApr = parseApr(params.apr);
   assertMoney(params.escrow, 'escrow');
   for (const [month, interest] of Object.entries(params.interestOverrides ?? {})) {
     assertMoney(interest, `interestOverrides[${month}]`);
@@ -103,7 +104,7 @@ export function computeLoanMonths(params: LoanParams, months: LoanMonthInput[]):
     const hasPayment = m.paymentsTotal > 0;
     const startBalance = balance;
     const interest = hasPayment
-      ? (params.interestOverrides?.[m.month] ?? monthlyInterest(startBalance, params.apr))
+      ? (params.interestOverrides?.[m.month] ?? interestAt(startBalance, scaledApr))
       : 0;
     const escrow = hasPayment ? params.escrow : 0;
     const endBalance = startBalance + m.transactionsTotal - interest - escrow;

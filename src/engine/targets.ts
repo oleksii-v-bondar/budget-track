@@ -106,12 +106,9 @@ function computeNeed(t: TargetDef, ctx: TargetContext): Money {
   if (!ctx.debt) throw new Error('Debt targets need debt context (linked account data)');
   if (t.debtMode === 'min_payment') return ctx.debt.minPayment;
   if (t.debtMode === 'fixed') return t.amount;
-  const payment = amortizedPayment(
-    Math.max(0, -ctx.debt.balanceAtMonthStart),
-    ctx.debt.apr,
-    monthsLeft(ctx.month, monthOf(requireDueDate(t))),
-  );
-  return payment + (ctx.debt.escrow ?? 0);
+  const principal = Math.max(0, -ctx.debt.balanceAtMonthStart);
+  const payment = amortizedPayment(principal, ctx.debt.apr, monthsLeft(ctx.month, monthOf(requireDueDate(t))));
+  return principal === 0 ? 0 : payment + (ctx.debt.escrow ?? 0);
 }
 
 /** Evaluates a category's target for `ctx.month`; null when the target hasn't started yet. */

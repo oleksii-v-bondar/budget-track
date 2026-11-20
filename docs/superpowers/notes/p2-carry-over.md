@@ -35,3 +35,7 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - Validate the sign of `TargetDef.amount`. Make a `null` spending `mode` default to `set_aside` explicitly.
 - Document the sign conventions for each loan and target function. For example, `balanceAtMonthStart` and `debt`
   are negative for debt, and `projectPayoff` ignores the sign.
+- Exclude the Uncategorized category, and any system category, from the auto-assign scope. The `spent_last_month`
+  and `reset_available` strategies can produce an assignment for Uncategorized, which `computeBudget` rejects.
+- Validate `TargetContext.debt` numbers (`minPayment`, `balanceAtMonthStart`, `escrow`) as safe integers at the
+  server boundary or in `evaluateTarget`.

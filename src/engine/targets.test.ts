@@ -143,6 +143,12 @@ describe('debt targets', () => {
     expect(evaluateTarget(t, ctx({ debt: { ...debt, balanceAtMonthStart: 50_000 } }))?.need).toBe(0);
   });
 
+  it.each([0, 50_000])('pay off by date adds no escrow once nothing is owed (balance %i)', (balanceAtMonthStart) => {
+    const t = target({ kind: 'debt', cadence: 'none', mode: null, debtMode: 'payoff_by_date', dueDate: '2055-12-01' });
+    const mortgage = { minPayment: 0, apr: '6', balanceAtMonthStart, escrow: 20_000 };
+    expect(evaluateTarget(t, ctx({ month: '2026-01', debt: mortgage }))?.need).toBe(0);
+  });
+
   it('requires debt context', () => {
     const t = target({ kind: 'debt', cadence: 'none', mode: null, debtMode: 'min_payment' });
     expect(() => evaluateTarget(t, ctx({}))).toThrow('debt');

@@ -256,7 +256,7 @@ The engine computes `need(c,m)`, `underfunded(c,m)` and `progress(c,m)` for cate
 | balance, by date D | ceil(max(0, A − Carry) / monthsLeft) | max(0, need − Assigned) |
 | debt, min_payment | account.min_payment | max(0, need − Assigned) |
 | debt, fixed | A | max(0, need − Assigned) |
-| debt, payoff_by_date D | amortized payment of max(0, −balance at start of m) at APR/12 over monthsLeft, plus account.escrow_amount (loans only) | max(0, need − Assigned) |
+| debt, payoff_by_date D | amortized payment of max(0, −balance at start of m) at APR/12 over monthsLeft, plus account.escrow_amount (loans only); 0 when nothing is owed (escrow is not added) | max(0, need − Assigned) |
 
 Yearly and custom targets:
 - **Next due date** = the first occurrence of D (advanced by `repeat_every` × `repeat_unit`) whose month ≥ m.
@@ -313,7 +313,8 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 
 **Payoff and inspector**
 - **Projected payoff date**: amortize from the current balance at APR/12 using the debt target amount (or
-  `min_payment` if there's no target). If the payment ≤ the monthly interest, show "Never".
+  `min_payment` if there's no target). Show "Never" if the payment minus escrow doesn't exceed the monthly interest,
+  or if payoff would take more than 1200 months.
 - **Amortized payment** (used by `payoff_by_date` targets): the minimal whole-grosz monthly payment that the
   month-by-month projection (with interest rounded each month, as above) confirms pays the debt off within the term.
 - **Paired category**: when creating a loan, the user can opt in to a category in the "Debt Payments" group

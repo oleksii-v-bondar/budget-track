@@ -156,6 +156,20 @@ describe('negative APR', () => {
       computeLoanMonths({ apr, escrow: 0 }, [{ month: '2026-01', transactionsTotal: 100, paymentsTotal: 100 }]),
     ).toThrow(message);
   });
+
+  it('rejects a negative APR in computeLoanMonths when no month has a payment', () => {
+    expect(() =>
+      computeLoanMonths({ apr: '-6', escrow: 0 }, [{ month: '2026-01', transactionsTotal: -100_000, paymentsTotal: 0 }]),
+    ).toThrow('APR must be ≥ 0, got "-6"');
+  });
+
+  it('rejects a negative APR in computeLoanMonths when overrides cover every payment month', () => {
+    expect(() =>
+      computeLoanMonths({ apr: '-6', escrow: 0, interestOverrides: { '2026-01': 500 } }, [
+        { month: '2026-01', transactionsTotal: 10_000, paymentsTotal: 10_000 },
+      ]),
+    ).toThrow('APR must be ≥ 0, got "-6"');
+  });
 });
 
 describe('projectPayoff', () => {
