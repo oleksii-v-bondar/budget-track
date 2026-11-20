@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { requestId } from 'hono/request-id';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ApiErrorBody } from '../../shared/http';
+import { loginRoutes } from '../auth/login-routes';
 import { setupRoutes } from '../auth/setup-routes';
 import type { Clock } from '../clock';
 import type { Config } from '../config';
@@ -48,7 +49,8 @@ export function createApp(deps: AppDeps) {
         return c.json({ status: 'unavailable' as const }, 503);
       }
     })
-    .route('/api/auth', setupRoutes(deps));
+    .route('/api/auth', setupRoutes(deps))
+    .route('/api/auth', loginRoutes(deps));
 
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);
