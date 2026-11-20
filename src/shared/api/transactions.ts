@@ -121,6 +121,12 @@ export const updateTransactionRequestSchema = z
 
 export type UpdateTransactionRequest = z.infer<typeof updateTransactionRequestSchema>;
 
+/**
+ * DELETE /api/transactions/:id (body optional): deletes the transaction with its transfer side or the counterparts of
+ * its split lines. Deleting reconciled rows needs `confirmReconciled: true` (409 `confirm_reconciled` otherwise).
+ */
+export const deleteTransactionRequestSchema = z.object({ confirmReconciled: z.boolean().default(false) });
+
 /** The other side of a transfer. */
 export interface TransferDto {
   accountId: string;

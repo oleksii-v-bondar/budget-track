@@ -2,7 +2,16 @@ import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AccountDto } from '../../shared/api/accounts';
 import { systemCategoryId, systemGroupId, systemPayeeId } from '../db/lookups';
-import { account, assignment, category, payee, target, transaction } from '../db/schema';
+import {
+  account,
+  assignment,
+  category,
+  payee,
+  scheduledSubtransaction,
+  scheduledTransaction,
+  target,
+  transaction,
+} from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
@@ -445,6 +454,45 @@ describe('DELETE /api/accounts/:id', () => {
     await ctx.client.post('/api/redo');
     await ctx.client.post('/api/redo');
     expect(await snapshot(t.db)).toEqual(after);
+  });
+
+  it('clears payees that remember a linked category, and refuses while rows use the transfer payee', async () => {
+    const loan = await createAccount(ctx.client, {
+      name: 'Car',
+      type: 'auto_loan',
+      minPayment: 1,
+      createPairedCategory: true,
+    });
+    const [bank] = await t.db
+      .insert(payee)
+      .values({ name: 'Bank', lastCategoryId: loan.pairedCategoryId })
+      .returning();
+    const before = await snapshot(t.db);
+    expect((await ctx.client.send('DELETE', `/api/accounts/${loan.id}`)).status).toBe(200);
+    expect((await t.db.select().from(payee).where(eq(payee.id, bank!.id)))[0]!.lastCategoryId).toBeNull();
+    await ctx.client.post('/api/undo');
+    expect(await snapshot(t.db)).toEqual(before);
+
+    const savings = await createAccount(ctx.client, { name: 'Savings', type: 'savings' });
+    const checking = await createAccount(ctx.client, { name: 'mBank' });
+    const [schedule] = await t.db
+      .insert(scheduledTransaction)
+      .values({
+        accountId: checking.id,
+        amount: -1,
+        isSplit: true,
+        frequency: 'monthly',
+        anchorDate: '2026-12-01',
+        nextDate: '2026-12-01',
+      })
+      .returning();
+    // A line naming the transfer payee without its account (the API never writes one) still blocks the delete.
+    await t.db
+      .insert(scheduledSubtransaction)
+      .values({ scheduledId: schedule!.id, amount: -1, payeeId: savings.transferPayeeId });
+    expect((await json(await ctx.client.send('DELETE', `/api/accounts/${savings.id}`))).body).toMatchObject({
+      code: 'account_in_use',
+    });
   });
 
   it('refuses while anything else refers to the account or its linked category', async () => {

@@ -212,10 +212,12 @@ export async function setAccountClosed(
 
 /**
  * True when anything but the account's own starting balance, transfer payee and linked categories (with their
- * assignments and target) refers to the account. Soft-deleted transactions count: they still reference the rows.
+ * assignments and target) refers to the account, its transfer payee or its linked categories. Soft-deleted
+ * transactions count: they still reference the rows. A payee's remembered category doesn't: deleting clears it.
  */
 async function isAccountInUse(db: Executor, id: string): Promise<boolean> {
   const linked = db.select({ id: category.id }).from(category).where(eq(category.linkedAccountId, id));
+  const transferPayee = db.select({ id: payee.id }).from(payee).where(eq(payee.transferAccountId, id));
   const checks = [
     db
       .select({ id: transaction.id })
@@ -225,12 +227,19 @@ async function isAccountInUse(db: Executor, id: string): Promise<boolean> {
           and(eq(transaction.accountId, id), eq(transaction.isStartingBalance, false)),
           eq(transaction.transferAccountId, id),
           inArray(transaction.categoryId, linked),
+          inArray(transaction.payeeId, transferPayee),
         ),
       ),
     db
       .select({ id: subtransaction.id })
       .from(subtransaction)
-      .where(or(eq(subtransaction.transferAccountId, id), inArray(subtransaction.categoryId, linked))),
+      .where(
+        or(
+          eq(subtransaction.transferAccountId, id),
+          inArray(subtransaction.categoryId, linked),
+          inArray(subtransaction.payeeId, transferPayee),
+        ),
+      ),
     db
       .select({ id: scheduledTransaction.id })
       .from(scheduledTransaction)
@@ -239,19 +248,23 @@ async function isAccountInUse(db: Executor, id: string): Promise<boolean> {
           eq(scheduledTransaction.accountId, id),
           eq(scheduledTransaction.transferAccountId, id),
           inArray(scheduledTransaction.categoryId, linked),
+          inArray(scheduledTransaction.payeeId, transferPayee),
         ),
       ),
     db
       .select({ id: scheduledSubtransaction.id })
       .from(scheduledSubtransaction)
       .where(
-        or(eq(scheduledSubtransaction.transferAccountId, id), inArray(scheduledSubtransaction.categoryId, linked)),
+        or(
+          eq(scheduledSubtransaction.transferAccountId, id),
+          inArray(scheduledSubtransaction.categoryId, linked),
+          inArray(scheduledSubtransaction.payeeId, transferPayee),
+        ),
       ),
     db
       .select({ id: loanInterestOverride.accountId })
       .from(loanInterestOverride)
       .where(eq(loanInterestOverride.accountId, id)),
-    db.select({ id: payee.id }).from(payee).where(inArray(payee.lastCategoryId, linked)),
   ];
   for (const check of checks) if ((await check.limit(1)).length > 0) return true;
   return false;
@@ -276,6 +289,7 @@ export async function deleteAccount(rec: ChangeRecorder, id: string): Promise<{ 
   if (linkedIds.length > 0) {
     await rec.delete(target, inArray(target.categoryId, linkedIds));
     await rec.delete(assignment, inArray(assignment.categoryId, linkedIds));
+    await rec.update(payee, inArray(payee.lastCategoryId, linkedIds), { lastCategoryId: null });
   }
   await rec.delete(transaction, eq(transaction.accountId, id));
   await rec.delete(payee, eq(payee.transferAccountId, id));

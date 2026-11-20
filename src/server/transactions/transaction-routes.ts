@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
-import { idParamSchema } from '../../shared/api/common';
+import { idParamSchema, type IdResponse } from '../../shared/api/common';
 import {
   createTransactionRequestSchema,
   type CreateTransactionResponse,
+  deleteTransactionRequestSchema,
   type TransactionDto,
   updateTransactionRequestSchema,
 } from '../../shared/api/transactions';
@@ -11,7 +12,14 @@ import { todayIn } from '../clock';
 import { runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
-import { createTransaction, editLabel, savedLabel, updateTransaction } from './transaction-commands';
+import {
+  createTransaction,
+  deleteLabel,
+  deleteTransaction,
+  editLabel,
+  savedLabel,
+  updateTransaction,
+} from './transaction-commands';
 import { getTransaction } from './transaction-queries';
 
 /** /api/transactions (spec §10 "Transactions and related workflows"): every change is one undoable command. */
@@ -38,5 +46,12 @@ export function transactionRoutes(deps: AppDeps) {
       const context = { today: today(), now: deps.clock.now() };
       await runCommand(deps, editLabel, (rec) => updateTransaction(rec, id, body, context));
       return c.json<TransactionDto>(await getTransaction(deps.db, id));
+    })
+    .delete('/:id', validate('param', idParamSchema), validate('json', deleteTransactionRequestSchema), async (c) => {
+      const { id } = c.req.valid('param');
+      const { confirmReconciled } = c.req.valid('json');
+      const context = { now: deps.clock.now(), confirmReconciled };
+      await runCommand(deps, deleteLabel, (rec) => deleteTransaction(rec, id, context));
+      return c.json<IdResponse>({ id });
     });
 }

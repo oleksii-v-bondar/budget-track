@@ -8,7 +8,7 @@ import { findOrCreatePayee } from '../payees/payee-commands';
 import { accountsOf, type Aggregate, draftOf, loadAggregate, storedRates } from './aggregate';
 import { type Draft, type DraftLine, type Plan, planTransaction, type RowPlan } from './plan';
 import { findAccount } from './rules';
-import { insertPlan, insertSchedule, rememberCategory, syncPlan } from './write';
+import { insertPlan, insertSchedule, rememberCategory, softDelete, syncPlan } from './write';
 
 export interface SavedTransaction {
   kind: 'transaction' | 'scheduled';
@@ -276,4 +276,32 @@ export async function updateTransaction(
     await rememberCategory(rec, plan);
   }
   return { payeeName: plan.payee?.name ?? null };
+}
+
+/** "Delete transaction "Biedronka"" */
+export const deleteLabel = (r: { payeeName: string | null }) =>
+  r.payeeName === null ? 'Delete transaction' : `Delete transaction "${r.payeeName}"`;
+
+/**
+ * Spec §10: deleting one side of a transfer deletes both; deleting a split deletes the counterparts of its transfer
+ * lines (its lines leave the budget with it). Everything is soft-deleted. A split line's counterpart is removed by
+ * editing the split.
+ */
+export async function deleteTransaction(
+  rec: ChangeRecorder,
+  id: string,
+  context: { now: Date; confirmReconciled: boolean },
+): Promise<{ payeeName: string | null }> {
+  const agg = await loadAggregate(rec.tx, id);
+  if (agg.owner) {
+    const split = await findAccount(rec.tx, agg.owner.parent.accountId);
+    throw new DomainError(
+      'split_counterpart',
+      `This transfer is a line of a split in "${split!.name}": remove the line there.`,
+    );
+  }
+  const rows = [agg.main, agg.counterpart, ...agg.lines.map((l) => l.counterpart)].filter((r) => r !== null);
+  assertConfirmed(rows.some((r) => r.cleared === 'reconciled'), context.confirmReconciled);
+  await softDelete(rec, rows.map((r) => r.id), context.now);
+  return { payeeName: await payeeNameOf(rec, agg.main.payeeId) };
 }
