@@ -145,7 +145,8 @@ All tables use UUID primary keys and `created_at` / `updated_at` timestamps unle
   `anchor_date`, `next_date`.
   Frequencies: `once`, `daily`, `weekly`, `every_other_week`, `twice_a_month`, `every_4_weeks`, `monthly`,
   `every_other_month`, `every_3_months`, `every_4_months`, `twice_a_year`, `yearly`, `every_other_year`.
-- `scheduled_subtransaction`: mirrors `subtransaction`.
+- `scheduled_subtransaction`: mirrors `subtransaction` except `amount_base`, `transfer_txn_id`, timestamps and
+  `deleted_at` (template rows are hard-deleted).
 
 ### 4.5 Support
 - `fx_rate`: PK (`currency`, `date`), `rate`, `source` (`nbp`), `effective_date` (the NBP publication day used).
@@ -494,7 +495,8 @@ the app shell; `/api` is always network-only.
 platform or reverse proxy.
 
 **Settings actions:** "log out all sessions" deletes every session row; changing the password also logs out all other
-sessions.
+sessions. Changing the authenticator requires the password plus the current authenticator code or a recovery code, and
+signs out other sessions.
 
 ## 13. Error handling
 
