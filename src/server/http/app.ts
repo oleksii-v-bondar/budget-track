@@ -4,6 +4,7 @@ import { requestId } from 'hono/request-id';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ApiErrorBody } from '../../shared/http';
 import { loginRoutes } from '../auth/login-routes';
+import { securityRoutes } from '../auth/security-routes';
 import { setupRoutes } from '../auth/setup-routes';
 import type { Clock } from '../clock';
 import type { Config } from '../config';
@@ -50,7 +51,8 @@ export function createApp(deps: AppDeps) {
       }
     })
     .route('/api/auth', setupRoutes(deps))
-    .route('/api/auth', loginRoutes(deps));
+    .route('/api/auth', loginRoutes(deps))
+    .route('/api/auth', securityRoutes(deps));
 
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);

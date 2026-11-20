@@ -21,9 +21,10 @@ export interface LoginResponse {
 
 /**
  * Key for the transaction-scoped advisory lock that serializes sign-ins. Without it, parallel requests could all pass
- * the rate-limit and lockout checks before any attempt is recorded, or spend the same recovery code twice.
+ * the rate-limit and lockout checks before any attempt is recorded, or spend the same recovery code twice. Regenerating
+ * recovery codes takes it too, so a sign-in can't write back the old codes.
  */
-const LOGIN_LOCK_KEY = 727274001;
+export const LOGIN_LOCK_KEY = 727274001;
 
 type LoginOutcome = { ok: false } | { ok: true; token: string; remaining: number };
 
