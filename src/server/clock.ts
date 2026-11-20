@@ -9,12 +9,15 @@ export const systemClock: Clock = { now: () => new Date() };
 
 /** Calendar date of `instant` in `timeZone`, formatted 'YYYY-MM-DD'. */
 export function todayIn(timeZone: string, instant: Date): IsoDate {
-  return new Intl.DateTimeFormat('en-CA', {
+  // Built from parts: a locale's date pattern (e.g. en-CA's) can change between ICU versions.
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(instant);
+  }).formatToParts(instant);
+  const part = (type: 'year' | 'month' | 'day') => parts.find((p) => p.type === type)?.value ?? '';
+  return `${part('year').padStart(4, '0')}-${part('month')}-${part('day')}`;
 }
 
 /** Calendar month of `instant` in `timeZone`, formatted 'YYYY-MM'. */

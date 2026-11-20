@@ -20,12 +20,13 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { ACCOUNT_CLASS_SQL, ACCOUNT_TYPES } from '../../shared/accounts';
+import { ACCOUNT_CLASS_SQL, ACCOUNT_TYPES, type AccountClass } from '../../shared/accounts';
 
 // Money is integer minor units (grosze); `mode: 'number'` maps int8 to a JS number (safe below 2^53).
 const money = (name: string) => bigint(name, { mode: 'number' });
 const day = (name: string) => date(name, { mode: 'string' });
-const instant = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
+// Millisecond precision matches JS Date exactly, so undo row images (spec §4.5) restore timestamps without loss.
+const instant = (name: string) => timestamp(name, { withTimezone: true, mode: 'date', precision: 3 });
 const timestamps = {
   createdAt: instant('created_at').defaultNow().notNull(),
   updatedAt: instant('updated_at')
@@ -115,6 +116,7 @@ export const account = pgTable(
     name: text('name').notNull(),
     type: accountType('type').notNull(),
     accountClass: text('account_class')
+      .$type<AccountClass>()
       .notNull()
       .generatedAlwaysAs(sql.raw(ACCOUNT_CLASS_SQL)),
     currency: text('currency').notNull().default('PLN'),
@@ -152,14 +154,20 @@ export const loanInterestOverride = pgTable(
 
 // ---------------------------------------------------------------- categories and budget (spec §4.3)
 
-export const categoryGroup = pgTable('category_group', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: text('name').notNull(),
-  sortOrder: integer('sort_order').notNull().default(0),
-  hidden: boolean('hidden').notNull().default(false),
-  kind: categoryGroupKind('kind').notNull().default('normal'),
-  ...timestamps,
-});
+export const categoryGroup = pgTable(
+  'category_group',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    hidden: boolean('hidden').notNull().default(false),
+    kind: categoryGroupKind('kind').notNull().default('normal'),
+    // Groups are soft-deleted: soft-deleted categories keep pointing at their group.
+    deletedAt: instant('deleted_at'),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex('category_group_one_per_system_kind').on(t.kind).where(sql`${t.kind} <> 'normal'`)],
+);
 
 export const category = pgTable(
   'category',
@@ -179,6 +187,10 @@ export const category = pgTable(
   },
   (t) => [
     uniqueIndex('category_one_per_system_kind').on(t.systemKind).where(sql`${t.systemKind} IS NOT NULL`),
+    // One live credit card payment or paired loan category per account.
+    uniqueIndex('category_linked_account_live')
+      .on(t.linkedAccountId)
+      .where(sql`${t.linkedAccountId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
     index('category_group_id').on(t.groupId),
   ],
 );
@@ -257,7 +269,13 @@ export const payee = pgTable(
     deletedAt: instant('deleted_at'),
     ...timestamps,
   },
-  (t) => [uniqueIndex('payee_name_live').on(sql`lower(${t.name})`).where(sql`${t.deletedAt} IS NULL`)],
+  (t) => [
+    // Transfer and system payees are named by the app, so they never block a name the user picks.
+    uniqueIndex('payee_name_live')
+      .on(sql`lower(${t.name})`)
+      .where(sql`${t.deletedAt} IS NULL AND ${t.transferAccountId} IS NULL AND ${t.systemKind} IS NULL`),
+    uniqueIndex('payee_one_per_system_kind').on(t.systemKind).where(sql`${t.systemKind} IS NOT NULL`),
+  ],
 );
 
 export const scheduledTransaction = pgTable('scheduled_transaction', {
@@ -284,7 +302,7 @@ export const scheduledSubtransaction = pgTable('scheduled_subtransaction', {
   id: uuid('id').primaryKey().defaultRandom(),
   scheduledId: uuid('scheduled_id')
     .notNull()
-    .references(() => scheduledTransaction.id, { onDelete: 'cascade' }),
+    .references(() => scheduledTransaction.id),
   amount: money('amount').notNull(),
   categoryId: uuid('category_id').references(() => category.id),
   payeeId: uuid('payee_id').references(() => payee.id),
@@ -316,7 +334,9 @@ export const transaction = pgTable(
     transferSubtxnId: uuid('transfer_subtxn_id').references((): AnyPgColumn => subtransaction.id),
     isSplit: boolean('is_split').notNull().default(false),
     isStartingBalance: boolean('is_starting_balance').notNull().default(false),
-    scheduledId: uuid('scheduled_id').references(() => scheduledTransaction.id, { onDelete: 'set null' }),
+    // No ON DELETE actions anywhere: cascades would bypass the undo ChangeRecorder, so commands change children
+    // explicitly.
+    scheduledId: uuid('scheduled_id').references(() => scheduledTransaction.id),
     importId: text('import_id'),
     externalId: text('external_id'),
     deletedAt: instant('deleted_at'),
@@ -325,6 +345,8 @@ export const transaction = pgTable(
   (t) => [
     index('transaction_account_date').on(t.accountId, t.date),
     index('transaction_date').on(t.date),
+    index('transaction_category_id').on(t.categoryId),
+    index('transaction_payee_id').on(t.payeeId),
     uniqueIndex('transaction_import_id').on(t.accountId, t.importId).where(sql`${t.importId} IS NOT NULL`),
     uniqueIndex('transaction_external_id').on(t.accountId, t.externalId).where(sql`${t.externalId} IS NOT NULL`),
   ],
@@ -348,7 +370,7 @@ export const subtransaction = pgTable(
     deletedAt: instant('deleted_at'),
     ...timestamps,
   },
-  (t) => [index('subtransaction_txn_id').on(t.txnId)],
+  (t) => [index('subtransaction_txn_id').on(t.txnId), index('subtransaction_category_id').on(t.categoryId)],
 );
 
 // ---------------------------------------------------------------- support (spec §4.5)
@@ -379,14 +401,14 @@ export const undoEntry = pgTable('undo_entry', {
 /** Read-only view created by migration 0001_ledger_view.sql; `.existing()` keeps drizzle-kit from managing it. */
 export const ledgerLine = pgView('v_ledger_line', {
   accountId: uuid('account_id').notNull(),
-  accountClass: text('account_class').notNull(),
+  accountClass: text('account_class').$type<AccountClass>().notNull(),
   date: day('date').notNull(),
   month: day('month').notNull(),
   categoryId: uuid('category_id'),
   amount: money('amount').notNull(),
   amountBase: money('amount_base').notNull(),
   isTransfer: boolean('is_transfer').notNull(),
-  counterAccountClass: text('counter_account_class'),
+  counterAccountClass: text('counter_account_class').$type<AccountClass>(),
   isStartingBalance: boolean('is_starting_balance').notNull(),
   txnId: uuid('txn_id').notNull(),
   subtxnId: uuid('subtxn_id'),

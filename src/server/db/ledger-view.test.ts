@@ -1,4 +1,4 @@
-import { asc, desc } from 'drizzle-orm';
+import { asc, desc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { account, category, categoryGroup, ledgerLine, subtransaction, transaction } from './schema';
@@ -94,5 +94,38 @@ describe('v_ledger_line', () => {
       { account: 'checking', accountClass: 'cash', date: '2026-12-02', month: '2026-12-01', category: 'groceries', amountBase: -3_000, isTransfer: false, counterAccountClass: null, isStartingBalance: false, isSplitLine: true, parent: 'split' },
       { account: 'checking', accountClass: 'cash', date: '2026-12-02', month: '2026-12-01', category: 'housing', amountBase: -5_000, isTransfer: true, counterAccountClass: 'tracking', isStartingBalance: false, isSplitLine: true, parent: 'split' },
     ]);
+  });
+
+  it('drops the live lines of a deleted split parent', async () => {
+    const s = await seed();
+    const [split] = await t.db
+      .insert(transaction)
+      .values({
+        accountId: s.checking.id,
+        date: '2026-11-19',
+        amount: -100,
+        amountBase: -100,
+        isSplit: true,
+        deletedAt: new Date(),
+      })
+      .returning();
+    await t.db.insert(subtransaction).values([
+      { txnId: split!.id, amount: -60, amountBase: -60, categoryId: s.groceries.id },
+      { txnId: split!.id, amount: -40, amountBase: -40, categoryId: s.housing.id },
+    ]);
+    expect(await t.db.select().from(ledgerLine).where(eq(ledgerLine.txnId, split!.id))).toEqual([]);
+  });
+
+  it('exposes the native amount next to the PLN base amount', async () => {
+    const [euro] = await t.db.insert(account).values({ name: 'Euro', type: 'savings', currency: 'EUR' }).returning();
+    const [txn] = await t.db
+      .insert(transaction)
+      .values({ accountId: euro!.id, date: '2026-11-19', amount: 10_000, amountBase: 42_512, fxRate: '4.2512' })
+      .returning();
+    const rows = await t.db
+      .select({ amount: ledgerLine.amount, amountBase: ledgerLine.amountBase })
+      .from(ledgerLine)
+      .where(eq(ledgerLine.txnId, txn!.id));
+    expect(rows).toEqual([{ amount: 10_000, amountBase: 42_512 }]);
   });
 });

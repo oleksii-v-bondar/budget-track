@@ -93,7 +93,13 @@ Assigned amount.
 
 ## 4. Data model
 
-All tables use UUID primary keys and `created_at` / `updated_at` timestamps unless noted.
+All tables use UUID primary keys and `created_at` / `updated_at` timestamps unless noted. The exceptions:
+`login_attempt` and `undo_entry` have bigserial ids; `assignment`, `loan_interest_override`, `fx_rate`, `month_note` and
+`target` use the natural keys listed below; `session` and `undo_entry` have only `created_at`; `login_attempt` has only
+`at`; `assignment`, `loan_interest_override`, `fx_rate` and `scheduled_subtransaction` have no timestamps.
+Timestamps have millisecond precision (`timestamptz(3)`), so a JS `Date` round-trips exactly through undo images.
+Foreign keys have no `ON DELETE` actions: commands delete or re-point child rows themselves, so the undo log sees every
+change.
 
 ### 4.1 Settings and auth
 - `app_user` (at most one row): `password_hash` (argon2id), `totp_secret_enc`, `recovery_code_hashes text[]`,
@@ -111,7 +117,8 @@ All tables use UUID primary keys and `created_at` / `updated_at` timestamps unle
 - `loan_interest_override`: `account_id`, `month`, `amount`. Exists only when the user edits the computed interest.
 
 ### 4.3 Categories and budget
-- `category_group`: `name`, `sort_order`, `hidden`, `kind` (`normal` | `cc_payments` | `debt_payments` | `internal`).
+- `category_group`: `name`, `sort_order`, `hidden`, `kind` (`normal` | `cc_payments` | `debt_payments` | `internal`;
+  at most one group of each kind other than `normal`), `deleted_at`.
 - `category`: `group_id`, `name`, `sort_order`, `hidden`, `note`, `system_kind` (`rta` | `uncategorized` | null),
   `linked_account_id` (set for credit card payment categories and paired loan categories), `deleted_at`.
 - `assignment`: PK (`category_id`, `month`), `amount`. Sparse: rows with amount 0 are deleted.
@@ -126,9 +133,10 @@ All tables use UUID primary keys and `created_at` / `updated_at` timestamps unle
 - `month_note`: PK `month`, `note`.
 
 ### 4.4 Payees and transactions
-- `payee`: `name` (unique among non-deleted), `transfer_account_id` (unique; one auto-created
-  "Transfer : <Account>" payee per account), `system_kind` (`starting_balance` | `reconciliation_adjustment` |
-  `fx_revaluation` | null), `last_category_id`, `deleted_at`.
+- `payee`: `name` (unique among live user payees; transfer and system payees are exempt), `transfer_account_id`
+  (unique; one auto-created "Transfer : <Account>" payee per account), `system_kind` (`starting_balance` |
+  `reconciliation_adjustment` | `fx_revaluation` | null; one payee per kind, created by migration), `last_category_id`,
+  `deleted_at`.
 - `transaction`:
   - `account_id`, `date`, `payee_id`, `category_id` (null for splits, budget↔budget transfers, tracking-only
     transactions, credit/tracking starting balances), `memo`

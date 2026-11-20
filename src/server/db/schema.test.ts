@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { asc, eq, isNotNull, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ACCOUNT_TYPES, accountClassOf } from '../../shared/accounts';
 import { createTestDatabase, type TestDatabase } from '../test/db';
@@ -122,5 +122,59 @@ describe('constraints', () => {
 
   it('rejects malformed currency codes', async () => {
     await expect(t.db.insert(account).values({ name: 'Bad', type: 'checking', currency: 'pln' })).rejects.toThrow();
+  });
+});
+
+describe('schema hardening (P2b1)', () => {
+  it('creates the three system payees, one per kind', async () => {
+    const rows = await t.db
+      .select({ name: payee.name, systemKind: payee.systemKind })
+      .from(payee)
+      .where(isNotNull(payee.systemKind))
+      .orderBy(asc(payee.name));
+    expect(rows).toEqual([
+      { name: 'FX revaluation', systemKind: 'fx_revaluation' },
+      { name: 'Reconciliation Balance Adjustment', systemKind: 'reconciliation_adjustment' },
+      { name: 'Starting Balance', systemKind: 'starting_balance' },
+    ]);
+    const query = t.db.insert(payee).values({ name: 'Another start', systemKind: 'starting_balance' });
+    expect(await rejectionText(query)).toContain('payee_one_per_system_kind');
+  });
+
+  it('lets user payees reuse the names of transfer and system payees', async () => {
+    const [savings] = await t.db.insert(account).values({ name: 'Savings', type: 'savings' }).returning();
+    await t.db.insert(payee).values({ name: 'Transfer : Savings', transferAccountId: savings!.id });
+    await t.db.insert(payee).values([{ name: 'transfer : savings' }, { name: 'starting balance' }]);
+  });
+
+  it('allows one group per non-normal kind but any number of normal groups', async () => {
+    await t.db.insert(categoryGroup).values([{ name: 'Internal', kind: 'internal' }, { name: 'A' }, { name: 'B' }]);
+    const query = t.db.insert(categoryGroup).values({ name: 'Internal 2', kind: 'internal' });
+    expect(await rejectionText(query)).toContain('category_group_one_per_system_kind');
+  });
+
+  it('allows one live category per linked account', async () => {
+    const [card] = await t.db.insert(account).values({ name: 'Visa', type: 'credit_card' }).returning();
+    const [group] = await t.db.insert(categoryGroup).values({ name: 'Cards' }).returning();
+    const linked = { groupId: group!.id, name: 'Visa', linkedAccountId: card!.id };
+    const [first] = await t.db.insert(category).values(linked).returning();
+    expect(await rejectionText(t.db.insert(category).values(linked))).toContain('category_linked_account_live');
+    await t.db.update(category).set({ deletedAt: new Date() }).where(eq(category.id, first!.id));
+    await t.db.insert(category).values(linked);
+  });
+
+  it('stores timestamps with millisecond precision, so JS dates read back exactly', async () => {
+    const [row] = await t.db.execute<{ micros: number }>(
+      sql`insert into category_group (name, created_at) values ('Precise', '2026-11-20T10:00:00.123456Z')
+          returning (extract(microseconds from created_at)::bigint % 1000) as micros`,
+    );
+    expect(row?.micros).toBe(0);
+  });
+
+  it('has no ON DELETE actions, which would bypass the undo recorder', async () => {
+    const rows = await t.db.execute<{ conname: string }>(
+      sql`select conname from pg_constraint where contype = 'f' and confdeltype <> 'a'`,
+    );
+    expect(rows.map((r) => r.conname)).toEqual([]);
   });
 });

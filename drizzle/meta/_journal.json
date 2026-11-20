@@ -15,6 +15,13 @@
       "when": 1795191993350,
       "tag": "0001_ledger_view",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795200288627,
+      "tag": "0002_schema_hardening",
+      "breakpoints": true
     }
   ]
 }
