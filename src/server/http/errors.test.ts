@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { requestId } from 'hono/request-id';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -53,6 +54,13 @@ describe('errorHandler', () => {
     const res = await app.request('/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { code: string }).code).toBe('bad_request');
+  });
+
+  it('maps other HTTPExceptions to http_<status>', async () => {
+    const { app } = appWith((a) => a.get('/x', () => Promise.reject(new HTTPException(413, { message: 'Too big' }))));
+    const res = await app.request('/x');
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ code: 'http_413', message: 'Too big' });
   });
 
   it('hides unexpected errors behind a generic 500 and logs them', async () => {

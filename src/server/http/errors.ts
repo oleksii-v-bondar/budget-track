@@ -43,7 +43,8 @@ export function errorHandler(err: Error, c: Context<AppEnv>): Response {
     return c.json<ApiErrorBody>({ code: err.code, message: err.message, ...err.extra }, err.status);
   }
   if (err instanceof HTTPException) {
-    return c.json<ApiErrorBody>({ code: 'bad_request', message: err.message }, err.status);
+    const code = err.status === 400 ? 'bad_request' : `http_${err.status}`;
+    return c.json<ApiErrorBody>({ code, message: err.message }, err.status);
   }
   c.var.logger.error({ err }, 'unhandled error');
   return c.json<ApiErrorBody>(

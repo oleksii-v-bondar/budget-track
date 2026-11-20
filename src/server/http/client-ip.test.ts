@@ -9,8 +9,16 @@ async function ipOf(trustProxy: boolean, headers: Record<string, string>): Promi
 }
 
 describe('clientIpResolver', () => {
-  it('uses the first X-Forwarded-For entry behind a trusted proxy', async () => {
-    expect(await ipOf(true, { 'x-forwarded-for': '198.51.100.4, 10.0.0.1' })).toBe('198.51.100.4');
+  it('uses the rightmost X-Forwarded-For entry behind a trusted proxy', async () => {
+    expect(await ipOf(true, { 'x-forwarded-for': '198.51.100.4, 10.0.0.1' })).toBe('10.0.0.1');
+  });
+
+  it('ignores a spoofed leading X-Forwarded-For entry', async () => {
+    expect(await ipOf(true, { 'x-forwarded-for': '1.2.3.4, 198.51.100.4' })).toBe('198.51.100.4');
+  });
+
+  it('falls back to unknown behind a trusted proxy when X-Forwarded-For is missing', async () => {
+    expect(await ipOf(true, {})).toBe('unknown');
   });
 
   it('ignores X-Forwarded-For unless the proxy is trusted', async () => {
