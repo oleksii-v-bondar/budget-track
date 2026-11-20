@@ -65,7 +65,7 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - P2d: `fxRate` is required to create a foreign-currency account; make it optional once the NBP lookup exists.
 
 ## From P2b1 final review
-- P2b2: a snapshot round-trip (undo/redo) test matrix for every command: PATCH account with its rename cascade,
+- P2d2 (not done in P2b2): a snapshot round-trip (undo/redo) test matrix for every command: PATCH account with its rename cascade,
   close/reopen, the reorders, group/category create/edit/move, month note, and the redo legs; plus a parallel
   duplicate-create test. A catalog test that every timestamptz column has precision 3. Tests for malformed
   `fxRate`/`interestRate`/date inputs.

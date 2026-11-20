@@ -76,7 +76,8 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   allows, so every allowed month is in the result. `loadBudgetMonth(db, month, today)` checks the month range, runs
   `computeBudget` once and builds the month view. Read routes run it in
   `db.transaction(fn, { isolationLevel: 'repeatable read', accessMode: 'read only' })` so every query sees one
-  snapshot. Commands (auto-assign, closing a card) call it with `rec.tx` inside `runCommand`.
+  snapshot. Auto-assign calls it with `rec.tx` inside `runCommand`; closing a card calls `loadBudgetInput` and
+  `computeBudget` directly with `rec.tx`.
 - `setAssigned`/`addAssigned` don't check the category; callers go through `assignableCategory` or the month view,
   which never lists Ready to Assign or Uncategorized.
 - Auto-assign passes the month view's `underfunded` amounts to the engine only for the `underfunded` strategy, clamped
