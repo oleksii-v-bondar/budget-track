@@ -71,3 +71,24 @@ describe('cross-cutting behaviour', () => {
     expect(withHeader.status).toBe(404);
   });
 });
+
+describe('route guard', () => {
+  it('requires a session on every /api route outside /api/auth (deny by default)', async () => {
+    const { app, client } = createTestApp(t.db);
+    const isAuth = (path: string) => path === '/api/auth' || path.startsWith('/api/auth/');
+    const routes = app.routes
+      .filter((r) => r.method !== 'ALL' && r.path.startsWith('/api/') && !isAuth(r.path))
+      .map((r) => `${r.method} ${r.path}`);
+    expect(routes).toContain('GET /api/undo');
+
+    const responses = [];
+    for (const route of routes) {
+      const [method, path] = route.split(' ') as [string, string];
+      const url = path.replace(/:[^/]+/g, crypto.randomUUID());
+      const res = await client.send(method, url, method === 'GET' ? undefined : {});
+      responses.push({ route, status: res.status, body: await res.json() });
+    }
+    const unauthorized = { status: 401, body: { code: 'unauthorized', message: 'Please sign in.' } };
+    expect(responses).toEqual(routes.map((route) => ({ route, ...unauthorized })));
+  });
+});

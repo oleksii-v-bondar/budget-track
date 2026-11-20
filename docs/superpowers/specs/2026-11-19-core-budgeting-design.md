@@ -158,7 +158,8 @@ change.
 
 ### 4.5 Support
 - `fx_rate`: PK (`currency`, `date`), `rate`, `source` (`nbp`), `effective_date` (the NBP publication day used).
-- `undo_entry`: `label`, `changes jsonb` (ordered `[{table, id, before, after}]`), `state` (`done` | `undone`).
+- `undo_entry`: `label`, `changes jsonb` (ordered `[{table, pk, before, after}]`; `pk` is an object because
+  `assignment` has a composite key), `state` (`done` | `undone`).
 
 ### 4.6 Ledger view
 `v_ledger_line` merges non-split transactions and subtransactions of non-deleted transactions (all accounts) into one
@@ -510,8 +511,9 @@ signs out other sessions.
 
 - **zod validation failures** → HTTP 400 `{ code: "validation", fieldErrors }`; the UI shows them inline.
 - **Domain rule violations** throw a typed `DomainError(code, message)` → HTTP 422; the UI shows the message.
-  Examples: split sum mismatch, category on a budget↔budget transfer, closing an account with a non-zero balance,
-  undo conflict.
+  Examples: split sum mismatch, category on a budget↔budget transfer, closing an account with a non-zero balance.
+- **Undo/redo conflicts** (a row changed since the command) → HTTP 409 `undo_conflict` "Can't undo: data changed
+  since." (or "Can't redo: …"); an empty stack → 409 `nothing_to_undo` / `nothing_to_redo`.
 - **Auth failures** → 401 (no session) or 429 (rate limited / locked).
 - **Unexpected errors** → 500 with a generic message. The server logs details with pino (JSON to stdout, including a
   request ID); the UI shows a toast with Retry.

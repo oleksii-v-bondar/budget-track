@@ -8,6 +8,7 @@ import { loginRoutes } from '../auth/login-routes';
 import { securityRoutes } from '../auth/security-routes';
 import { setupRoutes } from '../auth/setup-routes';
 import type { Clock } from '../clock';
+import { redoRoutes, undoRoutes } from '../commands/undo-routes';
 import type { Config } from '../config';
 import type { Db } from '../db/client';
 import type { Logger } from '../logger';
@@ -63,7 +64,11 @@ export function createApp(deps: AppDeps) {
     })
     .route('/api/auth', setupRoutes(deps))
     .route('/api/auth', loginRoutes(deps))
-    .route('/api/auth', securityRoutes(deps));
+    .route('/api/auth', securityRoutes(deps))
+    // Every router below is mounted on its own prefix and starts with .use('*', requireSession(deps)), so each new
+    // route is private by default (app.test.ts walks app.routes to keep it that way).
+    .route('/api/undo', undoRoutes(deps))
+    .route('/api/redo', redoRoutes(deps));
 
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);
