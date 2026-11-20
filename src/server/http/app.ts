@@ -8,6 +8,8 @@ import { accountRoutes } from '../accounts/account-routes';
 import { loginRoutes } from '../auth/login-routes';
 import { securityRoutes } from '../auth/security-routes';
 import { setupRoutes } from '../auth/setup-routes';
+import { categoryRoutes } from '../categories/category-routes';
+import { groupRoutes } from '../categories/group-routes';
 import type { Clock } from '../clock';
 import { redoRoutes, undoRoutes } from '../commands/undo-routes';
 import type { Config } from '../config';
@@ -70,7 +72,9 @@ export function createApp(deps: AppDeps) {
     // route is private by default (app.test.ts walks app.routes to keep it that way).
     .route('/api/undo', undoRoutes(deps))
     .route('/api/redo', redoRoutes(deps))
-    .route('/api/accounts', accountRoutes(deps));
+    .route('/api/accounts', accountRoutes(deps))
+    .route('/api/category-groups', groupRoutes(deps))
+    .route('/api/categories', categoryRoutes(deps));
 
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);
