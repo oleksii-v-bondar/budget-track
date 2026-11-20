@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { idParamSchema, type IdResponse } from '../../shared/api/common';
 import {
+  type BulkResponse,
+  bulkRequestSchema,
   createTransactionRequestSchema,
   type CreateTransactionResponse,
   deleteTransactionRequestSchema,
@@ -14,6 +16,7 @@ import { todayIn } from '../clock';
 import { runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
+import { bulkLabel, bulkUpdate } from './bulk';
 import {
   createTransaction,
   deleteLabel,
@@ -47,6 +50,12 @@ export function transactionRoutes(deps: AppDeps) {
       }
       const transaction = await getTransaction(deps.db, saved.id);
       return c.json<CreateTransactionResponse>({ kind: 'transaction', transaction }, 201);
+    })
+    .post('/bulk', validate('json', bulkRequestSchema), async (c) => {
+      const body = c.req.valid('json');
+      const context = { today: today(), now: deps.clock.now() };
+      await runCommand(deps, bulkLabel(body), (rec) => bulkUpdate(rec, body, context));
+      return c.json<BulkResponse>({ ids: body.ids });
     })
     .get('/:id', validate('param', idParamSchema), async (c) =>
       c.json<TransactionDto>(await getTransaction(deps.db, c.req.valid('param').id)),

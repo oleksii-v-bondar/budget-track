@@ -128,6 +128,41 @@ export type UpdateTransactionRequest = z.infer<typeof updateTransactionRequestSc
  */
 export const deleteTransactionRequestSchema = z.object({ confirmReconciled: z.boolean().default(false) });
 
+/** One edit for every selected transaction (spec §10 "Search and bulk operations"). */
+export const bulkActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('categorize'), categoryId: idSchema.nullable() }),
+  z.object({ type: z.literal('setPayee'), payeeId: idSchema.nullable() }),
+  z.object({ type: z.literal('setFlag'), flag: flagSchema.nullable() }),
+  z.object({ type: z.literal('setCleared'), cleared: userClearedSchema }),
+  z.object({ type: z.literal('approve') }),
+  /** Another account in the same currency. */
+  z.object({ type: z.literal('moveAccount'), accountId: idSchema }),
+  z.object({ type: z.literal('delete') }),
+]);
+
+export type BulkAction = z.infer<typeof bulkActionSchema>;
+
+/**
+ * POST /api/transactions/bulk: one undoable command. Each row gets exactly the checks of a single edit or delete;
+ * if any row fails, nothing changes and the error's `fieldErrors` names it (`ids.<index>`).
+ */
+export const bulkRequestSchema = z.object({
+  ids: z
+    .array(idSchema)
+    .min(1, 'Select at least one transaction.')
+    .max(500, 'Select at most 500 transactions.')
+    .refine((ids) => new Set(ids).size === ids.length, 'List each id once.'),
+  action: bulkActionSchema,
+  confirmReconciled: z.boolean().default(false),
+});
+
+export type BulkRequest = z.infer<typeof bulkRequestSchema>;
+
+/** The selected ids. */
+export interface BulkResponse {
+  ids: string[];
+}
+
 /** Money in a query string: a whole number of minor units. */
 const queryMoneySchema = z
   .string()

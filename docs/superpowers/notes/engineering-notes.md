@@ -56,10 +56,13 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   `.use('*', requireSession(deps))` on a router mounted under its **own** prefix. Never `.use` on a router that shares
   its prefix with other routers: the middleware leaks onto later routes there.
 - `validate(target, schema)` in `src/server/http/validate.ts` gives 400 `validation` with `fieldErrors`/`formErrors`.
-  zod 4 hooks pass `z.core.$ZodError`. Note that `z.flattenError` only reports top-level paths; for nested bodies
-  (split lines) also return the issue paths.
-- Error classes: `AppError(status, code, message)` and `DomainError(code, message)` (422) in
-  `src/server/http/errors.ts`.
+  zod 4 hooks pass `z.core.$ZodError`. `ValidationError` keys `fieldErrors` by the dotted issue path
+  (`lines.1.amount`), so nested bodies keep their paths (`z.flattenError` would report only `lines`).
+- Error classes: `AppError(status, code, message, extra?)` and `DomainError(code, message, field?)` (422) in
+  `src/server/http/errors.ts`. A `DomainError` about one field (a dotted path) also returns
+  `fieldErrors: { [field]: [message] }`.
+- Query strings arrive as strings: parse numbers with a regex + `transform(Number)` + `pipe(...)` (not
+  `z.coerce`, which turns `''` into 0).
 - Request bodies are limited to 64 KiB on `/api/*`. Every `/api` response has `Cache-Control: no-store`.
 - The logger's `err` serializer strips Drizzle query params. Always log with a message string:
   `logger.error({ err }, 'msg')`.
@@ -69,6 +72,19 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   `pg_advisory_xact_lock(727274001)`. Any new advisory lock needs a different key; list keys in this file:
   - `727274001`: login and re-authentication.
   - `727274002`: user commands and undo/redo (`COMMAND_LOCK_KEY` in `src/server/commands/run-command.ts`).
+
+### Transactions (P2c)
+- Every transaction write is planned first: build a `Draft` (what the user describes) and call
+  `planTransaction(db, draft, context)` in `src/server/transactions/plan.ts`. It applies spec §5.5 and §9 and returns
+  the rows (`Plan`); `insertPlan` writes a new transaction and `syncPlan` brings a saved one in line. P2d's schedule
+  job, reconcile adjustments and FX revaluation should build drafts too, so they get the same rules.
+- `loadAggregate(db, id)` returns a transaction with its transfer side, live split lines with their counterparts, or,
+  for a split line's counterpart, its owning split and line (`owner`).
+- Rows that point at each other (the two sides of a transfer, a line and its counterpart) are inserted first and then
+  linked with `rec.update`, because foreign keys are checked immediately; undo replays the steps in reverse.
+- The category of a budget↔tracking transfer lives on the budget-side row; `draftOf` reads it from either side.
+- `fx_rate` holds the rate a base amount was computed with (always user-entered in P2c, so `fx_rate_manual`); sides
+  whose base is derived from the other side of a transfer store null. `effectiveRate` in the DTOs shows the rate.
 
 ### Budget read model
 - `loadBudgetInput(db, { throughMonth, today })` (`src/server/budget/budget-input.ts`) is the only place that turns

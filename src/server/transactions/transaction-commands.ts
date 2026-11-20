@@ -291,7 +291,7 @@ export async function deleteTransaction(
   rec: ChangeRecorder,
   id: string,
   context: { now: Date; confirmReconciled: boolean },
-): Promise<{ payeeName: string | null }> {
+): Promise<{ payeeName: string | null; ids: string[] }> {
   const agg = await loadAggregate(rec.tx, id);
   if (agg.owner) {
     const split = await findAccount(rec.tx, agg.owner.parent.accountId);
@@ -302,6 +302,7 @@ export async function deleteTransaction(
   }
   const rows = [agg.main, agg.counterpart, ...agg.lines.map((l) => l.counterpart)].filter((r) => r !== null);
   assertConfirmed(rows.some((r) => r.cleared === 'reconciled'), context.confirmReconciled);
-  await softDelete(rec, rows.map((r) => r.id), context.now);
-  return { payeeName: await payeeNameOf(rec, agg.main.payeeId) };
+  const ids = rows.map((r) => r.id);
+  await softDelete(rec, ids, context.now);
+  return { payeeName: await payeeNameOf(rec, agg.main.payeeId), ids };
 }

@@ -242,6 +242,10 @@ Further rules:
 - No transaction line may be categorized to a credit card payment category. Those categories change only through
   funded spending flows, card transfers and assignments.
 - An on-budget, non-transfer, non-starting-balance transaction without a category is "Uncategorized".
+- A line may use Ready to Assign, a regular category or a loan's paired category (hidden ones included). Uncategorized
+  is never chosen explicitly: leaving the category empty means Uncategorized.
+- The category of a budget↔tracking transfer (or transfer line) is stored on its budget side, whichever side it was
+  entered from. Closed accounts take no new rows; rows already there stay editable.
 
 ### 5.6 Future-dated transactions
 A transaction saved with `date > today` is stored as a `scheduled_transaction` with frequency `once`. The budget only
@@ -358,8 +362,10 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
   Σ line base = parent base.
 - **Cross-currency transfers**: the user enters both actual amounts.
   - PLN ↔ foreign: the foreign side's `amount_base` = −(PLN side amount).
-  - Foreign ↔ foreign: the source side's base comes from its rate; destination base = −source base.
+  - Foreign ↔ foreign: the source side's base comes from its rate; destination base = −source base. The rate is
+    stored on the source side; a side whose base is derived from the other side stores `fx_rate = null`.
   - Either way the transfer nets to 0 in the budget. The effective rate is displayed.
+  - Split lines transfer only to accounts in the same currency (counterpart base = −line base).
 - **Account display**: native balance, plus "≈ X zł" at the latest available NBP rate.
 - **Revalue**: unrealized difference = round(native balance × latest rate) − Σ `amount_base`. The action posts a
   transaction with `amount = 0`, `amount_base = diff`, payee "FX revaluation", cleared. On-budget accounts get
@@ -371,22 +377,32 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 **Creating and editing**
 - Manual transactions are created `approved = true`. The `approved = false` state exists for bank import (#2).
 - Saving a categorized, non-transfer transaction updates `payee.last_category_id`. The transaction sheet pre-fills
-  the category from the selected payee.
+  the category from the selected payee. An edit updates it only when the payee or the category changes.
+- A saved transaction can move to another account in the same currency; every rule is checked again. It can't move to
+  a date after today (§5.6 applies to new transactions).
 
 **Splits**
 - A split has `is_split = true`, a null parent category, ≥ 2 lines, and Σ line amounts = parent amount.
 - A line may be a transfer, which creates a counterpart transaction in the target account with `transfer_txn_id`
   pointing to the parent and `transfer_subtxn_id` to the line.
+- Editing lines replaces them: the old lines and their counterparts are soft-deleted, unless the lines sent are
+  identical. Edits of the split's date or account update its line counterparts in place.
+- A line's counterpart takes only memo (mirrored to the line), cleared, approved and flag; the rest is edited on the
+  split, and the counterpart goes away by removing its line.
 
 **Transfers**
 - Creating a transfer creates both sides atomically, linked via `transfer_txn_id`.
 - Editing date, amount or memo on one side mirrors it to the other. For cross-currency transfers, the other side's
   native amount is changed only when the user edits it explicitly.
 - Cleared status is independent per side. Deleting one side deletes both.
+- Choosing a different payee retargets or ends the transfer: the old other side is soft-deleted and a new one created.
+- A future-dated transfer between currencies is refused until scheduled transactions can store the other side's
+  amount.
 
 **Reconciled transactions**
 - Changing amount, account, date or the transfer link of a reconciled transaction requires `confirmReconciled: true`.
-  The UI asks for confirmation first.
+  The UI asks for confirmation first. Un-reconciling and deleting it need the confirmation too, and so do mirrored
+  changes that reach a reconciled other side. Without it the server answers 409 `confirm_reconciled`.
 
 **Starting balance**
 - Created with every new account: payee "Starting Balance", `cleared`, `is_starting_balance = true`, dated on the
@@ -410,7 +426,9 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 
 **Payees**
 - Rename. Merge (reassign all transactions, lines and schedules to the target payee, then soft-delete the source).
-- Delete is allowed only when the payee is unused. Transfer and system payees can't be renamed or deleted.
+  The target keeps its last-used category, or takes the source's when it has none.
+- Delete is allowed only when the payee is unused by live rows. Transfer and system payees can't be renamed, merged or
+  deleted, and system payees can't be chosen for a transaction.
 
 **Categories**
 - Create, rename, reorder (drag), hide, and move between groups.
@@ -432,7 +450,9 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 - Filters: text (ILIKE on payee, memo, category), date range, amount range, account, category, payee, flag, cleared
   state, unapproved.
 - Bulk operations on the selected IDs are one command each (one undo): categorize, set payee, set flag,
-  clear/unclear, approve, move to account (same-currency accounts only), delete.
+  clear/unclear, approve, move to account (same-currency accounts only), delete. Each row is checked like a single
+  edit; if one fails, nothing changes. A request takes up to 500 IDs.
+- The amount range filters the signed native amount.
 
 **Undo/redo**
 - Every user command writes through `ChangeRecorder`, which captures the before/after row images.
@@ -520,11 +540,15 @@ signs out other sessions.
 
 ## 13. Error handling
 
-- **zod validation failures** → HTTP 400 `{ code: "validation", fieldErrors }`; the UI shows them inline.
+- **zod validation failures** → HTTP 400 `{ code: "validation", fieldErrors }`; the UI shows them inline. Field
+  errors are keyed by the dotted path of the field (`lines.1.amount`); a domain error about one field (or split
+  line, or bulk row: `ids.3`) carries the same `fieldErrors`.
 - **Domain rule violations** throw a typed `DomainError(code, message)` → HTTP 422; the UI shows the message.
   Examples: split sum mismatch, category on a budget↔budget transfer, closing an account with a non-zero balance.
 - **Undo/redo conflicts** (a row changed since the command) → HTTP 409 `undo_conflict` "Can't undo: data changed
   since." (or "Can't redo: …"); an empty stack → 409 `nothing_to_undo` / `nothing_to_redo`.
+- **Unconfirmed changes to reconciled transactions** → HTTP 409 `confirm_reconciled`; the UI asks and resends with
+  `confirmReconciled: true`.
 - **Auth failures** → 401 (no session) or 429 (rate limited / locked).
 - **Unexpected errors** → 500 with a generic message. The server logs details with pino (JSON to stdout, including a
   request ID); the UI shows a toast with Retry.

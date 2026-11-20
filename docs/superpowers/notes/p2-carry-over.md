@@ -104,7 +104,6 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - `app.test.ts` lists the new budget and target routes among those the deny-by-default walk covers.
 
 ## From P2b2
-- P2c: the Budget screen's Activity tab needs the register API (transactions behind a category's monthly activity).
 - P2c: transaction writes must keep a split parent's `amount_base` equal to the sum of its live lines: debt balances
   and "Need X to pay in full" read `transaction` (like account balances), while the budget reads `v_ledger_line`.
 - P2d: a loan's `balanceAtMonthStart` (pay-off-by-date targets) is the PLN sum of its transactions; it ignores the
@@ -119,3 +118,74 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - Later: `GET /api/budget/:month` takes ≈ 80 ms for 10 years × 150 categories (26k transactions) and ≈ 175 ms in a
   dense worst case (36k activity rows) on an M3 Max. If it matters, read the activity aggregate with `db.execute`
   (Drizzle's row mapping costs ≈ 30 ms per 36k rows) and profile `computeBudget`.
+
+## Resolved in P2c
+- Date ≤ today on transaction writes (§5.6): a new transaction dated after today becomes a one-time scheduled
+  transaction; an edit can't move a transaction past today. Transaction dates start at 1970-01-01, like starting
+  balances.
+- Nested validation paths: `fieldErrors` are keyed by the dotted issue path (`lines.1.amount`); `DomainError` takes
+  an optional field, used for split lines (`lines.2.categoryId`) and bulk rows (`ids.3`).
+- The ledger view is checked through the API: split lines instead of their split, both sides of transfers, a deleted
+  split whose lines stay live, and foreign lines with amount ≠ amount_base.
+- Transfers, transfer lines and their counterparts are inserted with a null link and linked by an update; undo/redo
+  round trips are tested for transfers, splits, replaced lines and bulk operations. Commands stay at READ COMMITTED.
+- Soft-deleted and credit card payment categories are refused on every transaction write (`assertUsableCategory`).
+- Account deletion: `isAccountInUse` also checks rows that use the account's transfer payee, and a payee that
+  remembers a linked category no longer blocks the delete (the delete clears `last_category_id`). Soft-deleted
+  transactions still block it (`account_in_use`): they are history that undo can bring back, so the account is closed
+  instead.
+- Indexes on `transaction.transfer_txn_id`, `transfer_account_id` and `scheduled_id`,
+  `subtransaction.transfer_txn_id` and `scheduled_subtransaction.scheduled_id` (migration 0003).
+- Bulk operations run row by row (no large IN lists) and take at most 500 ids. Categorizing 500 rows took about
+  1.4 s and its undo about 0.5 s against the Testcontainers database. A test shows that an undo conflict on one row of
+  a bulk command rolls back the rows already replayed.
+- `transferBases` foreign → PLN with a `null` rate on the foreign side has a test.
+- The Budget screen's Activity tab has its register API (moved from "From P2b2"): `GET /api/transactions?categoryId=`
+  lists the transactions behind a category's activity, split lines included, and `categoryId=<Uncategorized>` lists
+  exactly the Uncategorized activity the budget counts (the shared `uncategorizedActivity` predicate).
+
+## From P2c
+- P2d: shutdown hardening, moved from P2c (SIGTERM during migrations, close timeout, exit code on db close failure,
+  `init: true` in compose).
+- P2d: entering a scheduled transaction must build a `Draft` and use `planTransaction` + `insertPlan`. Schedules keep
+  the category of a transfer as entered (the plan puts it on the budget side), the `fx_rate` of a foreign ↔ foreign
+  transfer schedule is the sending side's rate, and schedule lines keep their payee and `transfer_account_id`.
+- P2d: `scheduled_transaction` has no column for the other side's amount, so future-dated transfers between currencies
+  are refused (`future_transfer_currency`). Add a column (and allow them) with the scheduled-transaction CRUD.
+- P2d: NBP rates. Until then `fxRate` is required for foreign-currency transactions and stored with
+  `fx_rate_manual = true`; edits keep the stored rate unless a new one is sent. With NBP, a date change should
+  re-fetch a non-manual rate.
+- P2d: only the reconcile flow sets `reconciled`; users switch between `uncleared` and `cleared`.
+- Later: `ChangeRecorder.update` re-selects the rows it changed with one IN list, so a single update of more than about
+  65 000 rows (merging a payee with that many transactions, or P2b1's category delete) would exceed Postgres'
+  bind-parameter limit. Batch it there if that ever matters.
+- P3: changing a categorized transaction's payee to the transfer payee of a budget account needs `categoryId: null`
+  in the same request (`category_not_allowed` otherwise). For a budget↔tracking transfer only the budget side's DTO
+  shows the category.
+- P3: register rows of the same date are ordered by id (spec: date desc, id), not by entry time.
+- P3: unknown ids in transaction bodies are 422 with a field (`invalid_account`, `invalid_payee`, `invalid_category`);
+  the "unify 404 vs 422" item from the P2b1 final review stays open for the older endpoints.
+- P2c final fix pass, code (minors from the task reviews):
+  - `planLines` (`plan.ts`) sums split lines with JS numbers, which lose precision above 2^53, and doesn't check that
+    each foreign line's base is a safe integer, so huge amounts answer 500. Sum with BigInt and refuse an unsafe base
+    with 422 `amount_too_large` at `lines.<n>.amount`.
+  - `POST /api/transactions` refuses `payeeId: null` while PATCH accepts it; make it nullable on create too.
+  - Editing a cash account's starting balance with `lines` reports `fieldErrors.categoryId`
+    (`assertStartingBalanceKept`); check `lines` first.
+  - A future-dated same-currency foreign transfer entered from the receiving side loses its `fxRate` on the schedule
+    (`insertSchedule` stores the main row's rate). Use `draft.fxRate`; the P2d2 prototype reportedly does.
+  - PATCH clears a memo only with `''` (`memo: null` is a 400); decide whether to accept `null`.
+- P2c final fix pass, tests (minors from the task reviews):
+  - Payees: a merge where the target keeps its own `lastCategoryId`; an inline `payeeName` rolled back when the create
+    is refused.
+  - Transfers: EUR↔EUR, a successful tracking↔tracking transfer, and an undo round trip of a transfer between
+    currencies.
+  - Splits: an undo round trip of a split with a transfer line; a transfer line to a closed account; the 100-line cap;
+    the category of a future-dated budget↔tracking transfer line.
+  - Edits: an undo round trip of retargeting and of ending a transfer (`syncPlan`); edits of rows in a closed account;
+    edits of a foreign side and of a foreign↔foreign transfer; no-op transfer and split edits record no undo entry.
+  - Reconciled rows (409 `confirm_reconciled`): replacing reconciled split lines or removing them (`lines: null`),
+    moving a transaction whose other side is reconciled, and deleting a split whose line counterpart is reconciled.
+    Also a move and `lines` in one request.
+  - Account deletion: the transfer-payee in-use check is tested only for `scheduled_subtransaction`; cover all four
+    tables (`it.each`).
