@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import {
   type AssignmentDto,
   assignmentParamSchema,
+  type AutoAssignResponse,
+  autoAssignRequestSchema,
   type BudgetMonthDto,
   type MonthNoteDto,
   monthNoteRequestSchema,
@@ -16,11 +18,12 @@ import { type Named, runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
 import { assertBudgetMonth, assignableCategory, assignedIn, moveMoney, setAssigned, setMonthNote } from './assignments';
+import { autoAssignMonth, STRATEGY_LABELS } from './auto-assign';
 import { loadBudgetMonth } from './budget-month';
 
 /**
- * /api/budget/:month (spec §3, §5.4, §11): the month view, assigning, moving money and the month note; months are
- * 'YYYY-MM'.
+ * /api/budget/:month (spec §3, §5.4, §7, §11): the month view, assigning, moving money, auto-assign and the month
+ * note; months are 'YYYY-MM'.
  */
 export function budgetRoutes(deps: AppDeps) {
   const today = () => todayIn(deps.config.timeZone, deps.clock.now());
@@ -74,6 +77,21 @@ export function budgetRoutes(deps: AppDeps) {
       );
       return c.json<MoveMoneyResponse>({ assignments });
     })
+    .post(
+      '/:month/auto-assign',
+      validate('param', monthParamSchema),
+      validate('json', autoAssignRequestSchema),
+      async (c) => {
+        const { month } = c.req.valid('param');
+        const body = c.req.valid('json');
+        const changes = await runCommand(deps, `Auto-assign: ${STRATEGY_LABELS[body.strategy]}`, (rec) =>
+          autoAssignMonth(rec, month, body, today()),
+        );
+        return c.json<AutoAssignResponse>({
+          assignments: changes.map((change) => ({ month, categoryId: change.categoryId, amount: change.to })),
+        });
+      },
+    )
     .put('/:month/note', validate('param', monthParamSchema), validate('json', monthNoteRequestSchema), async (c) => {
       const { month } = c.req.valid('param');
       const { note } = c.req.valid('json');

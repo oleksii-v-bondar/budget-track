@@ -22,6 +22,32 @@ export const monthNoteRequestSchema = z.object({ note: noteSchema });
 
 export type MoveMoneyRequest = z.infer<typeof moveMoneyRequestSchema>;
 
+/** Spec §7 auto-assign strategies. */
+export const AUTO_ASSIGN_STRATEGIES = [
+  'underfunded',
+  'assigned_last_month',
+  'spent_last_month',
+  'average_assigned',
+  'average_spent',
+  'reset_available',
+  'reset_assigned',
+] as const;
+
+/**
+ * POST /api/budget/:month/auto-assign. `all` covers the visible categories of visible groups; a group or a category
+ * may be hidden. Ready to Assign and Uncategorized are never in scope.
+ */
+export const autoAssignRequestSchema = z.object({
+  strategy: z.enum(AUTO_ASSIGN_STRATEGIES),
+  scope: z.discriminatedUnion('type', [
+    z.object({ type: z.literal('all') }),
+    z.object({ type: z.literal('group'), id: idSchema }),
+    z.object({ type: z.literal('category'), id: idSchema }),
+  ]),
+});
+
+export type AutoAssignRequest = z.infer<typeof autoAssignRequestSchema>;
+
 export interface AssignmentDto {
   /** 'YYYY-MM' */
   month: string;
@@ -32,6 +58,11 @@ export interface AssignmentDto {
 
 export interface MoveMoneyResponse {
   /** The categories whose Assigned changed (one or two). */
+  assignments: AssignmentDto[];
+}
+
+export interface AutoAssignResponse {
+  /** The categories whose Assigned changed, with their new amounts (empty when nothing changed). */
   assignments: AssignmentDto[];
 }
 
