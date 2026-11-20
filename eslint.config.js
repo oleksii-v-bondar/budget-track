@@ -4,6 +4,7 @@ import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
 const engineGlobalsMessage = 'src/engine must stay pure: no I/O or runtime globals.';
+const engineDeterminismMessage = 'src/engine must be deterministic: pass time and randomness in as arguments.';
 
 export default defineConfig(
   { ignores: ['dist/**', 'node_modules/**', 'coverage/**'] },
@@ -42,6 +43,14 @@ export default defineConfig(
           'setInterval',
           'XMLHttpRequest',
         ].map((name) => ({ name, message: engineGlobalsMessage })),
+      ],
+      'no-restricted-syntax': [
+        'error',
+        { selector: 'ImportExpression', message: 'src/engine must stay pure: no dynamic import().' },
+        { selector: "MemberExpression[object.name='globalThis']", message: engineGlobalsMessage },
+        { selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']", message: engineDeterminismMessage },
+        { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: engineDeterminismMessage },
+        { selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']", message: engineDeterminismMessage },
       ],
     },
   },
