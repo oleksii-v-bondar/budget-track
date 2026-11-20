@@ -21,11 +21,13 @@ export const setupRequestSchema = z.object({
   totpCode: totpCodeSchema,
 });
 
+const recoveryCodeSchema = z.string().min(1).max(64);
+
 export const loginRequestSchema = z
   .object({
     password: currentPasswordSchema,
     totpCode: totpCodeSchema.optional(),
-    recoveryCode: z.string().min(1).max(64).optional(),
+    recoveryCode: recoveryCodeSchema.optional(),
   })
   .refine((body) => (body.totpCode === undefined) !== (body.recoveryCode === undefined), {
     message: 'Enter either a code from your authenticator app or a recovery code.',
@@ -37,11 +39,18 @@ export const changePasswordRequestSchema = z.object({
   totpCode: totpCodeSchema,
 });
 
-export const confirmTotpRequestSchema = z.object({
-  currentPassword: currentPasswordSchema,
-  totpSecret: totpSecretSchema,
-  totpCode: totpCodeSchema,
-});
+/** Switching authenticators: the password and the current code (or a recovery code), then the new secret and its code. */
+export const confirmTotpRequestSchema = z
+  .object({
+    currentPassword: currentPasswordSchema,
+    currentTotpCode: totpCodeSchema.optional(),
+    recoveryCode: recoveryCodeSchema.optional(),
+    totpSecret: totpSecretSchema,
+    totpCode: totpCodeSchema,
+  })
+  .refine((body) => (body.currentTotpCode === undefined) !== (body.recoveryCode === undefined), {
+    message: 'Enter either a code from your current authenticator app or a recovery code.',
+  });
 
 export const reauthRequestSchema = z.object({
   currentPassword: currentPasswordSchema,
@@ -53,6 +62,11 @@ export type LoginRequest = z.infer<typeof loginRequestSchema>;
 export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
 export type ConfirmTotpRequest = z.infer<typeof confirmTotpRequestSchema>;
 export type ReauthRequest = z.infer<typeof reauthRequestSchema>;
+
+export interface LoginResponse {
+  /** How many unused recovery codes are left (the UI warns when it gets low). */
+  recoveryCodesRemaining: number;
+}
 
 export interface AuthStatus {
   setupRequired: boolean;

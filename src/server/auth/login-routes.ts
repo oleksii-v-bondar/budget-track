@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { loginRequestSchema } from '../../shared/auth';
+import { type LoginResponse, loginRequestSchema } from '../../shared/auth';
 import { appUser } from '../db/schema';
 import type { AppDeps } from '../http/app';
 import type { AppEnv } from '../http/env';
@@ -8,16 +8,9 @@ import { AppError } from '../http/errors';
 import { validate } from '../http/validate';
 import { verifyPassword } from './passwords';
 import { recordLoginAttempt, withLoginLock } from './rate-limit';
-import { consumeRecoveryCode } from './recovery-codes';
-import { decryptSecret } from './secret-box';
+import { verifySecondFactor } from './second-factor';
 import { clearSessionCookie, createSession, deleteSession, requireSession, setSessionCookie } from './sessions';
-import { verifyTotp } from './totp';
 import { findUser } from './user';
-
-export interface LoginResponse {
-  /** How many unused recovery codes are left (the UI warns when it gets low). */
-  recoveryCodesRemaining: number;
-}
 
 type LoginOutcome = { ok: false } | { ok: true; token: string; remaining: number };
 
@@ -32,28 +25,19 @@ export function loginRoutes(deps: AppDeps) {
 
         // The second factor is checked even after a wrong password, so the response time doesn't reveal the password.
         const passwordOk = await verifyPassword(user.passwordHash, body.password);
-        let secondFactorOk = false;
-        let recoveryCodeHashes = user.recoveryCodeHashes;
-        if (body.totpCode !== undefined) {
-          secondFactorOk = await verifyTotp(
-            decryptSecret(user.totpSecretEnc, deps.config.encryptionKey),
-            body.totpCode,
-            now,
-          );
-        } else if (body.recoveryCode !== undefined) {
-          const remaining = await consumeRecoveryCode(user.recoveryCodeHashes, body.recoveryCode);
-          secondFactorOk = remaining !== null;
-          if (passwordOk && remaining) {
-            recoveryCodeHashes = remaining;
-            await tx.update(appUser).set({ recoveryCodeHashes: remaining }).where(eq(appUser.id, user.id));
-          }
-        }
-        const ok = passwordOk && secondFactorOk;
+        const factor = await verifySecondFactor(user, body, now, deps.config.encryptionKey);
+        const ok = passwordOk && factor.ok;
         await recordLoginAttempt(tx, ip, ok, now);
         if (!ok) return { ok: false };
 
+        if (body.recoveryCode !== undefined) {
+          await tx
+            .update(appUser)
+            .set({ recoveryCodeHashes: factor.remainingRecoveryHashes })
+            .where(eq(appUser.id, user.id));
+        }
         const { token } = await createSession(tx, now, c.req.header('user-agent'));
-        return { ok: true, token, remaining: recoveryCodeHashes.length };
+        return { ok: true, token, remaining: factor.remainingRecoveryHashes.length };
       });
       // Thrown after commit so the failed attempt stays recorded.
       if (!outcome.ok) throw new AppError(401, 'invalid_credentials', 'Wrong password or code.');

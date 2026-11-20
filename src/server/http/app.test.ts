@@ -48,6 +48,20 @@ describe('cross-cutting behaviour', () => {
     expect(await res.json()).toEqual({ code: 'not_found', message: 'Not found.' });
   });
 
+  it('refuses request bodies over 64 KB', async () => {
+    const { client } = createTestApp(t.db);
+    const res = await client.post('/api/auth/login', { password: 'x'.repeat(100 * 1024), totpCode: '123456' });
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ code: 'payload_too_large', message: 'Request body is too large.' });
+  });
+
+  it('tells caches not to store API responses', async () => {
+    const { client } = createTestApp(t.db);
+    const res = await client.get('/api/auth/status');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
   it('rejects mutating /api requests without the CSRF header', async () => {
     const { app } = createTestApp(t.db);
     const res = await app.request('/api/nope', { method: 'POST' });

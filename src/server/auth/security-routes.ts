@@ -16,23 +16,22 @@ import { validate } from '../http/validate';
 import { hashPassword, verifyPassword } from './passwords';
 import { recordLoginAttempt, withLoginLock } from './rate-limit';
 import { generateRecoveryCodes, hashRecoveryCodes } from './recovery-codes';
-import { decryptSecret, encryptSecret } from './secret-box';
+import { type SecondFactor, verifySecondFactor } from './second-factor';
+import { encryptSecret } from './secret-box';
 import { clearSessionCookie, deleteAllSessions, requireSession } from './sessions';
 import { newTotpSecret, totpUri, verifyTotp } from './totp';
 import { type AppUser, findUser } from './user';
 
-interface Credentials {
-  currentPassword: string;
-  totpCode?: string;
-}
+/** The current password plus a second factor: an authenticator code or a recovery code. */
+type Credentials = { currentPassword: string } & SecondFactor;
 
 type ReauthOutcome<T> = { ok: false } | { ok: true; value: T };
 
 /** Settings → Security (spec §11/§12). Every change re-checks the current password; none is undoable. */
 export function securityRoutes(deps: AppDeps) {
   /**
-   * Checks the current password (and authenticator code, if given) the way sign-in does: under the login lock, rate
-   * limit and lockout, recording the attempt. Runs `apply` in the same transaction only if the check passes.
+   * Checks the current password and second factor the way sign-in does: under the login lock, rate limit and lockout,
+   * recording the attempt and using up a recovery code. Runs `apply` in the same transaction only if the check passes.
    */
   async function reauthenticated<T>(
     ip: string,
@@ -43,12 +42,16 @@ export function securityRoutes(deps: AppDeps) {
       const user = await findUser(tx);
       if (!user) throw new AppError(409, 'setup_required', 'Finish setting up the budget first.');
       const passwordOk = await verifyPassword(user.passwordHash, credentials.currentPassword);
-      const codeOk =
-        credentials.totpCode === undefined ||
-        (await verifyTotp(decryptSecret(user.totpSecretEnc, deps.config.encryptionKey), credentials.totpCode, now));
-      const ok = passwordOk && codeOk;
+      const factor = await verifySecondFactor(user, credentials, now, deps.config.encryptionKey);
+      const ok = passwordOk && factor.ok;
       await recordLoginAttempt(tx, ip, ok, now);
-      return ok ? { ok: true, value: await apply(tx, user, now) } : { ok: false };
+      if (!ok) return { ok: false };
+
+      const recoveryCodeHashes = factor.remainingRecoveryHashes;
+      if (credentials.recoveryCode !== undefined) {
+        await tx.update(appUser).set({ recoveryCodeHashes }).where(eq(appUser.id, user.id));
+      }
+      return { ok: true, value: await apply(tx, { ...user, recoveryCodeHashes }, now) };
     });
     // Thrown after commit so the failed attempt stays recorded.
     if (!outcome.ok) throw new DomainError('invalid_credentials', 'Your current password or code is wrong.');
@@ -79,14 +82,20 @@ export function securityRoutes(deps: AppDeps) {
     })
     .post('/totp', signedIn, validate('json', confirmTotpRequestSchema), async (c) => {
       const body = c.req.valid('json');
-      // Only the password is re-checked: `totpCode` belongs to the new secret, and a wrong one isn't a failed sign-in.
-      const credentials = { currentPassword: body.currentPassword };
+      // The current factor proves who is asking (a recovery code covers a lost phone). `totpCode` belongs to the new
+      // secret, so a wrong one isn't a failed sign-in.
+      const credentials = {
+        currentPassword: body.currentPassword,
+        totpCode: body.currentTotpCode,
+        recoveryCode: body.recoveryCode,
+      };
       const confirmed = await reauthenticated(deps.clientIp(c), credentials, async (tx, user, now) => {
         if (!(await verifyTotp(body.totpSecret, body.totpCode, now))) return false;
         await tx
           .update(appUser)
           .set({ totpSecretEnc: encryptSecret(body.totpSecret, deps.config.encryptionKey) })
           .where(eq(appUser.id, user.id));
+        await deleteAllSessions(tx, { exceptId: c.var.session.id });
         return true;
       });
       if (!confirmed) {

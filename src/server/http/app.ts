@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { requestId } from 'hono/request-id';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ApiErrorBody } from '../../shared/http';
@@ -12,8 +13,8 @@ import type { Db } from '../db/client';
 import type { Logger } from '../logger';
 import type { ClientIpResolver } from './client-ip';
 import type { AppEnv } from './env';
-import { errorHandler } from './errors';
-import { csrfGuard, requestLogger } from './middleware';
+import { AppError, errorHandler } from './errors';
+import { csrfGuard, noStore, requestLogger } from './middleware';
 
 export interface AppDeps {
   db: Db;
@@ -40,7 +41,17 @@ export function createApp(deps: AppDeps) {
         xFrameOptions: 'DENY',
       }),
     )
+    .use('/api/*', noStore())
     .use('/api/*', csrfGuard())
+    .use(
+      '/api/*',
+      bodyLimit({
+        maxSize: 64 * 1024,
+        onError: () => {
+          throw new AppError(413, 'payload_too_large', 'Request body is too large.');
+        },
+      }),
+    )
     .get('/healthz', async (c) => {
       try {
         await deps.db.execute(sql`select 1`);
