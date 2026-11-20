@@ -75,7 +75,8 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - P2b2: a paired loan category's `debt/min_payment` target reads `account.min_payment`, which PATCH can clear (null);
   the month view must treat null as 0.
 - P2b2: reuse `budgetStartMonth()` and `MONTHS_AHEAD` from `src/server/budget/assignments.ts` for the month view and
-  auto-assign, and `setAssigned`/`addAssigned` for auto-assign writes.
+  auto-assign, and `setAssigned`/`addAssigned` for auto-assign writes. The month view's lower bound must be the
+  exported `firstEditableMonth()`, which also covers assignments and notes left before the budget start.
 - P2c: deleting an account is refused while soft-deleted transactions still reference it; decide whether account
   deletion should purge soft-deleted history.
 - P2c: undo/redo replays row by row (two queries per changed row); bulk operations over thousands of rows may need
@@ -85,3 +86,21 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - P2d: the scheduled-transaction job writes outside `runCommand` (no undo entry, redo kept) but should hold
   `lockCommands()` (advisory key 727274002) so it can't interleave with an undo replay.
 - P2d: `fxRate` is required to create a foreign-currency account; make it optional once the NBP lookup exists.
+
+## From P2b1 final review
+- P2b2: a snapshot round-trip (undo/redo) test matrix for every command: PATCH account with its rename cascade,
+  close/reopen, the reorders, group/category create/edit/move, month note, and the redo legs; plus a parallel
+  duplicate-create test. A catalog test that every timestamptz column has precision 3. Tests for malformed
+  `fxRate`/`interestRate`/date inputs.
+- P2c: transfers and splits must insert one side with a null link and then update it (replay is row by row, and there
+  is an FK self-reference and a transaction ↔ subtransaction cycle), with a round-trip test. Never run commands above
+  READ COMMITTED. Refuse soft-deleted and credit card payment categories on all writes. `isAccountInUse` should check
+  transfer-payee usage and not block on `payee.lastCategoryId` (clear it instead). Add indexes on
+  `transaction.transfer_txn_id`/`transfer_account_id`/`scheduled_id`, `subtransaction.transfer_txn_id` and
+  `scheduled_subtransaction.scheduled_id`. Batch large bulk operations (bind-parameter limit). Add a multi-row conflict
+  rollback test.
+- P2d: the scheduled job must take `lockCommands()`; add a `lock_timeout`. Mapping FK/unique violations during replay
+  to 409 `undo_conflict` now exists (P2b1 final review A1).
+- P3: build mutation responses inside the command (`rec.tx`), not after commit; consider returning the touched table
+  names from undo/redo for query invalidation; a zod abort skips `superRefine` (form UX); unify 404 vs 422 for unknown
+  ids in bodies; a lint rule forbidding direct `rec.tx` writes in command files.

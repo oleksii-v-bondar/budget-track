@@ -177,7 +177,9 @@ All amounts are PLN base. `m` = month, `c` = category.
   includes categorized transfers to tracking accounts (e.g. loan payments) and lines of split transactions.
 - **Available(c,m)** = Carry(c,m) + Assigned(c,m) + Activity(c,m)
 - **Carry(c,m)** = max(0, Available(c,m−1)). Negative Available never carries over.
-- Budget start month = min(`budget_start_month`, month of the earliest transaction). Months before it are empty.
+- Budget start month = min(`budget_start_month`, month of the earliest transaction). Assignments and month notes may
+  still exist before it (e.g. after the account with the earliest transaction is deleted); those months stay editable,
+  and the budget computation widens its range back to the earliest such month.
 - Hidden categories behave identically; they are only hidden in the UI.
 
 ### 5.2 Overspending (cash vs credit)
@@ -519,8 +521,10 @@ signs out other sessions.
 - **Auth failures** → 401 (no session) or 429 (rate limited / locked).
 - **Unexpected errors** → 500 with a generic message. The server logs details with pino (JSON to stdout, including a
   request ID); the UI shows a toast with Retry.
-- Each command runs in exactly one DB transaction (all-or-nothing). Transactions, subtransactions, categories and
-  payees are soft-deleted.
+- Each command runs in exactly one DB transaction (all-or-nothing). Transactions, subtransactions, categories,
+  category groups and payees are soft-deleted. The exception is deleting an account (allowed only while nothing else
+  refers to it): it hard-deletes the rows created with it, i.e. its starting balance, transfer payee and linked
+  categories (with their assignments and target). Otherwise these rows are only ever soft-deleted.
 - If the NBP client fails (timeout 5 s), it never blocks a save: the UI requires a manual rate instead.
 
 ## 14. Testing

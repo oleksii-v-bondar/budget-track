@@ -398,7 +398,10 @@ export const undoEntry = pgTable('undo_entry', {
 
 // ---------------------------------------------------------------- ledger view (spec §4.6)
 
-/** Read-only view created by migration 0001_ledger_view.sql; `.existing()` keeps drizzle-kit from managing it. */
+/**
+ * Read-only view created by 0001_ledger_view.sql, recreated by 0002_schema_hardening.sql; copy the latest definition
+ * when changing it. `.existing()` keeps drizzle-kit from managing it.
+ */
 export const ledgerLine = pgView('v_ledger_line', {
   accountId: uuid('account_id').notNull(),
   accountClass: text('account_class').$type<AccountClass>().notNull(),
