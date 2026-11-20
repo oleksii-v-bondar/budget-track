@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { loginRequestSchema } from '../../shared/auth';
 import { appUser } from '../db/schema';
@@ -7,7 +7,7 @@ import type { AppEnv } from '../http/env';
 import { AppError } from '../http/errors';
 import { validate } from '../http/validate';
 import { verifyPassword } from './passwords';
-import { assertLoginAllowed, recordLoginAttempt } from './rate-limit';
+import { recordLoginAttempt, withLoginLock } from './rate-limit';
 import { consumeRecoveryCode } from './recovery-codes';
 import { decryptSecret } from './secret-box';
 import { clearSessionCookie, createSession, deleteSession, requireSession, setSessionCookie } from './sessions';
@@ -19,13 +19,6 @@ export interface LoginResponse {
   recoveryCodesRemaining: number;
 }
 
-/**
- * Key for the transaction-scoped advisory lock that serializes sign-ins. Without it, parallel requests could all pass
- * the rate-limit and lockout checks before any attempt is recorded, or spend the same recovery code twice. Regenerating
- * recovery codes takes it too, so a sign-in can't write back the old codes.
- */
-export const LOGIN_LOCK_KEY = 727274001;
-
 type LoginOutcome = { ok: false } | { ok: true; token: string; remaining: number };
 
 export function loginRoutes(deps: AppDeps) {
@@ -33,11 +26,7 @@ export function loginRoutes(deps: AppDeps) {
     .post('/login', validate('json', loginRequestSchema), async (c) => {
       const body = c.req.valid('json');
       const ip = deps.clientIp(c);
-      const outcome = await deps.db.transaction(async (tx): Promise<LoginOutcome> => {
-        await tx.execute(sql`select pg_advisory_xact_lock(${LOGIN_LOCK_KEY}::bigint)`);
-        const now = deps.clock.now();
-        await assertLoginAllowed(tx, ip, now);
-
+      const outcome = await withLoginLock(deps.db, deps.clock, ip, async (tx, now): Promise<LoginOutcome> => {
         const user = await findUser(tx);
         if (!user) throw new AppError(409, 'setup_required', 'Finish setting up the budget first.');
 

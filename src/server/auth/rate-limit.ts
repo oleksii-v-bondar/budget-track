@@ -1,5 +1,6 @@
-import { and, count, desc, eq, gt, lt } from 'drizzle-orm';
-import type { Executor } from '../db/client';
+import { and, count, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import type { Clock } from '../clock';
+import type { Db, Executor, Tx } from '../db/client';
 import { loginAttempt } from '../db/schema';
 import { AppError } from '../http/errors';
 
@@ -40,4 +41,29 @@ export async function assertLoginAllowed(db: Executor, ip: string, now: Date): P
 export async function recordLoginAttempt(db: Executor, ip: string, success: boolean, now: Date): Promise<void> {
   await db.insert(loginAttempt).values({ ip, success, at: now });
   await db.delete(loginAttempt).where(lt(loginAttempt.at, new Date(now.getTime() - RETENTION_MS)));
+}
+
+/**
+ * Key for the transaction-scoped advisory lock that serializes sign-ins and re-authentication. Without it, parallel
+ * requests could all pass the rate-limit and lockout checks before any attempt is recorded, or spend the same recovery
+ * code twice. Regenerating recovery codes holds it too, so a sign-in can't write back the old codes.
+ */
+export const LOGIN_LOCK_KEY = 727274001;
+
+/**
+ * Runs `fn` in a transaction that holds the login lock, once `ip` has passed the rate limit and lockout checks.
+ * `fn` checks the credentials and records the attempt; a failure should be returned, not thrown, so it stays recorded.
+ */
+export function withLoginLock<T>(
+  db: Db,
+  clock: Clock,
+  ip: string,
+  fn: (tx: Tx, now: Date) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${LOGIN_LOCK_KEY}::bigint)`);
+    const now = clock.now();
+    await assertLoginAllowed(tx, ip, now);
+    return fn(tx, now);
+  });
 }
