@@ -82,25 +82,24 @@ export function securityRoutes(deps: AppDeps) {
     })
     .post('/totp', signedIn, validate('json', confirmTotpRequestSchema), async (c) => {
       const body = c.req.valid('json');
-      // The current factor proves who is asking (a recovery code covers a lost phone). `totpCode` belongs to the new
-      // secret, so a wrong one isn't a failed sign-in.
+      // Checked first, so a typo here can't use up the recovery code below. The client sent the secret, so this check
+      // reveals nothing and isn't a sign-in attempt.
+      if (!(await verifyTotp(body.totpSecret, body.totpCode, deps.clock.now()))) {
+        throw new DomainError('invalid_totp_code', "That code didn't match the new authenticator entry.");
+      }
+      // The current factor proves who is asking (a recovery code covers a lost phone).
       const credentials = {
         currentPassword: body.currentPassword,
         totpCode: body.currentTotpCode,
         recoveryCode: body.recoveryCode,
       };
-      const confirmed = await reauthenticated(deps.clientIp(c), credentials, async (tx, user, now) => {
-        if (!(await verifyTotp(body.totpSecret, body.totpCode, now))) return false;
+      await reauthenticated(deps.clientIp(c), credentials, async (tx, user) => {
         await tx
           .update(appUser)
           .set({ totpSecretEnc: encryptSecret(body.totpSecret, deps.config.encryptionKey) })
           .where(eq(appUser.id, user.id));
         await deleteAllSessions(tx, { exceptId: c.var.session.id });
-        return true;
       });
-      if (!confirmed) {
-        throw new DomainError('invalid_totp_code', "That code didn't match the new authenticator entry.");
-      }
       return c.json({ ok: true as const });
     })
     .post('/recovery-codes', signedIn, validate('json', reauthRequestSchema), async (c) => {

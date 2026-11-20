@@ -42,6 +42,9 @@ async function storedUser() {
   return user!;
 }
 
+const attemptsFrom = (ip: string) =>
+  t.db.select({ success: loginAttempt.success }).from(loginAttempt).where(eq(loginAttempt.ip, ip));
+
 const isSignedIn = (client: TestClient) =>
   client.get('/api/auth/status').then(async (r) => ((await r.json()) as { authenticated: boolean }).authenticated);
 
@@ -166,12 +169,46 @@ describe('authenticator rotation', () => {
     expect(res.body.code).toBe('invalid_totp_code');
     const [user] = await t.db.select().from(appUser);
     expect(decryptSecret(user!.totpSecretEnc, ctx.config.encryptionKey)).toBe(setup.totpSecret);
-    // The current password and code were right, so this is not a failed sign-in.
-    const attempts = await t.db
-      .select({ success: loginAttempt.success })
-      .from(loginAttempt)
-      .where(eq(loginAttempt.ip, ctx.client.ip));
-    expect(attempts).toEqual([{ success: true }]);
+    // The new code is checked before re-authenticating, so this is not a sign-in attempt at all.
+    expect(await attemptsFrom(ctx.client.ip)).toEqual([]);
+  });
+
+  it('keeps the recovery code if the confirmation code is wrong', async () => {
+    const before = (await storedUser()).recoveryCodeHashes;
+    const res = await call(ctx.client, '/api/auth/totp', {
+      currentPassword: TEST_PASSWORD,
+      recoveryCode: setup.recoveryCodes[1],
+      totpSecret: await newSecret(),
+      totpCode: '000000',
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('invalid_totp_code');
+    const user = await storedUser();
+    expect(user.recoveryCodeHashes).toHaveLength(10);
+    expect(user.recoveryCodeHashes).toEqual(before);
+    expect(decryptSecret(user.totpSecretEnc, ctx.config.encryptionKey)).toBe(setup.totpSecret);
+    expect(await attemptsFrom(ctx.client.ip)).toEqual([]);
+  });
+
+  it('keeps a valid recovery code if the current password is wrong', async () => {
+    const secret = await newSecret();
+    const recoveryCode = setup.recoveryCodes[3]!;
+    const res = await call(ctx.client, '/api/auth/totp', {
+      currentPassword: 'wrong',
+      recoveryCode,
+      totpSecret: secret,
+      totpCode: await totpCode(secret, ctx.clock.now()),
+    });
+    expect(res).toEqual({
+      status: 422,
+      body: { code: 'invalid_credentials', message: 'Your current password or code is wrong.' },
+    });
+    expect((await storedUser()).recoveryCodeHashes).toHaveLength(setup.recoveryCodes.length);
+    const later = await new TestClient(ctx.app, '198.51.100.8').post('/api/auth/login', {
+      password: TEST_PASSWORD,
+      recoveryCode,
+    });
+    expect(later.status).toBe(200);
   });
 
   it('refuses a wrong current password', async () => {
