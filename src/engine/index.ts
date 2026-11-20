@@ -6,3 +6,4 @@ export * from './budget/types';
 export { computeBudget, cardPaymentShortfall } from './budget/compute';
 export * from './loans';
 export * from './targets';
+export * from './autoAssign';
