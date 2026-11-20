@@ -8,6 +8,7 @@ import { accountRoutes } from '../accounts/account-routes';
 import { loginRoutes } from '../auth/login-routes';
 import { securityRoutes } from '../auth/security-routes';
 import { setupRoutes } from '../auth/setup-routes';
+import { budgetRoutes } from '../budget/budget-routes';
 import { categoryRoutes } from '../categories/category-routes';
 import { groupRoutes } from '../categories/group-routes';
 import type { Clock } from '../clock';
@@ -74,7 +75,8 @@ export function createApp(deps: AppDeps) {
     .route('/api/redo', redoRoutes(deps))
     .route('/api/accounts', accountRoutes(deps))
     .route('/api/category-groups', groupRoutes(deps))
-    .route('/api/categories', categoryRoutes(deps));
+    .route('/api/categories', categoryRoutes(deps))
+    .route('/api/budget', budgetRoutes(deps));
 
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);
