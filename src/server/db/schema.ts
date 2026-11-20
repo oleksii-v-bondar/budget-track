@@ -12,6 +12,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  pgView,
   primaryKey,
   smallint,
   text,
@@ -372,3 +373,21 @@ export const undoEntry = pgTable('undo_entry', {
   state: undoState('state').notNull().default('done'),
   createdAt: instant('created_at').defaultNow().notNull(),
 });
+
+// ---------------------------------------------------------------- ledger view (spec §4.6)
+
+/** Read-only view created by migration 0001_ledger_view.sql; `.existing()` keeps drizzle-kit from managing it. */
+export const ledgerLine = pgView('v_ledger_line', {
+  accountId: uuid('account_id').notNull(),
+  accountClass: text('account_class').notNull(),
+  date: day('date').notNull(),
+  month: day('month').notNull(),
+  categoryId: uuid('category_id'),
+  amount: money('amount').notNull(),
+  amountBase: money('amount_base').notNull(),
+  isTransfer: boolean('is_transfer').notNull(),
+  counterAccountClass: text('counter_account_class'),
+  isStartingBalance: boolean('is_starting_balance').notNull(),
+  txnId: uuid('txn_id').notNull(),
+  subtxnId: uuid('subtxn_id'),
+}).existing();
