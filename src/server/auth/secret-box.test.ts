@@ -24,4 +24,20 @@ describe('secret box', () => {
     expect(() => decryptSecret('v0.a.b.c', key)).toThrow('Unsupported encrypted secret format');
     expect(() => encryptSecret('x', Buffer.alloc(16))).toThrow('32 bytes');
   });
+
+  it('rejects a truncated auth tag', () => {
+    const [v, iv, tag, data] = encryptSecret('secret', key).split('.');
+    const shortTag = Buffer.from(tag!, 'base64url').subarray(0, 4).toString('base64url');
+    expect(() => decryptSecret([v, iv, shortTag, data].join('.'), key)).toThrow();
+  });
+
+  it('rejects a payload with extra segments', () => {
+    const payload = `${encryptSecret('secret', key)}.junk`;
+    expect(() => decryptSecret(payload, key)).toThrow('Unsupported encrypted secret format');
+  });
+
+  it('rejects a short key when decrypting', () => {
+    const payload = encryptSecret('secret', key);
+    expect(() => decryptSecret(payload, Buffer.alloc(16, 3))).toThrow('32 bytes');
+  });
 });
