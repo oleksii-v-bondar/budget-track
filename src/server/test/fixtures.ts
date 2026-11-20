@@ -1,5 +1,6 @@
 import type { AccountDto, CreateAccountRequest } from '../../shared/api/accounts';
 import type { CategoryDto, CategoryGroupDto } from '../../shared/api/categories';
+import type { PayeeDto } from '../../shared/api/payees';
 import type { Db } from '../db/client';
 import { transaction } from '../db/schema';
 import type { TestClient } from './http-client';
@@ -24,6 +25,10 @@ export async function createGroup(client: TestClient, name: string): Promise<Cat
 
 export async function createCategory(client: TestClient, groupId: string, name: string): Promise<CategoryDto> {
   return created(await client.post('/api/categories', { groupId, name }), 'createCategory');
+}
+
+export async function createPayee(client: TestClient, name: string): Promise<PayeeDto> {
+  return created(await client.post('/api/payees', { name }), 'createPayee');
 }
 
 export type NewTransaction = Partial<typeof transaction.$inferInsert> &
