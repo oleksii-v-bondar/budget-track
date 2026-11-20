@@ -42,6 +42,18 @@ describe('spending targets: weekly and monthly', () => {
     expect(evaluateTarget(t, ctx({ carry: 40_000, assigned: 0 }))).toMatchObject({ need: 50_000, underfunded: 10_000 });
     expect(evaluateTarget(t, ctx({ carry: 40_000, assigned: 10_000 }))?.underfunded).toBe(0);
   });
+
+  it('weekly without a weekday throws', () => {
+    const t = target({ cadence: 'weekly', amount: 10_000, dueWeekday: null });
+    expect(() => evaluateTarget(t, ctx({}))).toThrow('A weekly target needs dueWeekday');
+  });
+
+  it('a spending target without a cadence throws', () => {
+    const t = target({ cadence: 'none', amount: 10_000 });
+    expect(() => evaluateTarget(t, ctx({}))).toThrow(
+      'A spending target needs a weekly, monthly, yearly or custom cadence',
+    );
+  });
 });
 
 describe('spending targets: yearly and custom', () => {
@@ -74,6 +86,13 @@ describe('spending targets: yearly and custom', () => {
   it('custom without repeat: everything is due at once when overdue', () => {
     const once = target({ cadence: 'custom', amount: 50_000, dueDate: '2026-03-10', mode: 'refill' });
     expect(evaluateTarget(once, ctx({ month: '2026-05', carry: 30_000 }))?.need).toBe(20_000);
+  });
+
+  it.each([0, -1])('custom: rejects repeatEvery %i instead of looping forever', (repeatEvery) => {
+    const t = target({ cadence: 'custom', amount: 30_000, dueDate: '2026-03-10', repeatUnit: 'month', repeatEvery });
+    expect(() => evaluateTarget(t, ctx({ month: '2026-05' }))).toThrow(
+      `Target repeatEvery must be an integer ≥ 1, got ${repeatEvery}`,
+    );
   });
 });
 
@@ -114,6 +133,11 @@ describe('debt targets', () => {
   it('requires debt context', () => {
     const t = target({ kind: 'debt', cadence: 'none', mode: null, debtMode: 'min_payment' });
     expect(() => evaluateTarget(t, ctx({}))).toThrow('debt');
+  });
+
+  it('requires a debt mode', () => {
+    const t = target({ kind: 'debt', cadence: 'none', mode: null, debtMode: null, dueDate: '2026-12-01' });
+    expect(() => evaluateTarget(t, ctx({ debt }))).toThrow('A debt target needs debtMode');
   });
 });
 

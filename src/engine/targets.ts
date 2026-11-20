@@ -55,11 +55,21 @@ function requireDueDate(t: TargetDef): IsoDate {
   return t.dueDate;
 }
 
+/** Months between due dates, or null when the target doesn't repeat. */
+function repeatStep(t: TargetDef): number | null {
+  if (t.cadence === 'yearly') return 12;
+  if (!t.repeatUnit) return null;
+  const every = t.repeatEvery ?? 1;
+  if (!Number.isInteger(every) || every < 1) {
+    throw new Error(`Target repeatEvery must be an integer ≥ 1, got ${every}`);
+  }
+  return every * (t.repeatUnit === 'year' ? 12 : 1);
+}
+
 /** The due month that applies to `month` and the first month of its funding cycle. */
 function dueCycle(t: TargetDef, month: Month): { dueMonth: Month; cycleStart: Month } {
   const firstDue = monthOf(requireDueDate(t));
-  const step =
-    t.cadence === 'yearly' ? 12 : t.repeatUnit ? (t.repeatEvery ?? 1) * (t.repeatUnit === 'year' ? 12 : 1) : null;
+  const step = repeatStep(t);
   if (step === null) return { dueMonth: firstDue, cycleStart: t.startMonth };
   let dueMonth = firstDue;
   let previousDue: Month | null = null;
@@ -73,8 +83,14 @@ function dueCycle(t: TargetDef, month: Month): { dueMonth: Month; cycleStart: Mo
 
 function computeNeed(t: TargetDef, ctx: TargetContext): Money {
   if (t.kind === 'spending') {
-    if (t.cadence === 'weekly') return t.amount * countWeekdayInMonth(ctx.month, t.dueWeekday ?? 0);
+    if (t.cadence === 'weekly') {
+      if (t.dueWeekday === null) throw new Error('A weekly target needs dueWeekday');
+      return t.amount * countWeekdayInMonth(ctx.month, t.dueWeekday);
+    }
     if (t.cadence === 'monthly') return t.amount;
+    if (t.cadence === 'none') {
+      throw new Error('A spending target needs a weekly, monthly, yearly or custom cadence');
+    }
     const { dueMonth, cycleStart } = dueCycle(t, ctx.month);
     const fundedBefore =
       t.mode === 'refill'
@@ -86,6 +102,7 @@ function computeNeed(t: TargetDef, ctx: TargetContext): Money {
     const remaining = Math.max(0, t.amount - ctx.carry);
     return t.dueDate ? ceilDiv(remaining, monthsLeft(ctx.month, monthOf(t.dueDate))) : remaining;
   }
+  if (t.debtMode === null) throw new Error('A debt target needs debtMode');
   if (!ctx.debt) throw new Error('Debt targets need debt context (linked account data)');
   if (t.debtMode === 'min_payment') return ctx.debt.minPayment;
   if (t.debtMode === 'fixed') return t.amount;
