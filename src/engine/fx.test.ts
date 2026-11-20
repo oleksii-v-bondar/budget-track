@@ -44,6 +44,12 @@ describe('transferBases', () => {
     ).toEqual({ fromBase: -43_000, toBase: 43_000 });
   });
 
+  it('needs no rate on the foreign side when the other side is PLN', () => {
+    expect(
+      transferBases('PLN', { amount: -9_300, currency: 'EUR', rate: null }, { amount: 40_000, currency: 'PLN', rate: null }),
+    ).toEqual({ fromBase: -40_000, toBase: 40_000 });
+  });
+
   it('requires a rate for a foreign source', () => {
     expect(() =>
       transferBases('PLN', { amount: -1, currency: 'EUR', rate: null }, { amount: 1, currency: 'USD', rate: null }),

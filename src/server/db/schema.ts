@@ -298,18 +298,22 @@ export const scheduledTransaction = pgTable('scheduled_transaction', {
   ...timestamps,
 });
 
-export const scheduledSubtransaction = pgTable('scheduled_subtransaction', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  scheduledId: uuid('scheduled_id')
-    .notNull()
-    .references(() => scheduledTransaction.id),
-  amount: money('amount').notNull(),
-  categoryId: uuid('category_id').references(() => category.id),
-  payeeId: uuid('payee_id').references(() => payee.id),
-  memo: text('memo'),
-  transferAccountId: uuid('transfer_account_id').references(() => account.id),
-  sortOrder: integer('sort_order').notNull().default(0),
-});
+export const scheduledSubtransaction = pgTable(
+  'scheduled_subtransaction',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    scheduledId: uuid('scheduled_id')
+      .notNull()
+      .references(() => scheduledTransaction.id),
+    amount: money('amount').notNull(),
+    categoryId: uuid('category_id').references(() => category.id),
+    payeeId: uuid('payee_id').references(() => payee.id),
+    memo: text('memo'),
+    transferAccountId: uuid('transfer_account_id').references(() => account.id),
+    sortOrder: integer('sort_order').notNull().default(0),
+  },
+  (t) => [index('scheduled_subtransaction_scheduled_id').on(t.scheduledId)],
+);
 
 export const transaction = pgTable(
   'transaction',
@@ -347,6 +351,10 @@ export const transaction = pgTable(
     index('transaction_date').on(t.date),
     index('transaction_category_id').on(t.categoryId),
     index('transaction_payee_id').on(t.payeeId),
+    // Transfer sides, line counterparts and schedule occurrences are looked up (and checked by FKs) through these.
+    index('transaction_transfer_txn_id').on(t.transferTxnId),
+    index('transaction_transfer_account_id').on(t.transferAccountId),
+    index('transaction_scheduled_id').on(t.scheduledId),
     uniqueIndex('transaction_import_id').on(t.accountId, t.importId).where(sql`${t.importId} IS NOT NULL`),
     uniqueIndex('transaction_external_id').on(t.accountId, t.externalId).where(sql`${t.externalId} IS NOT NULL`),
   ],
@@ -370,7 +378,11 @@ export const subtransaction = pgTable(
     deletedAt: instant('deleted_at'),
     ...timestamps,
   },
-  (t) => [index('subtransaction_txn_id').on(t.txnId), index('subtransaction_category_id').on(t.categoryId)],
+  (t) => [
+    index('subtransaction_txn_id').on(t.txnId),
+    index('subtransaction_category_id').on(t.categoryId),
+    index('subtransaction_transfer_txn_id').on(t.transferTxnId),
+  ],
 );
 
 // ---------------------------------------------------------------- support (spec §4.5)

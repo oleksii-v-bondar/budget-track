@@ -1,6 +1,7 @@
 import type { CreateTransactionRequest } from '../../shared/api/transactions';
 import type { IsoDate } from '../../engine';
 import type { ChangeRecorder } from '../commands/recorder';
+import { DomainError } from '../http/errors';
 import { findOrCreatePayee } from '../payees/payee-commands';
 import { type Draft, planTransaction } from './plan';
 import { insertPlan, insertSchedule } from './write';
@@ -38,6 +39,7 @@ export async function createTransaction(
     categoryId: input.categoryId,
     memo: input.memo || null,
     amount: input.amount,
+    transferAmount: input.transferAmount ?? null,
     fxRate: input.fxRate ?? null,
     cleared: input.cleared,
     approved: true,
@@ -46,6 +48,14 @@ export async function createTransaction(
   const plan = await planTransaction(rec.tx, draft);
   const payeeName = plan.payee?.name ?? null;
   if (draft.date > today) {
+    if (plan.transfer && plan.transfer.currency !== plan.account.currency) {
+      // A schedule has no column for the other side's amount.
+      throw new DomainError(
+        'future_transfer_currency',
+        "Transfers between currencies can't be dated in the future yet.",
+        'date',
+      );
+    }
     return { kind: 'scheduled', id: await insertSchedule(rec, draft, plan), date: draft.date, payeeName };
   }
   return { kind: 'transaction', id: await insertPlan(rec, plan), date: draft.date, payeeName };

@@ -10,16 +10,25 @@ async function rememberCategory(rec: ChangeRecorder, plan: Plan): Promise<void> 
   await rec.update(payee, eq(payee.id, payeeId), { lastCategoryId: categoryId });
 }
 
-/** Writes a new transaction from its plan; returns its id. */
+/**
+ * Writes a new transaction from its plan; returns its id. The two sides of a transfer point at each other through
+ * `transfer_txn_id` (inserted first, then linked, because the foreign keys are checked immediately).
+ */
 export async function insertPlan(rec: ChangeRecorder, plan: Plan): Promise<string> {
   const [main] = await rec.insert(transaction, plan.main);
+  const id = main!.id;
+  if (plan.counterpart) {
+    const [other] = await rec.insert(transaction, { ...plan.counterpart, transferTxnId: id });
+    await rec.update(transaction, eq(transaction.id, id), { transferTxnId: other!.id });
+  }
   await rememberCategory(rec, plan);
-  return main!.id;
+  return id;
 }
 
 /**
  * Spec §5.6: a transaction dated after today is stored as a one-time scheduled transaction instead (anchor and next
- * date = its date). P2d's job enters it on that day and computes its PLN amount then.
+ * date = its date). P2d's job enters it on that day and computes its PLN amount then. A transfer keeps the category
+ * as entered; entering it puts the category on the budget side.
  */
 export async function insertSchedule(rec: ChangeRecorder, draft: Draft, plan: Plan): Promise<string> {
   const [schedule] = await rec.insert(scheduledTransaction, {
@@ -31,6 +40,7 @@ export async function insertSchedule(rec: ChangeRecorder, draft: Draft, plan: Pl
     fxRate: plan.main.fxRate,
     fxRateManual: plan.main.fxRateManual,
     flag: draft.flag,
+    transferAccountId: plan.main.transferAccountId,
     frequency: 'once',
     anchorDate: draft.date,
     nextDate: draft.date,

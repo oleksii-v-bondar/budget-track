@@ -178,3 +178,21 @@ describe('schema hardening (P2b1)', () => {
     expect(rows.map((r) => r.conname)).toEqual([]);
   });
 });
+
+describe('transaction link indexes (P2c)', () => {
+  it('indexes the links between transfer sides, split lines, counterparts and schedules', async () => {
+    const rows = await t.db.execute<{ indexname: string; indexdef: string }>(
+      sql`select indexname, indexdef from pg_indexes
+          where indexname in ('transaction_transfer_txn_id', 'transaction_transfer_account_id',
+            'transaction_scheduled_id', 'subtransaction_transfer_txn_id', 'scheduled_subtransaction_scheduled_id')
+          order by indexname`,
+    );
+    expect(rows.map((r) => [r.indexname, r.indexdef.replace(/^.* USING btree /, '')])).toEqual([
+      ['scheduled_subtransaction_scheduled_id', '(scheduled_id)'],
+      ['subtransaction_transfer_txn_id', '(transfer_txn_id)'],
+      ['transaction_scheduled_id', '(scheduled_id)'],
+      ['transaction_transfer_account_id', '(transfer_account_id)'],
+      ['transaction_transfer_txn_id', '(transfer_txn_id)'],
+    ]);
+  });
+});

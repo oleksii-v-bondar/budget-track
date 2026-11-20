@@ -22,6 +22,10 @@ export const transactionDateSchema = isoDateSchema.refine((date) => date >= '197
  * POST /api/transactions. `amount` is in the account's currency (minor units, signed: + inflow, − outflow).
  * Choose an existing payee by `payeeId` or name one with `payeeName` (reused if a payee with that name exists,
  * otherwise created). A `date` after today (in the budget's time zone) is saved as a one-time scheduled transaction.
+ *
+ * Choosing an account's "Transfer : <name>" payee makes a transfer (spec §10): the other side is created in that
+ * account. A transfer between a budget and a tracking account needs `categoryId`, which is stored on the budget side;
+ * other transfers take none (spec §5.5).
  */
 export const createTransactionRequestSchema = z
   .object({
@@ -34,7 +38,12 @@ export const createTransactionRequestSchema = z
     categoryId: idSchema.nullable().default(null),
     memo: memoSchema.default(''),
     amount: moneySchema,
-    /** Rate to PLN; required for foreign-currency accounts until the NBP lookup exists (P2d). */
+    /** Transfers between currencies: the other account's native amount (opposite sign). */
+    transferAmount: moneySchema.optional(),
+    /**
+     * Rate to PLN; required for foreign-currency accounts until the NBP lookup exists (P2d). For a transfer between
+     * two foreign-currency accounts it is the rate of the sending account's currency (spec §9).
+     */
     fxRate: fxRateSchema.optional(),
     cleared: userClearedSchema.default('uncleared'),
     flag: flagSchema.nullable().default(null),

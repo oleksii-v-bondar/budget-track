@@ -103,6 +103,41 @@ export function categoryNotAllowed(message: string, field: string): DomainError 
 
 export const TRACKING_NO_CATEGORY = "Transactions in tracking accounts don't take a category.";
 
+/**
+ * Spec §5.5: a transfer between a budget and a tracking account carries a category on its budget side (wherever it
+ * was entered from); transfers between two budget or two tracking accounts carry none.
+ */
+export async function placeTransferCategory(
+  db: Executor,
+  here: AccountInfo,
+  there: AccountInfo,
+  categoryId: string | null,
+  field: string,
+): Promise<{ here: string | null; there: string | null }> {
+  if (onBudget(here) === onBudget(there)) {
+    if (categoryId !== null) {
+      throw categoryNotAllowed(
+        "Transfers between two budget accounts, or two tracking accounts, don't take a category.",
+        field,
+      );
+    }
+    return { here: null, there: null };
+  }
+  if (categoryId === null) {
+    throw new DomainError(
+      'category_required',
+      'Choose a category for the budget side of a transfer to or from a tracking account.',
+      field,
+    );
+  }
+  await assertUsableCategory(db, categoryId, field);
+  return onBudget(here) ? { here: categoryId, there: null } : { here: null, there: categoryId };
+}
+
+export function assertNotSelf(here: AccountInfo, there: AccountInfo, field: string): void {
+  if (here.id === there.id) throw new DomainError('transfer_to_self', 'A transfer needs two different accounts.', field);
+}
+
 /** Picks the rate a foreign amount is booked at: the one sent with the request, else the one already stored. */
 export interface Rates {
   /** The `fxRate` of the request. */
