@@ -19,12 +19,27 @@ export async function budgetStartMonth(db: Executor): Promise<Month> {
     .select({ date: sql<IsoDate | null>`min(${transaction.date})` })
     .from(transaction)
     .where(isNull(transaction.deletedAt));
-  const starts = [user!.start, earliest?.date].filter((d): d is IsoDate => !!d).map(monthOf);
-  return starts.reduce((a, b) => (a < b ? a : b));
+  return earliestMonth([user!.start, earliest?.date]);
+}
+
+const earliestMonth = (dates: (IsoDate | null | undefined)[]): Month =>
+  dates
+    .filter((d): d is IsoDate => !!d)
+    .map(monthOf)
+    .reduce((a, b) => (a < b ? a : b));
+
+/**
+ * The budget start can move later (e.g. when the only early account is deleted); earlier months that still hold an
+ * assignment or a note stay editable so those rows can be changed or cleared.
+ */
+async function firstEditableMonth(db: Executor): Promise<Month> {
+  const [held] = await db.select({ date: sql<IsoDate | null>`min(${assignment.month})` }).from(assignment);
+  const [noted] = await db.select({ date: sql<IsoDate | null>`min(${monthNote.month})` }).from(monthNote);
+  return earliestMonth([monthStart(await budgetStartMonth(db)), held?.date, noted?.date]);
 }
 
 export async function assertBudgetMonth(db: Executor, month: Month, today: IsoDate): Promise<void> {
-  const first = await budgetStartMonth(db);
+  const first = await firstEditableMonth(db);
   const last = addMonths(monthOf(today), MONTHS_AHEAD);
   if (month < first || month > last) {
     throw new DomainError('month_out_of_range', `Pick a month from ${first} to ${last}.`);
@@ -70,7 +85,10 @@ export async function addAssigned(rec: ChangeRecorder, categoryId: string, month
   await setAssigned(rec, categoryId, month, (await assignedIn(rec.tx, categoryId, month)) + delta);
 }
 
-/** Spec §3: moving to or from Ready to Assign (null) changes only the other category's Assigned. */
+/**
+ * Spec §3: moving to or from Ready to Assign (null) changes only the other category's Assigned.
+ * Like `setAssigned`, it expects the caller to have checked the categories (`assignableCategory`) and the month.
+ */
 export async function moveMoney(rec: ChangeRecorder, month: Month, move: MoveMoneyRequest): Promise<string[]> {
   const touched: string[] = [];
   for (const [id, delta] of [
@@ -78,7 +96,6 @@ export async function moveMoney(rec: ChangeRecorder, month: Month, move: MoveMon
     [move.to, move.amount],
   ] as const) {
     if (id === null) continue;
-    await assignableCategory(rec.tx, id);
     await addAssigned(rec, id, month, delta);
     touched.push(id);
   }

@@ -93,6 +93,26 @@ describe('PUT /api/budget/:month/assignments/:categoryId', () => {
     expect(await json(await assign('2026-02', groceries.id, 1))).toEqual(outOfRange('2026-03'));
   });
 
+  it('keeps a month with assignments editable after the budget start moves later', async () => {
+    const cash = await createAccount(ctx.client, { name: 'Cash', type: 'cash', startingDate: '2026-03-15' });
+    await assign('2026-03', groceries.id, 2_000);
+    expect((await ctx.client.send('DELETE', `/api/accounts/${cash.id}`)).status).toBe(200);
+
+    expect((await assign('2026-03', groceries.id, 0)).status).toBe(200);
+    expect(await assignments()).toEqual([]);
+    expect((await json(await assign('2026-03', groceries.id, 1))).body).toMatchObject({ code: 'month_out_of_range' });
+  });
+
+  it('reports an unknown or unassignable category before an out-of-range month', async () => {
+    expect(await json(await assign('2026-10', crypto.randomUUID(), 1))).toEqual({
+      status: 404,
+      body: { code: 'not_found', message: 'Category not found.' },
+    });
+    expect((await json(await assign('2026-10', await systemCategoryId(t.db, 'rta'), 1))).body).toMatchObject({
+      code: 'category_not_assignable',
+    });
+  });
+
   it('validates the month format and whole, safe amounts', async () => {
     const fieldErrors = async (res: Response) =>
       ((await res.json()) as { fieldErrors: Record<string, string[]> }).fieldErrors;
@@ -130,12 +150,22 @@ describe('POST /api/budget/:month/move', () => {
     expect(await assignments()).toEqual([{ categoryId: rent.id, month: '2026-12-01', amount: -500 }]);
   });
 
+  it('reports an unknown category before an out-of-range month', async () => {
+    expect(await json(await move('2026-10', { from: rent.id, to: crypto.randomUUID(), amount: 1 }))).toEqual({
+      status: 404,
+      body: { code: 'not_found', message: 'Category not found.' },
+    });
+  });
+
   it('rejects moves without two different places, non-positive amounts and system categories', async () => {
     const bad = async (body: object) => (await json(await move('2026-11', body))).body;
     expect(await bad({ from: null, to: null, amount: 1 })).toMatchObject({
       fieldErrors: { to: ['Choose two different places to move money between.'] },
     });
     expect(await bad({ from: rent.id, to: rent.id, amount: 1 })).toMatchObject({ code: 'validation' });
+    expect(await bad({ from: rent.id, to: rent.id.toUpperCase(), amount: 1 })).toEqual(
+      await bad({ from: rent.id, to: rent.id, amount: 1 }),
+    );
     expect(await bad({ from: rent.id, to: groceries.id, amount: 0 })).toMatchObject({
       fieldErrors: { amount: ['Enter an amount greater than 0.'] },
     });
@@ -169,5 +199,15 @@ describe('PUT /api/budget/:month/note', () => {
     expect(await t.db.select({ note: monthNote.note }).from(monthNote)).toEqual([
       { note: 'Holiday gifts and car insurance' },
     ]);
+  });
+
+  it('keeps a noted month clearable after the budget start moves later', async () => {
+    const put = (note: string) => ctx.client.send('PUT', '/api/budget/2026-03/note', { note });
+    const cash = await createAccount(ctx.client, { name: 'Cash', type: 'cash', startingDate: '2026-03-15' });
+    await put('Tax refund');
+    expect((await ctx.client.send('DELETE', `/api/accounts/${cash.id}`)).status).toBe(200);
+
+    expect(await json(await put(''))).toEqual({ status: 200, body: { month: '2026-03', note: null } });
+    expect(await t.db.select().from(monthNote)).toEqual([]);
   });
 });

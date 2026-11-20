@@ -9,7 +9,8 @@ export const isoDateSchema = z.iso.date('Use the format YYYY-MM-DD.');
 /** A budget month in URLs and bodies; stored as its first day ('YYYY-MM-01'). */
 export const monthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Use the format YYYY-MM.');
 
-export const idSchema = z.uuid('Invalid id.');
+/** Lowercased, so ids that differ only in letter case compare equal. */
+export const idSchema = z.uuid('Invalid id.').transform((id) => id.toLowerCase());
 export const idParamSchema = z.object({ id: idSchema });
 
 export const nameSchema = z.string().trim().min(1, 'Enter a name.').max(100, 'Use at most 100 characters.');

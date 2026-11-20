@@ -33,8 +33,9 @@ export function budgetRoutes(deps: AppDeps) {
           deps,
           (r: Named) => `Assign money to "${r.name}"`,
           async (rec) => {
-            await assertBudgetMonth(rec.tx, month, today());
+            // A missing or unassignable category is reported before an out-of-range month.
             const target = await assignableCategory(rec.tx, categoryId);
+            await assertBudgetMonth(rec.tx, month, today());
             await setAssigned(rec, categoryId, month, amount);
             return target;
           },
@@ -46,6 +47,7 @@ export function budgetRoutes(deps: AppDeps) {
       const { month } = c.req.valid('param');
       const body = c.req.valid('json');
       const touched = await runCommand(deps, 'Move money', async (rec) => {
+        for (const id of [body.from, body.to]) if (id !== null) await assignableCategory(rec.tx, id);
         await assertBudgetMonth(rec.tx, month, today());
         return moveMoney(rec, month, body);
       });
