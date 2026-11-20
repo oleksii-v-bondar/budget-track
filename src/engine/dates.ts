@@ -6,6 +6,12 @@ const DAY_MS = 86_400_000;
 
 const pad = (n: number, width = 2) => String(n).padStart(width, '0');
 
+const lastDayOf = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+function assertInteger(n: number): void {
+  if (!Number.isInteger(n)) throw new Error(`n must be an integer, got ${n}`);
+}
+
 function parseMonth(month: Month): { year: number; month: number } {
   const match = MONTH_RE.exec(month);
   const year = Number(match?.[1]);
@@ -19,7 +25,9 @@ function parseDate(date: IsoDate): { year: number; month: number; day: number } 
   const year = Number(match?.[1]);
   const month = Number(match?.[2]);
   const day = Number(match?.[3]);
-  if (!match || month < 1 || month > 12 || day < 1 || day > 31) throw new Error(`Invalid date: "${date}"`);
+  if (!match || month < 1 || month > 12 || day < 1 || day > lastDayOf(year, month)) {
+    throw new Error(`Invalid date: "${date}"`);
+  }
   return { year, month, day };
 }
 
@@ -39,6 +47,7 @@ export function monthOf(date: IsoDate): Month {
 }
 
 export function addMonths(month: Month, n: number): Month {
+  assertInteger(n);
   const { year, month: m } = parseMonth(month);
   const index = year * 12 + (m - 1) + n;
   return `${pad(Math.floor(index / 12), 4)}-${pad((index % 12) + 1)}`;
@@ -59,15 +68,17 @@ export function monthRange(from: Month, to: Month): Month[] {
 
 export function daysInMonth(month: Month): number {
   const { year, month: m } = parseMonth(month);
-  return new Date(Date.UTC(year, m, 0)).getUTCDate();
+  return lastDayOf(year, m);
 }
 
-/** The given day of `month`, clamped to the month's last day. */
+/** The given day (integer 1–31) of `month`, clamped to the month's last day. */
 export function dateInMonth(month: Month, day: number): IsoDate {
+  if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error(`Invalid day: ${day}`);
   return `${month}-${pad(Math.min(day, daysInMonth(month)))}`;
 }
 
 export function addDays(date: IsoDate, n: number): IsoDate {
+  assertInteger(n);
   return fromUtcMs(toUtcMs(date) + n * DAY_MS);
 }
 
@@ -81,10 +92,11 @@ export function weekday(date: IsoDate): number {
   return new Date(toUtcMs(date)).getUTCDay();
 }
 
-/** How many times weekday `wd` (0 = Sunday) occurs in `month`. */
+/** How many times weekday `wd` (0 = Sunday … 6 = Saturday) occurs in `month`. */
 export function countWeekdayInMonth(month: Month, wd: number): number {
+  if (!Number.isInteger(wd) || wd < 0 || wd > 6) throw new Error(`Invalid weekday: ${wd}`);
   const first = weekday(dateInMonth(month, 1));
   const days = daysInMonth(month);
   const offset = (wd - first + 7) % 7;
-  return offset >= days ? 0 : Math.floor((days - 1 - offset) / 7) + 1;
+  return Math.floor((days - 1 - offset) / 7) + 1;
 }
