@@ -49,12 +49,17 @@ function average(values: Money[]): Money {
   return Number(roundDiv(BigInt(values.reduce((s, v) => s + v, 0)), BigInt(values.length)));
 }
 
-/** Computes new assigned amounts for `month`; returns only categories whose amount changes. */
+/**
+ * Computes new assigned amounts for `month`, which must be in `budget`; returns only categories whose amount changes.
+ * Callers leave system categories out of `categoryIds`: `computeBudget` refuses assignments to Uncategorized.
+ */
 export function autoAssign(args: AutoAssignArgs): AssignmentChange[] {
   const { budget, month, strategy } = args;
+  const current = budget.byMonth[month];
+  if (!current) throw new Error(`autoAssign: month ${month} is not in the computed budget`);
   const last = addMonths(month, -1);
   const history = previousMonths(budget, month);
-  let remaining = budget.byMonth[month]?.rta.readyToAssign ?? 0;
+  let remaining = current.rta.readyToAssign;
   if (strategy === 'underfunded' && !args.underfunded) throw new Error('The underfunded strategy needs underfunded amounts');
   for (const [categoryId, amount] of Object.entries(args.underfunded ?? {})) {
     assertMoney(amount, `underfunded.${categoryId}`);

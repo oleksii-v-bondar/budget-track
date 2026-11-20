@@ -17,7 +17,10 @@ function interestAt(balance: Money, scaledApr: bigint): Money {
   return Number(roundDiv(BigInt(Math.abs(balance)) * scaledApr, MONTHLY_APR_DIVISOR));
 }
 
-/** Interest for one month: |balance| × APR / 12, rounded half away from zero. `apr` is a percentage, e.g. "6.5". */
+/**
+ * Interest for one month: |balance| × APR / 12, rounded half away from zero, so ≥ 0 whatever the balance's sign.
+ * `apr` is a percentage, e.g. "6.5".
+ */
 export function monthlyInterest(balance: Money, apr: string): Money {
   return interestAt(balance, parseApr(apr));
 }
@@ -64,6 +67,7 @@ export function amortizedPayment(principal: Money, apr: string, months: number):
 
 export interface LoanParams {
   apr: string;
+  /** ≥ 0; charged in months with a payment. */
   escrow: Money;
   interestOverrides?: Record<Month, Money>;
 }
@@ -89,6 +93,7 @@ export interface LoanMonth {
 /**
  * Rolls a loan account forward month by month (ascending; months without transactions may be omitted).
  * Interest and escrow are charged only in months with a payment; principal paid = payments − interest − escrow.
+ * Balances are negative while money is owed; interest and escrow are ≥ 0 and lower the balance.
  */
 export function computeLoanMonths(params: LoanParams, months: LoanMonthInput[]): LoanMonth[] {
   const scaledApr = parseApr(params.apr);

@@ -1,13 +1,14 @@
 import { addMonths, countWeekdayInMonth, monthDiff, monthOf, monthRange } from './dates';
 import { amortizedPayment } from './loans';
-import { ceilDiv } from './money';
+import { assertMoney, ceilDiv } from './money';
 import type { IsoDate, Money, Month } from './types';
 
 export interface TargetDef {
   kind: 'spending' | 'balance' | 'debt';
   cadence: 'weekly' | 'monthly' | 'yearly' | 'custom' | 'none';
+  /** The target amount A, ≥ 0. Debt targets use it only in `fixed` mode. */
   amount: Money;
-  /** Spending targets: "set aside another X" or "refill up to X". */
+  /** Spending targets: "set aside another X" or "refill up to X"; null means set_aside. */
   mode: 'set_aside' | 'refill' | null;
   /** 0 = Sunday … 6 = Saturday. */
   dueWeekday: number | null;
@@ -28,7 +29,13 @@ export interface TargetContext {
   available: Money;
   /** Assigned amount of this category in another month (used for set-aside cycles). */
   assignedIn: (month: Month) => Money;
-  /** Linked credit/loan account data; required for debt targets. `escrow` (loans only) defaults to 0. */
+  /**
+   * Linked credit/loan account data; required for debt targets.
+   * - `minPayment` (≥ 0): the account's minimum payment.
+   * - `apr`: the account's APR in percent, e.g. "6.5".
+   * - `balanceAtMonthStart`: the account balance before `month`, negative while money is owed.
+   * - `escrow` (≥ 0, loans only, default 0): added to pay-off-by-date payments.
+   */
   debt?: { minPayment: Money; apr: string; balanceAtMonthStart: Money; escrow?: Money };
 }
 
@@ -44,6 +51,22 @@ export interface TargetEval {
 export type PillColor = 'red' | 'yellow' | 'green' | 'grey';
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+
+const spendingMode = (t: TargetDef) => t.mode ?? 'set_aside';
+
+function assertNonNegativeMoney(value: Money, field: string): void {
+  assertMoney(value, field);
+  if (value < 0) throw new Error(`${field} must be ≥ 0, got ${value}`);
+}
+
+function assertInputs(t: TargetDef, ctx: TargetContext): void {
+  assertNonNegativeMoney(t.amount, 'Target amount');
+  if (ctx.debt) {
+    assertNonNegativeMoney(ctx.debt.minPayment, 'debt.minPayment');
+    assertMoney(ctx.debt.balanceAtMonthStart, 'debt.balanceAtMonthStart');
+    assertNonNegativeMoney(ctx.debt.escrow ?? 0, 'debt.escrow');
+  }
+}
 
 /** Months from `month` to `dueMonth` inclusive, at least 1 (overdue targets are due now). */
 function monthsLeft(month: Month, dueMonth: Month): number {
@@ -93,7 +116,7 @@ function computeNeed(t: TargetDef, ctx: TargetContext): Money {
     }
     const { dueMonth, cycleStart } = dueCycle(t, ctx.month);
     const fundedBefore =
-      t.mode === 'refill'
+      spendingMode(t) === 'refill'
         ? ctx.carry
         : monthRange(cycleStart, addMonths(ctx.month, -1)).reduce((s, m) => s + ctx.assignedIn(m), 0);
     return ceilDiv(Math.max(0, t.amount - fundedBefore), monthsLeft(ctx.month, dueMonth));
@@ -111,14 +134,18 @@ function computeNeed(t: TargetDef, ctx: TargetContext): Money {
   return principal === 0 ? 0 : payment + (ctx.debt.escrow ?? 0);
 }
 
-/** Evaluates a category's target for `ctx.month`; null when the target hasn't started yet. */
+/**
+ * Evaluates a category's target for `ctx.month`; null when the target hasn't started yet. Every amount is ≥ 0 except
+ * `ctx.debt.balanceAtMonthStart` (negative for debt) and the category's carry/assigned/available.
+ */
 export function evaluateTarget(t: TargetDef, ctx: TargetContext): TargetEval | null {
+  assertInputs(t, ctx);
   if (ctx.month < t.startMonth) return null;
   const need = computeNeed(t, ctx);
   let underfunded: Money;
   if (t.kind === 'balance' && !t.dueDate) {
     underfunded = Math.max(0, t.amount - ctx.available);
-  } else if (t.kind === 'spending' && t.mode === 'refill' && (t.cadence === 'weekly' || t.cadence === 'monthly')) {
+  } else if (t.kind === 'spending' && spendingMode(t) === 'refill' && (t.cadence === 'weekly' || t.cadence === 'monthly')) {
     underfunded = Math.max(0, need - ctx.carry - ctx.assigned);
   } else {
     underfunded = Math.max(0, need - ctx.assigned);

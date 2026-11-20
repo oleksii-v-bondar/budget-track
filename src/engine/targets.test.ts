@@ -88,6 +88,26 @@ describe('spending targets: yearly and custom', () => {
     expect(evaluateTarget(once, ctx({ month: '2026-05', carry: 30_000 }))?.need).toBe(20_000);
   });
 
+  it('custom: repeats every N years', () => {
+    // Due 2026-06 and every two years after: from 2026-08 the next due month is 2028-06, 23 months away.
+    const biennial = target({ cadence: 'custom', amount: 230_000, dueDate: '2026-06-15', repeatUnit: 'year', repeatEvery: 2 });
+    expect(evaluateTarget(biennial, ctx({ month: '2026-08' }))?.need).toBe(10_000);
+    const assignedIn = (m: string) => (m === '2026-07' ? 23_000 : 0);
+    expect(evaluateTarget(biennial, ctx({ month: '2026-08', assignedIn }))?.need).toBe(9_000);
+  });
+
+  it('set aside: a cycle never starts before the target start month', () => {
+    // The cycle after the 2025-12 due date would start in 2026-01, but the target only starts in 2026-06.
+    const t = target({ cadence: 'yearly', amount: 120_000, dueDate: '2025-12-15', startMonth: '2026-06' });
+    expect(evaluateTarget(t, ctx({ month: '2026-08', assignedIn: () => 10_000 }))?.need).toBe(20_000);
+  });
+
+  it('set aside: an overdue target without repeat needs what is left of the amount now', () => {
+    const once = target({ cadence: 'custom', amount: 50_000, dueDate: '2026-03-10' });
+    const assignedIn = (m: string) => (m < '2026-05' ? 10_000 : 0);
+    expect(evaluateTarget(once, ctx({ month: '2026-05', assignedIn }))).toMatchObject({ need: 10_000, underfunded: 10_000 });
+  });
+
   it.each([0, -1])('custom: rejects repeatEvery %i instead of looping forever', (repeatEvery) => {
     const t = target({ cadence: 'custom', amount: 30_000, dueDate: '2026-03-10', repeatUnit: 'month', repeatEvery });
     expect(() => evaluateTarget(t, ctx({ month: '2026-05' }))).toThrow(
@@ -172,6 +192,37 @@ describe('snooze, overfunding and inactive months', () => {
 
   it('returns null before the target start month', () => {
     expect(evaluateTarget(target({ startMonth: '2026-05' }), ctx({ month: '2026-04' }))).toBeNull();
+  });
+});
+
+describe('input validation', () => {
+  const debtTarget = target({ kind: 'debt', cadence: 'none', mode: null, debtMode: 'min_payment' });
+  const debt = { minPayment: 20_000, apr: '12', balanceAtMonthStart: -1_200_000 };
+
+  it.each([1.5, '100' as unknown as number, 2 ** 53])('rejects a target amount of %s', (amount) => {
+    expect(() => evaluateTarget(target({ amount }), ctx({}))).toThrow(
+      `Target amount must be a safe integer amount, got ${amount}`,
+    );
+  });
+
+  it('rejects a negative target amount', () => {
+    expect(() => evaluateTarget(target({ amount: -1 }), ctx({}))).toThrow('Target amount must be ≥ 0, got -1');
+  });
+
+  it('rejects debt numbers that are not safe integers', () => {
+    const run = (patch: object) => () => evaluateTarget(debtTarget, ctx({ debt: { ...debt, ...patch } }));
+    expect(run({ minPayment: 1.5 })).toThrow('debt.minPayment must be a safe integer amount, got 1.5');
+    expect(run({ balanceAtMonthStart: '-5' })).toThrow('debt.balanceAtMonthStart must be a safe integer amount, got -5');
+    expect(run({ escrow: 2 ** 53 })).toThrow(`debt.escrow must be a safe integer amount, got ${2 ** 53}`);
+  });
+
+  it('rejects a negative minimum payment or escrow', () => {
+    expect(() => evaluateTarget(debtTarget, ctx({ debt: { ...debt, minPayment: -1 } }))).toThrow(
+      'debt.minPayment must be ≥ 0, got -1',
+    );
+    expect(() => evaluateTarget(debtTarget, ctx({ debt: { ...debt, escrow: -1 } }))).toThrow(
+      'debt.escrow must be ≥ 0, got -1',
+    );
   });
 });
 

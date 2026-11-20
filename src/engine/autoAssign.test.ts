@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { autoAssign } from './autoAssign';
 import { computeBudget } from './budget/compute';
 import { RTA, assign, budgetInput, cashLine, category } from './budget/test-helpers';
+import { monthRange } from './dates';
 
 // Jan: assigned groceries 30 000 / rent 100 000, spent groceries 25 000 / rent 100 000.
 // Feb: assigned groceries 50 000 / rent 100 000, spent groceries 45 000 / rent 100 000.
@@ -98,6 +99,33 @@ describe('autoAssign', () => {
     expect(autoAssign({ strategy: 'assigned_last_month', month: '2026-01', categoryIds: ['groceries'], budget })).toEqual([
       { categoryId: 'groceries', from: 30_000, to: 0 },
     ]);
+  });
+
+  it('averages over at most the 12 previous months and rounds half away from zero', () => {
+    // 2025-01 is outside the 12-month window of 2026-02. The window holds eleven months of 100 and one of 106:
+    // 1 206 / 12 = 100.5, which rounds to 101 for Assigned and to −101 for Activity (so 101 spent).
+    const amountIn = (m: string) => (m === '2025-01' ? 1_000_000 : m === '2025-06' ? 106 : 100);
+    const months = monthRange('2025-01', '2026-01');
+    const long = computeBudget(
+      budgetInput({
+        startMonth: '2025-01',
+        throughMonth: '2026-02',
+        categories: [category('groceries')],
+        assignments: months.map((m) => assign(m, 'groceries', amountIn(m))),
+        activity: months.map((m) => cashLine(m, 'groceries', -amountIn(m))),
+      }),
+    );
+    for (const strategy of ['average_assigned', 'average_spent'] as const) {
+      expect(autoAssign({ strategy, month: '2026-02', categoryIds: ['groceries'], budget: long })).toEqual([
+        { categoryId: 'groceries', from: 0, to: 101 },
+      ]);
+    }
+  });
+
+  it('rejects a month outside the computed budget', () => {
+    expect(() => autoAssign({ strategy: 'reset_assigned', month: '2026-04', categoryIds: all, budget })).toThrow(
+      'autoAssign: month 2026-04 is not in the computed budget',
+    );
   });
 
   it('rejects underfunded amounts that are not safe integers', () => {
