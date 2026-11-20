@@ -1,4 +1,4 @@
-import { asc } from 'drizzle-orm';
+import { asc, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { appUser, category, categoryGroup } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
@@ -8,6 +8,7 @@ import { createTestDatabase, type TestDatabase } from '../test/db';
 import { TestClient } from '../test/http-client';
 import { totpCode } from '../test/totp';
 import { verifyPassword } from './passwords';
+import { consumeRecoveryCode } from './recovery-codes';
 import { decryptSecret } from './secret-box';
 import { SESSION_COOKIE } from './sessions';
 
@@ -24,6 +25,26 @@ afterEach(async () => {
 async function json(res: Response) {
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
+
+async function newTotpSecret(client: TestClient): Promise<string> {
+  const res = await client.post('/api/auth/setup/totp', { setupToken: TEST_SETUP_TOKEN });
+  return ((await res.json()) as { secret: string }).secret;
+}
+
+async function setupBody(secret: string, overrides: Record<string, string> = {}) {
+  return {
+    setupToken: TEST_SETUP_TOKEN,
+    password: TEST_PASSWORD,
+    totpSecret: secret,
+    totpCode: await totpCode(secret, ctx.clock.now()),
+    ...overrides,
+  };
+}
+
+const ALREADY_SETUP = {
+  status: 409,
+  body: { code: 'already_setup', message: 'This budget is already set up. Sign in instead.' },
+};
 
 describe('GET /api/auth/status', () => {
   it('asks for setup on a fresh install', async () => {
@@ -62,6 +83,7 @@ describe('POST /api/auth/setup', () => {
     expect(await verifyPassword(user!.passwordHash, TEST_PASSWORD)).toBe(true);
     expect(decryptSecret(user!.totpSecretEnc, ctx.config.encryptionKey)).toBe(totpSecret);
     expect(user!.recoveryCodeHashes).toHaveLength(10);
+    expect(await consumeRecoveryCode(user!.recoveryCodeHashes, recoveryCodes[0]!)).not.toBeNull();
     expect(user!.budgetStartMonth).toBe('2026-11-01');
 
     const groups = await t.db.select().from(categoryGroup).orderBy(asc(categoryGroup.sortOrder));
@@ -71,9 +93,9 @@ describe('POST /api/auth/setup', () => {
       ['Debt Payments', 'debt_payments', false],
     ]);
     const system = await t.db.select().from(category).orderBy(asc(category.sortOrder));
-    expect(system.map((c) => [c.name, c.systemKind, c.groupId])).toEqual([
-      ['Ready to Assign', 'rta', groups[0]!.id],
-      ['Uncategorized', 'uncategorized', groups[0]!.id],
+    expect(system.map((c) => [c.name, c.systemKind, c.groupId, c.hidden])).toEqual([
+      ['Ready to Assign', 'rta', groups[0]!.id, true],
+      ['Uncategorized', 'uncategorized', groups[0]!.id, true],
     ]);
   });
 
@@ -102,6 +124,16 @@ describe('POST /api/auth/setup', () => {
     expect(await t.db.select().from(appUser)).toEqual([]);
   });
 
+  it('requires the setup token from the environment without creating anything', async () => {
+    const secret = await newTotpSecret(ctx.client);
+    const res = await json(await ctx.client.post('/api/auth/setup', await setupBody(secret, { setupToken: 'guess' })));
+    expect(res).toEqual({
+      status: 403,
+      body: { code: 'invalid_setup_token', message: 'That setup token is not correct.' },
+    });
+    expect(await t.db.select().from(appUser)).toEqual([]);
+  });
+
   it('validates the request body', async () => {
     const res = await json(
       await ctx.client.post('/api/auth/setup', {
@@ -119,13 +151,36 @@ describe('POST /api/auth/setup', () => {
     await setUpBudget(ctx);
     const stranger = new TestClient(ctx.app, '198.51.100.9');
     const again = await json(await stranger.post('/api/auth/setup/totp', { setupToken: TEST_SETUP_TOKEN }));
-    expect(again).toEqual({
-      status: 409,
-      body: { code: 'already_setup', message: 'This budget is already set up. Sign in instead.' },
-    });
+    expect(again).toEqual(ALREADY_SETUP);
     expect(await json(await stranger.get('/api/auth/status'))).toEqual({
       status: 200,
       body: { setupRequired: false, authenticated: false },
     });
+  });
+
+  it('refuses a second setup even with the correct token', async () => {
+    const { totpSecret } = await setUpBudget(ctx);
+    const stranger = new TestClient(ctx.app, '198.51.100.9');
+    expect(await json(await stranger.post('/api/auth/setup', await setupBody(totpSecret)))).toEqual(ALREADY_SETUP);
+    expect(stranger.cookie(SESSION_COOKIE)).toBeUndefined();
+    expect(await t.db.select().from(appUser)).toHaveLength(1);
+  });
+
+  it('lets only one of two racing setups win', async () => {
+    const body = await setupBody(await newTotpSecret(ctx.client));
+    const clients = [new TestClient(ctx.app, '198.51.100.1'), new TestClient(ctx.app, '198.51.100.2')];
+    const results = await Promise.all(clients.map(async (client) => json(await client.post('/api/auth/setup', body))));
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(results.find((r) => r.status === 409)).toEqual(ALREADY_SETUP);
+    expect(await t.db.select().from(appUser)).toHaveLength(1);
+  });
+
+  it('rolls setup back if the session cannot be created, so no owner is left without recovery codes', async () => {
+    await t.db.execute(sql`ALTER TABLE "session" ADD CONSTRAINT reject_sessions CHECK (false)`);
+    const res = await ctx.client.post('/api/auth/setup', await setupBody(await newTotpSecret(ctx.client)));
+    expect(res.status).toBe(500);
+    expect(ctx.client.cookie(SESSION_COOKIE)).toBeUndefined();
+    expect(await t.db.select().from(appUser)).toEqual([]);
+    expect(await t.db.select().from(categoryGroup)).toEqual([]);
   });
 });

@@ -70,8 +70,10 @@ export function setupRoutes(deps: AppDeps) {
         hashPassword(body.password),
         hashRecoveryCodes(recoveryCodes),
       ]);
+      let token: string;
       try {
-        await deps.db.transaction(async (tx) => {
+        // The session is created in the same transaction so a failure can't leave an owner who never saw the codes.
+        token = await deps.db.transaction(async (tx) => {
           await tx.insert(appUser).values({
             passwordHash,
             totpSecretEnc: encryptSecret(body.totpSecret, deps.config.encryptionKey),
@@ -79,13 +81,13 @@ export function setupRoutes(deps: AppDeps) {
             budgetStartMonth: `${monthIn(deps.config.timeZone, now)}-01`,
           });
           await seedBudget(tx);
+          return (await createSession(tx, now, c.req.header('user-agent'))).token;
         });
       } catch (error) {
         // Two setups racing: the singleton index lets only one win.
         if (isUniqueViolation(error)) throw alreadySetUp();
         throw error;
       }
-      const { token } = await createSession(deps.db, now, c.req.header('user-agent'));
       setSessionCookie(c, token, deps.config.cookieSecure);
       return c.json<RecoveryCodesResponse>({ recoveryCodes }, 201);
     });

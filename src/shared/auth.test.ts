@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loginRequestSchema, setupRequestSchema } from './auth';
+import { loginRequestSchema, setupRequestSchema, setupTotpRequestSchema } from './auth';
 
 describe('auth request schemas', () => {
   it('require a 12+ character password, a base32 secret and a 6-digit code at setup', () => {
@@ -8,6 +8,14 @@ describe('auth request schemas', () => {
     expect(setupRequestSchema.safeParse({ ...ok, password: 'eleven char' }).success).toBe(false);
     expect(setupRequestSchema.safeParse({ ...ok, totpSecret: 'a'.repeat(32) }).success).toBe(false);
     expect(setupRequestSchema.safeParse({ ...ok, totpCode: '12345' }).success).toBe(false);
+  });
+
+  it('cap the setup token at 256 characters', () => {
+    const ok = { setupToken: 't', password: 'twelve chars', totpSecret: 'A'.repeat(32), totpCode: '123456' };
+    expect(setupTotpRequestSchema.safeParse({ setupToken: 'x'.repeat(256) }).success).toBe(true);
+    expect(setupTotpRequestSchema.safeParse({ setupToken: 'x'.repeat(257) }).success).toBe(false);
+    expect(setupRequestSchema.safeParse({ ...ok, setupToken: 'x'.repeat(256) }).success).toBe(true);
+    expect(setupRequestSchema.safeParse({ ...ok, setupToken: 'x'.repeat(257) }).success).toBe(false);
   });
 
   it('require exactly one second factor at login', () => {

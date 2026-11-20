@@ -12,10 +12,10 @@ export const currentPasswordSchema = z.string().min(1, 'Enter your password.').m
 export const totpCodeSchema = z.string().regex(/^\d{6}$/, 'Enter the 6-digit code from your authenticator app.');
 export const totpSecretSchema = z.string().regex(/^[A-Z2-7]{32}$/, 'Invalid authenticator secret.');
 
-export const setupTotpRequestSchema = z.object({ setupToken: z.string().min(1, 'Enter the setup token.') });
+export const setupTotpRequestSchema = z.object({ setupToken: z.string().min(1, 'Enter the setup token.').max(256) });
 
 export const setupRequestSchema = z.object({
-  setupToken: z.string().min(1, 'Enter the setup token.'),
+  setupToken: z.string().min(1, 'Enter the setup token.').max(256),
   password: newPasswordSchema,
   totpSecret: totpSecretSchema,
   totpCode: totpCodeSchema,
