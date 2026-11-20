@@ -1,4 +1,6 @@
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { addMonths } from './dates';
 import { amortizedPayment, computeLoanMonths, monthlyInterest, projectPayoff } from './loans';
 
 describe('monthlyInterest', () => {
@@ -12,8 +14,8 @@ describe('monthlyInterest', () => {
 
 describe('computeLoanMonths', () => {
   const months = [
-    { month: '2026-01', transactionsTotal: -10_000_000, hasPayment: false },
-    { month: '2026-02', transactionsTotal: 100_000, hasPayment: true },
+    { month: '2026-01', transactionsTotal: -10_000_000, paymentsTotal: 0 },
+    { month: '2026-02', transactionsTotal: 100_000, paymentsTotal: 100_000 },
   ];
 
   it('golden 9: charges interest only in months with a payment', () => {
@@ -34,10 +36,23 @@ describe('computeLoanMonths', () => {
 
   it('carries the balance across months that are omitted', () => {
     const result = computeLoanMonths({ apr: '12', escrow: 0 }, [
-      { month: '2026-01', transactionsTotal: -1_000_000, hasPayment: false },
-      { month: '2026-05', transactionsTotal: 50_000, hasPayment: true },
+      { month: '2026-01', transactionsTotal: -1_000_000, paymentsTotal: 0 },
+      { month: '2026-05', transactionsTotal: 50_000, paymentsTotal: 50_000 },
     ]);
     expect(result[1]).toMatchObject({ startBalance: -1_000_000, interest: 10_000, endBalance: -960_000 });
+  });
+
+  it('counts only payments as principal when the loan is opened and paid in the same month', () => {
+    const [jan] = computeLoanMonths({ apr: '6', escrow: 0 }, [
+      { month: '2026-01', transactionsTotal: -10_000_000 + 100_000, paymentsTotal: 100_000 },
+    ]);
+    expect(jan).toMatchObject({ startBalance: 0, interest: 0, escrow: 0, principalPaid: 100_000, endBalance: -9_900_000 });
+  });
+
+  it('rejects a negative paymentsTotal', () => {
+    expect(() =>
+      computeLoanMonths({ apr: '6', escrow: 0 }, [{ month: '2026-01', transactionsTotal: -100, paymentsTotal: -100 }]),
+    ).toThrow('paymentsTotal must be ≥ 0');
   });
 });
 
@@ -52,7 +67,56 @@ describe('amortizedPayment', () => {
 
   it('is zero when nothing is owed and rejects fewer than one month', () => {
     expect(amortizedPayment(0, '5', 10)).toBe(0);
-    expect(() => amortizedPayment(1_000, '5', 0)).toThrow();
+    expect(() => amortizedPayment(1_000, '5', 0)).toThrow('amortizedPayment: months must be an integer ≥ 1, got 0');
+  });
+
+  it('rejects a non-integer number of months', () => {
+    expect(() => amortizedPayment(1_000, '5', 1.5)).toThrow('amortizedPayment: months must be an integer ≥ 1, got 1.5');
+  });
+
+  it('rejects an invalid APR', () => {
+    expect(() => amortizedPayment(1_000, 'abc', 12)).toThrow('Invalid decimal: "abc"');
+  });
+
+  it.each([
+    // [principal, apr, months, minimal payment] — the float annuity gives 16_691, 128_324 and 2_285_423 for rows 1–3.
+    [100_000, '0.5', 6, 16_692],
+    [4_052_147, '24.99', 52, 128_325],
+    [6_788_271, '6', 3, 2_285_422],
+    [1_200_000, '12', 12, 106_619],
+    [10_000_000, '6', 360, 59_956],
+    [1_000, '0', 3, 334],
+  ])('amortizedPayment(%i, %s, %i) is the minimal payment that pays off in time: %i', (principal, apr, months, expected) => {
+    expect(amortizedPayment(principal, apr, months)).toBe(expected);
+  });
+
+  it('pays off 100_000 at 0.5 % within 6 months, where the float annuity payment would take 7', () => {
+    const payoff = (payment: number) =>
+      projectPayoff({ debt: -100_000, apr: '0.5', payment, escrow: 0, fromMonth: '2026-01' });
+    expect(payoff(amortizedPayment(100_000, '0.5', 6))).toBe('2026-06');
+    expect(payoff(16_691)).toBe('2026-07');
+  });
+
+  it('property: is the smallest payment that projectPayoff clears within the given months', () => {
+    const FROM = '2000-01';
+    const fits = (debt: number, apr: string, payment: number, months: number) => {
+      const payoff = projectPayoff({ debt, apr, payment, escrow: 0, fromMonth: FROM });
+      return payoff !== 'never' && payoff <= addMonths(FROM, months - 1);
+    };
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 10_000_000 }),
+        fc.constantFrom('0', '0.5', '3.99', '6', '12', '24.99'),
+        fc.integer({ min: 1, max: 360 }),
+        (principal, apr, months) => {
+          const payment = amortizedPayment(principal, apr, months);
+          expect(fits(principal, apr, payment, months)).toBe(true);
+          // A payment of 1 is the minimum possible; 0 can never clear a positive debt.
+          if (payment > 1) expect(fits(principal, apr, payment - 1, months)).toBe(false);
+        },
+      ),
+      { numRuns: 300 },
+    );
   });
 });
 
