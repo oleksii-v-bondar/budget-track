@@ -4,6 +4,8 @@ import {
   createTransactionRequestSchema,
   type CreateTransactionResponse,
   deleteTransactionRequestSchema,
+  type RegisterResponse,
+  registerQuerySchema,
   type TransactionDto,
   updateTransactionRequestSchema,
 } from '../../shared/api/transactions';
@@ -20,7 +22,7 @@ import {
   savedLabel,
   updateTransaction,
 } from './transaction-commands';
-import { getTransaction } from './transaction-queries';
+import { getTransaction, listRegister } from './transaction-queries';
 
 /** /api/transactions (spec §10 "Transactions and related workflows"): every change is one undoable command. */
 export function transactionRoutes(deps: AppDeps) {
@@ -28,6 +30,9 @@ export function transactionRoutes(deps: AppDeps) {
 
   return new Hono<AuthedEnv>()
     .use('*', requireSession(deps))
+    .get('/', validate('query', registerQuerySchema), async (c) =>
+      c.json<RegisterResponse>(await listRegister(deps.db, c.req.valid('query'))),
+    )
     .post('/', validate('json', createTransactionRequestSchema), async (c) => {
       const body = c.req.valid('json');
       const saved = await runCommand(deps, savedLabel, (rec) => createTransaction(rec, body, today()));

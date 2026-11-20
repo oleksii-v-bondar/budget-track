@@ -1,12 +1,13 @@
 import { z } from 'zod';
-import { fxRateSchema } from './accounts';
+import { type AccountBalances, fxRateSchema } from './accounts';
 import { idSchema, isoDateSchema, moneySchema, nameSchema } from './common';
 
 export const FLAG_COLORS = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'] as const;
 export type FlagColor = (typeof FLAG_COLORS)[number];
 
+export const CLEARED_STATUSES = ['uncleared', 'cleared', 'reconciled'] as const;
 /** `reconciled` is set by the reconcile flow (P2d); users switch between the other two. */
-export type ClearedStatus = 'uncleared' | 'cleared' | 'reconciled';
+export type ClearedStatus = (typeof CLEARED_STATUSES)[number];
 
 export const flagSchema = z.enum(FLAG_COLORS);
 export const userClearedSchema = z.enum(['uncleared', 'cleared']);
@@ -127,6 +128,63 @@ export type UpdateTransactionRequest = z.infer<typeof updateTransactionRequestSc
  */
 export const deleteTransactionRequestSchema = z.object({ confirmReconciled: z.boolean().default(false) });
 
+/** Money in a query string: a whole number of minor units. */
+const queryMoneySchema = z
+  .string()
+  .regex(/^-?\d{1,16}$/, 'Enter a whole amount in minor units.')
+  .transform(Number)
+  .pipe(moneySchema);
+
+/** An opaque page position: the (date, id) of the last row of the previous page. */
+export const registerCursorSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}_[0-9a-f-]{36}$/i, 'Invalid cursor.')
+  .transform((cursor) => ({ date: cursor.slice(0, 10), id: cursor.slice(11).toLowerCase() }));
+
+/**
+ * GET /api/transactions (spec §10 "Search and bulk operations", §11 Register): newest first by (date desc, id desc),
+ * cursor-paginated. Every filter is optional and they combine with AND.
+ */
+export const registerQuerySchema = z
+  .object({
+    /** One account's register (with its balances); all accounts when omitted. */
+    accountId: idSchema.optional(),
+    /** Case-insensitive text in the payee, memo or category name, including split lines. */
+    q: z.string().trim().min(1).max(100).optional(),
+    /** Inclusive date range. */
+    from: isoDateSchema.optional(),
+    to: isoDateSchema.optional(),
+    /** Inclusive range of the signed native amount. */
+    minAmount: queryMoneySchema.optional(),
+    maxAmount: queryMoneySchema.optional(),
+    /** The transaction's category or one of its split lines'. */
+    categoryId: idSchema.optional(),
+    /** The transaction's payee or one of its split lines'. */
+    payeeId: idSchema.optional(),
+    flag: flagSchema.optional(),
+    cleared: z.enum(CLEARED_STATUSES).optional(),
+    /** `true`: only transactions waiting for approval. */
+    unapproved: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
+    cursor: registerCursorSchema.optional(),
+    /** Page size, 1–200 (default 50). */
+    limit: z
+      .string()
+      .regex(/^\d{1,3}$/, 'Use 1 to 200.')
+      .transform(Number)
+      .pipe(z.int().min(1, 'Use 1 to 200.').max(200, 'Use 1 to 200.'))
+      .optional(),
+  })
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    path: ['to'],
+    message: 'The end date must not be before the start date.',
+  })
+  .refine(({ minAmount: min, maxAmount: max }) => min === undefined || max === undefined || min <= max, {
+    path: ['maxAmount'],
+    message: 'The largest amount must not be below the smallest.',
+  });
+
+export type RegisterQuery = z.infer<typeof registerQuerySchema>;
+
 /** The other side of a transfer. */
 export interface TransferDto {
   accountId: string;
@@ -194,3 +252,12 @@ export interface TransactionDto {
 export type CreateTransactionResponse =
   | { kind: 'transaction'; transaction: TransactionDto }
   | { kind: 'scheduled'; scheduledId: string; date: string };
+
+/** GET /api/transactions */
+export interface RegisterResponse {
+  transactions: TransactionDto[];
+  /** Pass as `cursor` to get the next page; null on the last page. */
+  nextCursor: string | null;
+  /** With `accountId`: the register header's cleared, uncleared and working balances (natively and in PLN). */
+  balances: { balance: AccountBalances; balanceBase: AccountBalances } | null;
+}
