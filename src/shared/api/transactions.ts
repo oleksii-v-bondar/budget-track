@@ -19,13 +19,32 @@ export const transactionDateSchema = isoDateSchema.refine((date) => date >= '197
 });
 
 /**
+ * A split line (spec §10 "Splits"). Choosing a transfer payee makes the line a transfer to that account (same
+ * currency only); the line's category follows the same rules as a transaction in the split's account.
+ */
+export const splitLineSchema = z.object({
+  amount: moneySchema,
+  payeeId: idSchema.nullable().default(null),
+  categoryId: idSchema.nullable().default(null),
+  memo: memoSchema.default(''),
+});
+
+export type SplitLineRequest = z.infer<typeof splitLineSchema>;
+
+/** At least two lines; their amounts add up to the transaction's amount. */
+export const splitLinesSchema = z
+  .array(splitLineSchema)
+  .min(2, 'A split needs at least two lines.')
+  .max(100, 'Use at most 100 lines.');
+
+/**
  * POST /api/transactions. `amount` is in the account's currency (minor units, signed: + inflow, − outflow).
  * Choose an existing payee by `payeeId` or name one with `payeeName` (reused if a payee with that name exists,
  * otherwise created). A `date` after today (in the budget's time zone) is saved as a one-time scheduled transaction.
  *
  * Choosing an account's "Transfer : <name>" payee makes a transfer (spec §10): the other side is created in that
  * account. A transfer between a budget and a tracking account needs `categoryId`, which is stored on the budget side;
- * other transfers take none (spec §5.5).
+ * other transfers take none (spec §5.5). `lines` makes a split, whose own category stays empty.
  */
 export const createTransactionRequestSchema = z
   .object({
@@ -47,10 +66,15 @@ export const createTransactionRequestSchema = z
     fxRate: fxRateSchema.optional(),
     cleared: userClearedSchema.default('uncleared'),
     flag: flagSchema.nullable().default(null),
+    lines: splitLinesSchema.optional(),
   })
   .refine((body) => body.payeeId === undefined || body.payeeName === undefined, {
     path: ['payeeName'],
     message: 'Choose a payee or type a new name, not both.',
+  })
+  .refine((body) => body.lines === undefined || body.categoryId === null, {
+    path: ['categoryId'],
+    message: "A split's categories go on its lines.",
   });
 
 export type CreateTransactionRequest = z.infer<typeof createTransactionRequestSchema>;

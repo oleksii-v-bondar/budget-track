@@ -1,6 +1,6 @@
 import { BASE_CURRENCY } from '../../shared/api/accounts';
 import type { ClearedStatus, FlagColor } from '../../shared/api/transactions';
-import { type IsoDate, type Money, transferBases } from '../../engine';
+import { type IsoDate, type Money, splitLineBases, transferBases } from '../../engine';
 import type { Executor } from '../db/client';
 import { DomainError } from '../http/errors';
 import {
@@ -38,6 +38,16 @@ export interface Draft {
   cleared: ClearedStatus;
   approved: boolean;
   flag: FlagColor | null;
+  /** A split's lines (null = not a split). */
+  lines: DraftLine[] | null;
+}
+
+export interface DraftLine {
+  amount: Money;
+  payeeId: string | null;
+  /** For a transfer line between a budget and a tracking account: the budget side's category. */
+  categoryId: string | null;
+  memo: string | null;
 }
 
 /** The columns of one `transaction` row that a plan decides. */
@@ -54,14 +64,28 @@ export interface RowPlan {
   transferAccountId: string | null;
 }
 
+/** One `subtransaction` row, with the counterpart transaction of a transfer line. */
+export interface LinePlan {
+  amount: Money;
+  amountBase: Money;
+  payeeId: string | null;
+  categoryId: string | null;
+  memo: string | null;
+  transferAccountId: string | null;
+  sortOrder: number;
+  counterpart: RowPlan | null;
+}
+
 export interface Plan {
-  main: RowPlan & { cleared: ClearedStatus; approved: boolean; flag: FlagColor | null };
+  main: RowPlan & { cleared: ClearedStatus; approved: boolean; flag: FlagColor | null; isSplit: boolean };
   account: AccountInfo;
   payee: PayeeInfo | null;
   /** The other side of a transfer. */
   counterpart: RowPlan | null;
   /** The other account of a transfer. */
   transfer: AccountInfo | null;
+  /** A split's lines in order (null = not a split). */
+  lines: LinePlan[] | null;
   /** Spec §10: saving a categorized, non-transfer transaction makes its category the payee's default. */
   payeeDefault: { payeeId: string; categoryId: string } | null;
 }
@@ -114,6 +138,73 @@ function transferSides(main: AccountInfo, other: AccountInfo, draft: Draft, rate
     : { mainBase: toBase, mainRate: null, otherAmount, otherBase: fromBase, otherRate: rate };
 }
 
+/** Spec §10 "Splits" and §9: lines add up to the amount; foreign lines get their base from the split's rate. */
+async function planLines(
+  db: Executor,
+  main: AccountInfo,
+  draft: Draft & { lines: DraftLine[] },
+  rates: Rates,
+): Promise<{ amountBase: Money; fxRate: string | null; lines: LinePlan[] }> {
+  const total = draft.lines.reduce((sum, line) => sum + line.amount, 0);
+  if (total !== draft.amount) {
+    throw new DomainError('split_sum', 'The lines must add up to the transaction amount.', 'lines');
+  }
+  const { amountBase, fxRate } = bookedBase(main.currency, draft.amount, rates);
+  const amounts = draft.lines.map((line) => line.amount);
+  const bases = fxRate === null ? amounts : splitLineBases(amountBase, amounts, fxRate);
+
+  const lines: LinePlan[] = [];
+  for (const [index, line] of draft.lines.entries()) {
+    const field = (name: string) => `lines.${index}.${name}`;
+    const linePayee = line.payeeId === null ? null : await requirePayee(db, line.payeeId, field('payeeId'));
+    if (linePayee) assertNotSystemPayee(linePayee, field('payeeId'));
+    const lineBase = bases[index]!;
+    const base = {
+      amount: line.amount,
+      amountBase: lineBase,
+      payeeId: line.payeeId,
+      memo: line.memo,
+      sortOrder: index,
+    };
+    if (!linePayee?.transferAccountId) {
+      if (line.categoryId !== null) {
+        if (!onBudget(main)) throw categoryNotAllowed(TRACKING_NO_CATEGORY, field('categoryId'));
+        await assertUsableCategory(db, line.categoryId, field('categoryId'));
+      }
+      lines.push({ ...base, categoryId: line.categoryId, transferAccountId: null, counterpart: null });
+      continue;
+    }
+    const other = await requireAccount(db, linePayee.transferAccountId, field('payeeId'));
+    assertNotSelf(main, other, field('payeeId'));
+    if (other.currency !== main.currency) {
+      throw new DomainError(
+        'split_transfer_currency',
+        'A split line can only transfer to an account in the same currency.',
+        field('payeeId'),
+      );
+    }
+    assertOpen(other, field('payeeId'));
+    const category = await placeTransferCategory(db, main, other, line.categoryId, field('categoryId'));
+    lines.push({
+      ...base,
+      categoryId: category.here,
+      transferAccountId: other.id,
+      counterpart: {
+        accountId: other.id,
+        date: draft.date,
+        payeeId: main.transferPayeeId,
+        categoryId: category.there,
+        memo: line.memo,
+        amount: -line.amount,
+        amountBase: -lineBase,
+        ...rateColumns(null),
+        transferAccountId: main.id,
+      },
+    });
+  }
+  return { amountBase, fxRate, lines };
+}
+
 /** Validates a draft against spec §5.5 and §9 and computes the rows to write. */
 export async function planTransaction(db: Executor, draft: Draft): Promise<Plan> {
   const main = await requireAccount(db, draft.accountId, 'accountId');
@@ -130,6 +221,39 @@ export async function planTransaction(db: Executor, draft: Draft): Promise<Plan>
   };
   const status = { cleared: draft.cleared, approved: draft.approved, flag: draft.flag };
 
+  if (draft.lines !== null) {
+    if (payee?.transferAccountId) {
+      throw new DomainError(
+        'split_transfer',
+        "A split itself can't be a transfer: make one of its lines a transfer instead.",
+        'payeeId',
+      );
+    }
+    if (draft.categoryId !== null) throw categoryNotAllowed("A split's categories go on its lines.", 'categoryId');
+    if (draft.transferAmount !== null) {
+      throw new DomainError('transfer_amount_not_allowed', 'Only transfers take a second amount.', 'transferAmount');
+    }
+    const split = await planLines(db, main, { ...draft, lines: draft.lines }, rates);
+    assertRateUsed(rates);
+    return {
+      main: {
+        ...row,
+        ...status,
+        categoryId: null,
+        amountBase: split.amountBase,
+        ...rateColumns(split.fxRate),
+        transferAccountId: null,
+        isSplit: true,
+      },
+      account: main,
+      payee,
+      counterpart: null,
+      transfer: null,
+      lines: split.lines,
+      payeeDefault: null,
+    };
+  }
+
   if (payee?.transferAccountId) {
     const other = await requireAccount(db, payee.transferAccountId, 'payeeId');
     assertNotSelf(main, other, 'payeeId');
@@ -145,6 +269,7 @@ export async function planTransaction(db: Executor, draft: Draft): Promise<Plan>
         amountBase: sides.mainBase,
         ...rateColumns(sides.mainRate),
         transferAccountId: other.id,
+        isSplit: false,
       },
       account: main,
       payee,
@@ -160,6 +285,7 @@ export async function planTransaction(db: Executor, draft: Draft): Promise<Plan>
         transferAccountId: main.id,
       },
       transfer: other,
+      lines: null,
       payeeDefault: null,
     };
   }
@@ -181,11 +307,13 @@ export async function planTransaction(db: Executor, draft: Draft): Promise<Plan>
       amountBase,
       ...rateColumns(fxRate),
       transferAccountId: null,
+      isSplit: false,
     },
     account: main,
     payee,
     counterpart: null,
     transfer: null,
+    lines: null,
     payeeDefault:
       payee?.kind === 'user' && draft.categoryId !== null ? { payeeId: payee.id, categoryId: draft.categoryId } : null,
   };

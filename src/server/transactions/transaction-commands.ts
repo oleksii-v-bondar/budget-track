@@ -44,6 +44,7 @@ export async function createTransaction(
     cleared: input.cleared,
     approved: true,
     flag: input.flag,
+    lines: input.lines?.map((line) => ({ ...line, memo: line.memo || null })) ?? null,
   };
   const plan = await planTransaction(rec.tx, draft);
   const payeeName = plan.payee?.name ?? null;
