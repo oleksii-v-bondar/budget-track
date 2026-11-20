@@ -8,3 +8,4 @@ export * from './loans';
 export * from './targets';
 export * from './autoAssign';
 export * from './schedule';
+export * from './fx';
