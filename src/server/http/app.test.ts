@@ -79,7 +79,17 @@ describe('route guard', () => {
     const routes = app.routes
       .filter((r) => r.method !== 'ALL' && r.path.startsWith('/api/') && !isAuth(r.path))
       .map((r) => `${r.method} ${r.path}`);
-    expect(routes).toContain('GET /api/undo');
+    expect(routes).toEqual(
+      expect.arrayContaining([
+        'GET /api/undo',
+        'GET /api/budget/:month',
+        'POST /api/budget/:month/auto-assign',
+        'PUT /api/categories/:id/target',
+        'DELETE /api/categories/:id/target',
+        'POST /api/categories/:id/target/snooze',
+        'DELETE /api/categories/:id/target/snooze',
+      ]),
+    );
 
     const responses = [];
     for (const route of routes) {

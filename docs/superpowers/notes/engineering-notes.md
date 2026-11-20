@@ -70,6 +70,21 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   - `727274001`: login and re-authentication.
   - `727274002`: user commands and undo/redo (`COMMAND_LOCK_KEY` in `src/server/commands/run-command.ts`).
 
+### Budget read model
+- `loadBudgetInput(db, { throughMonth, today })` (`src/server/budget/budget-input.ts`) is the only place that turns
+  the ledger into `computeBudget` input; it starts at `firstEditableMonth()`, the lower bound `assertBudgetMonth()`
+  allows, so every allowed month is in the result. `loadBudgetMonth(db, month, today)` checks the month range, runs
+  `computeBudget` once and builds the month view. Read routes run it in
+  `db.transaction(fn, { isolationLevel: 'repeatable read', accessMode: 'read only' })` so every query sees one
+  snapshot. Commands (auto-assign, closing a card) call it with `rec.tx` inside `runCommand`.
+- `setAssigned`/`addAssigned` don't check the category; callers go through `assignableCategory` or the month view,
+  which never lists Ready to Assign or Uncategorized.
+- Auto-assign passes the month view's `underfunded` amounts to the engine only for the `underfunded` strategy, clamped
+  to `Number.MAX_SAFE_INTEGER`. Target `need`/`underfunded` are not bounded yet (a target amount cap is carried over).
+- "Today" for the budget is `todayIn(config.timeZone, clock.now())`; lines dated later are left out.
+- zod 4 discriminated unions nest (`kind` → `cadence` / `debtMode`), and refined objects can be options.
+  `z.flattenError` reports an unknown discriminator under its key, e.g. `fieldErrors.cadence`.
+
 ### Engine
 - `src/engine` is pure: no I/O, no Node modules, no `Date.now()` / `new Date()` / `Math.random()`. ESLint enforces this.
 - `computeBudget` throws on unknown or duplicate categories, assignments to RTA or Uncategorized, lines categorised to a

@@ -86,7 +86,8 @@ An account's type can only change within its class.
 **System categories** live in a hidden `internal` group and never appear as editable rows:
 - **Ready to Assign (RTA)**: the category for income.
 - **Uncategorized**: used for on-budget, non-transfer, non-starting-balance transactions with no category. It
-  appears in the budget grid only when it has activity in the viewed month, and normal overspending rules apply to it.
+  appears in the budget grid only when it has activity or a non-zero Available in the viewed month (an uncategorized
+  inflow carries over), and normal overspending rules apply to it.
 
 Neither system category can receive assignments. "Move money to/from Ready to Assign" changes the other category's
 Assigned amount.
@@ -178,8 +179,9 @@ All amounts are PLN base. `m` = month, `c` = category.
 - **Available(c,m)** = Carry(c,m) + Assigned(c,m) + Activity(c,m)
 - **Carry(c,m)** = max(0, Available(c,m−1)). Negative Available never carries over.
 - Budget start month = min(`budget_start_month`, month of the earliest transaction). Assignments and month notes may
-  still exist before it (e.g. after the account with the earliest transaction is deleted); those months stay editable,
-  and the budget computation widens its range back to the earliest such month.
+  still exist before it (e.g. after the account with the earliest transaction is deleted); those months stay editable
+  and reachable in the month switcher (its first month is the earliest such month), and the budget computation widens
+  its range back to the earliest such month.
 - Hidden categories behave identically; they are only hidden in the UI.
 
 ### 5.2 Overspending (cash vs credit)
@@ -211,7 +213,8 @@ Further rules:
   overspending, which is deducted from RTA next month.
 - Inflows on `k` categorized to RTA count as income and don't touch `p_k`.
 - The starting balance of a credit account is not categorized and doesn't affect the budget. The inspector shows
-  **"Need X to pay in full"** = max(0, −balance(k) − Available(p_k, m)).
+  **"Need X to pay in full"** = max(0, −balance(k) − Available(p_k, m)), with balance(k) in PLN at the end of `m`
+  (or today, if that is earlier).
 - Credit overspending is not carried: next month the category resets to 0, and the unfunded debt stays visible
   through "Need X to pay in full".
 - **Known simplification vs YNAB:** flows are computed from monthly net amounts and always apply. YNAB skips the
@@ -287,6 +290,9 @@ Yearly and custom targets:
 Other target rules:
 - Debt targets apply to credit card payment and loan-paired categories. They count only direct assignments, so
   for a credit card the amount is "in addition to funded spending".
+- The balance at the start of m is the account's PLN balance before m (counting transactions dated today or
+  earlier). If the account has no minimum payment (`min_payment`) or no APR (`payoff_by_date`), the missing value
+  counts as 0 and the target is flagged **incomplete** until the user enters it.
 - **Progress** = (need − underfunded) / need, or Available / A for balance targets.
 - **Snooze:** if `snoozed_month = m`, underfunded is 0 and the category matches the "Snoozed" filter. Progress for a
   snoozed target still reflects its real funding (it is computed from the unsnoozed underfunded amount).
@@ -297,7 +303,8 @@ Other target rules:
 
 ## 7. Auto-assign
 
-Scope can be all visible categories, one group, or one category. Strategies:
+Scope can be all visible categories (visible categories of visible groups), one group, or one category; a group or
+category scope includes hidden categories. Ready to Assign and Uncategorized are never in scope. Strategies:
 - **Underfunded**: walk categories in display order and assign `underfunded(c,m)`, capped at the remaining Shown
   RTA(m). Stop when RTA reaches 0.
 - **Assigned last month**: set Assigned(c,m) = Assigned(c,m−1).
@@ -413,7 +420,7 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 - A group can be deleted only when it has no live categories; groups are soft-deleted.
 - Credit card payment and paired loan categories follow their account: they can't be renamed, moved or deleted on
   their own (deleting the account removes them). Credit card payment categories are hidden automatically when the
-  account is closed with Available = 0.
+  account is closed with Available = 0 in the current month. Reopening the account doesn't unhide them.
 
 **Accounts**
 - Create via a type-specific wizard. Edit name, note and loan fields.

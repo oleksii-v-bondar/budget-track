@@ -41,12 +41,20 @@ export function accountRoutes(deps: AppDeps) {
     })
     .post('/:id/close', validate('param', idParamSchema), async (c) => {
       const { id } = c.req.valid('param');
-      await runCommand(deps, (r: Named) => `Close account "${r.name}"`, (rec) => setAccountClosed(rec, id, true));
+      await runCommand(
+        deps,
+        (r: Named) => `Close account "${r.name}"`,
+        (rec) => setAccountClosed(rec, id, true, today()),
+      );
       return c.json<AccountDto>(await getAccount(deps.db, id));
     })
     .post('/:id/reopen', validate('param', idParamSchema), async (c) => {
       const { id } = c.req.valid('param');
-      await runCommand(deps, (r: Named) => `Reopen account "${r.name}"`, (rec) => setAccountClosed(rec, id, false));
+      await runCommand(
+        deps,
+        (r: Named) => `Reopen account "${r.name}"`,
+        (rec) => setAccountClosed(rec, id, false, today()),
+      );
       return c.json<AccountDto>(await getAccount(deps.db, id));
     })
     .delete('/:id', validate('param', idParamSchema), async (c) => {

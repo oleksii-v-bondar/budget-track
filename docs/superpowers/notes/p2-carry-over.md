@@ -11,32 +11,16 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - A refund larger than the payment category's Available (the §5.3 simplification).
 - The budget property generator should also produce rows outside `[startMonth, throughMonth]`.
 - The loan 1200-month cap (`amortizedPayment` horizon and `projectPayoff` "never").
-- Targets:
-  - `repeatUnit: 'year'`
-  - the cycle start clamped to `startMonth`
-  - an overdue `set_aside` target
-- Auto-assign: the 12-month average window and half-away-from-zero rounding of averages.
 - `transferBases` foreign → base with a `null` rate on the foreign side.
 
 ## Validation and behaviour
-- `autoAssign` should throw when `month` isn't in the computed budget instead of treating it as empty.
 - Validate the schedule anchor date (`nextOccurrence` returns an anchor ahead of `after` unchecked).
-- Build a month-view adapter that creates `TargetContext` (carry, assigned, available, `assignedIn`, debt data incl.
-  escrow) from a `BudgetResult`.
-- Validate the sign of `TargetDef.amount`. Make a `null` spending `mode` default to `set_aside` explicitly.
-- Document the sign conventions for each loan and target function. For example, `balanceAtMonthStart` and `debt`
-  are negative for debt, and `projectPayoff` ignores the sign.
-- Exclude the Uncategorized category, and any system category, from the auto-assign scope. The `spent_last_month`
-  and `reset_available` strategies can produce an assignment for Uncategorized, which `computeBudget` rejects.
-- Validate `TargetContext.debt` numbers (`minPayment`, `balanceAtMonthStart`, `escrow`) as safe integers at the
-  server boundary or in `evaluateTarget`.
 
 ## Resolved in P2a
 - Engine purity lint now also blocks dynamic `import()`, `globalThis.*`, `Date.now()`, `new Date()` and `Math.random()`.
 
 ## From P2a final review
-- P2b2: v_ledger_line month is 'YYYY-MM-01' and the engine uses 'YYYY-MM' (adapter); any migration touching view
-  columns must drop/recreate the view.
+- Any migration touching `v_ledger_line` columns must drop/recreate the view.
 - P2c: enforce date ≤ today on transaction writes (§5.6); the view does not filter future dates. (Starting balances
   already enforce it.)
 - P2c: nested validation errors lose paths in z.flattenError; return issue paths for nested bodies (split lines).
@@ -70,13 +54,6 @@ These items were found in the P1 final review and deferred. Fold them into the P
   lines without a payment category.
 
 ## From P2b1
-- P2b2: hide a credit card payment category automatically when its account is closed with Available = 0 (spec §10);
-  it needs the budget read model. Closing currently only sets `account.closed`.
-- P2b2: a paired loan category's `debt/min_payment` target reads `account.min_payment`, which PATCH can clear (null);
-  the month view must treat null as 0.
-- P2b2: reuse `budgetStartMonth()` and `MONTHS_AHEAD` from `src/server/budget/assignments.ts` for the month view and
-  auto-assign, and `setAssigned`/`addAssigned` for auto-assign writes. The month view's lower bound must be the
-  exported `firstEditableMonth()`, which also covers assignments and notes left before the budget start.
 - P2c: deleting an account is refused while soft-deleted transactions still reference it; decide whether account
   deletion should purge soft-deleted history.
 - P2c: undo/redo replays row by row (two queries per changed row); bulk operations over thousands of rows may need
@@ -104,3 +81,41 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - P3: build mutation responses inside the command (`rec.tx`), not after commit; consider returning the touched table
   names from undo/redo for query invalidation; a zod abort skips `superRefine` (form UX); unify 404 vs 422 for unknown
   ids in bodies; a lint rule forbidding direct `rec.tx` writes in command files.
+
+## Resolved in P2b2
+- `loadBudgetInput` converts `v_ledger_line` months ('YYYY-MM-01') to engine months ('YYYY-MM') and casts every sum
+  `::bigint`.
+- `evaluateTarget` validates `TargetDef.amount` (safe integer ≥ 0) and the `TargetContext.debt` numbers (safe
+  integers; `minPayment` and `escrow` ≥ 0); a `null` spending mode is `set_aside` explicitly; the sign conventions of
+  the loan and target functions are documented.
+- `autoAssign` throws for a month outside the computed budget. The server never puts Ready to Assign or Uncategorized
+  in an auto-assign scope.
+- Auto-assign passes `underfunded` amounts to the engine only for the `underfunded` strategy, each clamped to
+  `Number.MAX_SAFE_INTEGER` (the engine caps every amount at Ready to Assign), so a huge target can't make a run fail.
+- `targetContext` / `evaluateCategoryTarget` (`src/server/targets/target-model.ts`) build `TargetContext` from a
+  `BudgetResult` plus the linked account (minimum payment, APR, escrow for loans, PLN balance before the month).
+- A cleared `min_payment` (or APR) counts as 0 and flags the debt target `incomplete`.
+- Closing a credit account hides its payment category when Available = 0 in the current month.
+- The month view and auto-assign reuse `budgetStartMonth()`, `firstEditableMonth()`, `assertBudgetMonth()`/
+  `MONTHS_AHEAD` and `setAssigned`; the budget is computed from `firstEditableMonth()`, which is also the month view's
+  `firstMonth`.
+- Test gaps closed: `repeatUnit: 'year'`, the cycle start clamped to `startMonth`, an overdue `set_aside` target, and
+  the auto-assign 12-month window with half-away-from-zero rounding.
+- `app.test.ts` lists the new budget and target routes among those the deny-by-default walk covers.
+
+## From P2b2
+- P2c: the Budget screen's Activity tab needs the register API (transactions behind a category's monthly activity).
+- P2c: transaction writes must keep a split parent's `amount_base` equal to the sum of its live lines: debt balances
+  and "Need X to pay in full" read `transaction` (like account balances), while the budget reads `v_ledger_line`.
+- P2d: a loan's `balanceAtMonthStart` (pay-off-by-date targets) is the PLN sum of its transactions; it ignores the
+  synthetic interest and escrow rows of §8 until the loan engine (`computeLoanMonths`, interest overrides) is wired in.
+- P2d: the loan panel of a paired category (balance, APR, minimum payment, projected payoff, Record payment); the month
+  view only gives `linkedAccountId`.
+- P2d: foreign-currency cards and loans: debt targets use `min_payment` and `escrow_amount` as PLN amounts, which is
+  right only for PLN accounts.
+- P2d / final review: cap target amounts (e.g. ≤ 1e13) in the targets API. `evaluateTarget` only checks that the
+  amount is a safe integer, so a huge weekly target (2e15 on a weekday that occurs 5 times) makes `GET
+  /api/budget/:month` return a raw `need`/`underfunded` above 2^53. Auto-assign already clamps it (see above).
+- Later: `GET /api/budget/:month` takes ≈ 80 ms for 10 years × 150 categories (26k transactions) and ≈ 175 ms in a
+  dense worst case (36k activity rows) on an M3 Max. If it matters, read the activity aggregate with `db.execute`
+  (Drizzle's row mapping costs ≈ 30 ms per 36k rows) and profile `computeBudget`.

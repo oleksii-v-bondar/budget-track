@@ -6,7 +6,8 @@ import {
   type CreateAccountRequest,
   type UpdateAccountRequest,
 } from '../../shared/api/accounts';
-import { type IsoDate, convertToBase, monthOf } from '../../engine';
+import { computeBudget, convertToBase, type IsoDate, monthOf } from '../../engine';
+import { loadBudgetInput } from '../budget/budget-input';
 import type { ChangeRecorder } from '../commands/recorder';
 import { applyOrder } from '../commands/reorder';
 import type { Executor } from '../db/client';
@@ -176,13 +177,36 @@ export async function updateAccount(
   return { name };
 }
 
-/** Spec §10: closing needs a zero balance (in the account's currency); reopening is always allowed. */
-export async function setAccountClosed(rec: ChangeRecorder, id: string, closed: boolean): Promise<{ name: string }> {
+/** Spec §10: a closed card's payment category is hidden when it holds nothing this month (Available = 0). */
+async function hideSettledPaymentCategory(rec: ChangeRecorder, accountId: string, today: IsoDate): Promise<void> {
+  const [payment] = await rec.tx
+    .select({ id: category.id })
+    .from(category)
+    .where(and(eq(category.linkedAccountId, accountId), isNull(category.deletedAt)));
+  if (!payment) return;
+  const month = monthOf(today);
+  const budget = computeBudget(await loadBudgetInput(rec.tx, { throughMonth: month, today }));
+  if (budget.byMonth[month]?.categories[payment.id]?.available === 0) {
+    await rec.update(category, eq(category.id, payment.id), { hidden: true });
+  }
+}
+
+/**
+ * Spec §10: closing needs a zero balance (in the account's currency) and hides a credit card's settled payment
+ * category; reopening is always allowed and leaves the category as it is.
+ */
+export async function setAccountClosed(
+  rec: ChangeRecorder,
+  id: string,
+  closed: boolean,
+  today: IsoDate,
+): Promise<{ name: string }> {
   const current = await loadAccount(rec.tx, id);
   if (closed && (await getAccount(rec.tx, id)).balance.working !== 0) {
     throw new DomainError('account_balance_not_zero', 'Bring the balance to 0 before closing the account.');
   }
   await rec.update(account, eq(account.id, id), { closed });
+  if (closed && !current.closed && current.accountClass === 'credit') await hideSettledPaymentCategory(rec, id, today);
   return { name: current.name };
 }
 

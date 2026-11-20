@@ -6,7 +6,7 @@ import { account, assignment, category, payee, target, transaction } from '../db
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
-import { createAccount } from '../test/fixtures';
+import { createAccount, createCategory, createGroup, insertTransaction } from '../test/fixtures';
 import { snapshot } from '../test/snapshot';
 
 let t: TestDatabase;
@@ -376,6 +376,46 @@ describe('closing and reopening', () => {
     });
     const reopened = await json<AccountDto>(await ctx.client.post(`/api/accounts/${empty.id}/reopen`));
     expect([reopened.status, reopened.body.closed]).toEqual([200, false]);
+  });
+
+  it('hides a closed credit card’s payment category when nothing is available in it (spec §10)', async () => {
+    const checking = await createAccount(ctx.client, { name: 'Checking', startingBalance: 100_000 });
+    const visa = await createAccount(ctx.client, { name: 'Visa', type: 'credit_card' });
+    const amex = await createAccount(ctx.client, { name: 'Amex', type: 'credit_card' });
+    const group = await createGroup(ctx.client, 'Everyday');
+    const groceries = await createCategory(ctx.client, group.id, 'Groceries');
+    // Visa: 50 zł of funded spending, paid off in full, leaves its payment category at 0.
+    await ctx.client.send('PUT', `/api/budget/2026-11/assignments/${groceries.id}`, { amount: 5_000 });
+    await insertTransaction(t.db, { accountId: visa.id, date: '2026-11-02', amount: -5_000, categoryId: groceries.id });
+    const out = await insertTransaction(t.db, {
+      accountId: checking.id,
+      date: '2026-11-10',
+      amount: -5_000,
+      transferAccountId: visa.id,
+    });
+    await insertTransaction(t.db, {
+      accountId: visa.id,
+      date: '2026-11-10',
+      amount: 5_000,
+      transferAccountId: checking.id,
+      transferTxnId: out.id,
+    });
+    // Amex: 20 zł is still set aside for it.
+    await ctx.client.send('PUT', `/api/budget/2026-11/assignments/${amex.paymentCategoryId}`, { amount: 2_000 });
+    const hidden = async (categoryId: string) =>
+      (await t.db.select({ hidden: category.hidden }).from(category).where(eq(category.id, categoryId)))[0]?.hidden;
+
+    const before = await snapshot(t.db);
+    expect((await ctx.client.post(`/api/accounts/${visa.id}/close`)).status).toBe(200);
+    expect(await hidden(visa.paymentCategoryId!)).toBe(true);
+    expect((await ctx.client.post(`/api/accounts/${amex.id}/close`)).status).toBe(200);
+    expect(await hidden(amex.paymentCategoryId!)).toBe(false);
+
+    // Reopening leaves the category as it is; undoing the close restores it.
+    await ctx.client.post(`/api/accounts/${visa.id}/reopen`);
+    expect(await hidden(visa.paymentCategoryId!)).toBe(true);
+    for (let i = 0; i < 3; i++) await ctx.client.post('/api/undo');
+    expect(await snapshot(t.db)).toEqual(before);
   });
 });
 
