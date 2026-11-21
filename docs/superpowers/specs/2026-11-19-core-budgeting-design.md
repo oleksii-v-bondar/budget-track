@@ -70,8 +70,8 @@ on each request; at single-user scale (≈10 years × 150 categories) this is we
 
 **Config (env):** `DATABASE_URL`, `ENCRYPTION_KEY` (32-byte key, base64, AES-256-GCM for the TOTP secret), `SETUP_TOKEN`,
 `TZ=Europe/Warsaw`, `PORT`, `COOKIE_SECURE` (default true), `TRUST_PROXY` (default false; take the client IP from
-`X-Forwarded-For`), `LOG_LEVEL`, `MIGRATIONS_DIR`. Sessions are opaque random tokens stored hashed, so no
-session-signing secret is needed.
+`X-Forwarded-For`), `LOG_LEVEL`, `MIGRATIONS_DIR`, `NBP_BASE_URL` (default `https://api.nbp.pl`). Sessions are opaque
+random tokens stored hashed, so no session-signing secret is needed.
 
 ## 3. Domain concepts
 
@@ -142,8 +142,9 @@ change.
   - `account_id`, `date`, `payee_id`, `category_id` (null for splits, budget↔budget transfers, tracking-only
     transactions, credit/tracking starting balances), `memo`
   - `amount` (native), `amount_base` (PLN), `fx_rate`, `fx_rate_manual` (bool). Entered amounts (transaction, transfer
-    other side, split line, starting balance) are capped at ±10^13 minor units (100 bn zł) and computed PLN amounts at
-    ±10^14, so sums over many rows stay exact below 2^53.
+    other side, split line, starting balance, reconcile statement balance, interest override) are capped at ±10^13
+    minor units (100 bn zł) and computed PLN amounts at ±10^14 (including bases converted at an NBP rate, reconcile
+    adjustments and FX revaluations), so sums over many rows stay exact below 2^53.
   - `cleared` (`uncleared` | `cleared` | `reconciled`), `approved` (bool), `flag` (`red` | `orange` | `yellow` |
     `green` | `blue` | `purple` | null)
   - `transfer_account_id`, `transfer_txn_id`, `transfer_subtxn_id`
@@ -299,6 +300,10 @@ Other target rules:
 - The balance at the start of m is the account's PLN balance before m (counting transactions dated today or
   earlier). If the account has no minimum payment (`min_payment`) or no APR (`payoff_by_date`), the missing value
   counts as 0 and the target is flagged **incomplete** until the user enters it.
+- A loan's balance includes the interest and escrow charged (§8): the balance at the start of m counts the charges of
+  the months before m. For a foreign-currency card or loan, the minimum payment and escrow (in the account's currency)
+  are converted to PLN at the latest NBP rate (§9); without a rate they count as 0 and a `min_payment` or
+  `payoff_by_date` target is flagged **incomplete** (a `fixed` target doesn't use them).
 - **Progress** = (need − underfunded) / need, or Available / A for balance targets.
 - **Snooze:** if `snoozed_month = m`, underfunded is 0 and the category matches the "Snoozed" filter. Progress for a
   snoozed target still reflects its real funding (it is computed from the unsnoozed underfunded amount).
@@ -328,8 +333,9 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 **Interest and escrow**
 - The engine's input per month is `LoanMonthInput` = {`transactionsTotal`, `paymentsTotal`}: Σ of all the loan
   account's transaction amounts in m, and Σ of its inflows (payments) in m.
-- A **payment** is any inflow to the loan account in month `m`, typically a categorized transfer. Month `m` has a
-  payment iff `paymentsTotal` > 0.
+- A **payment** is an inflow to the loan account in month `m`, typically a categorized transfer, whose payee isn't a
+  system payee: the starting balance, reconciliation adjustments and FX revaluations count in `transactionsTotal` but
+  never as payments. Month `m` has a payment iff `paymentsTotal` > 0.
 - If month `m` has at least one payment, the engine applies:
   - `interest(m)` = override(m) ?? round(|balance at start of m| × APR / 12)
   - `escrow(m)` = account.escrow_amount
@@ -339,6 +345,18 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 - APR must be ≥ 0; the engine rejects a negative APR.
 - The register shows synthetic read-only "Interest charge" / "Escrow" rows per month. Editing the interest row writes
   a `loan_interest_override`.
+- The loan's displayed balances (accounts list, register header, reconcile, close, debt targets, loan panel) include
+  the interest and escrow charged. A month's charges are cleared once every payment in that month is cleared, and
+  uncleared while any of them is uncleared. The loan engine runs in the loan's currency; a foreign loan's charges are
+  converted to PLN at the rate its payments that month were booked at.
+- `GET /api/accounts/:id/loan` returns the months with their interest, escrow and principal. A month's synthetic rows
+  are dated on its first payment (`chargedOn`) and cleared as above (`chargesCleared`, true in a month without a
+  payment); the register interleaves them by date, and its cursor paging over transactions is unchanged.
+- An interest override is set for a month from the loan's first transaction to the current month, in the loan's
+  currency (0 … 10^13, like entered amounts, §4.4). It applies in months with a payment, and later months' interest
+  follows the new balance.
+- A loan's first month has no interest, even with a payment in it, because its balance at the start of that month is
+  0 (escrow is still charged). An interest override for that month adds it.
 
 **Payoff and inspector**
 - **Projected payoff date**: amortize from the current balance at APR/12 using the debt target amount (or
@@ -351,6 +369,11 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 - The paired category's inspector shows balance, APR, minimum payment, projected payoff date and a **Record payment**
   shortcut. The shortcut opens the transaction sheet prefilled: transfer from the last-used cash account to the loan,
   category = paired category, amount = target need.
+- The panel is part of the month view (`loan` on the paired category). The projection starts in the current month,
+  or the next one once this month has a payment (as defined above, so a reconciliation adjustment doesn't count); it
+  uses a `fixed` or `payoff_by_date` target's need, otherwise the minimum payment (a foreign loan converts the need
+  back at the latest rate, and uses the minimum payment without one). "Last-used cash account" is the open cash
+  account of the latest transfer into the loan, else the first open cash account; the amount is −need (PLN).
 
 ## 9. Multi-currency (FX)
 
@@ -360,6 +383,20 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
   up to 7 days. Results are cached in `fx_rate`.
 - The user can override the rate (`fx_rate_manual = true`). Changing the date re-fetches the rate unless it's manual.
 - Unsupported currency or NBP unreachable → the rate field is required and the UI asks for it.
+- **NBP client**: one quote tries the date and up to 7 earlier days within a 5 s timeout; any other error, a malformed
+  answer or a timeout means "no rate". Only final rates are cached: published that day, or for a past day or a
+  weekend. Quotes run before a command or read transaction starts, never inside one; PLN is never quoted. Rates keep
+  6 decimals (§2), so a currency quoted far below 1 zł loses precision (IDR's mid 0.00022236 is stored as 0.000222);
+  this is accepted unless the rate scale is widened.
+- Writes (transactions, foreign starting balances, reconcile adjustments) resolve the default rate before the
+  command: a sent rate is manual (`fx_rate_manual = true`), an NBP rate is not. Without either, the answer is 422
+  `fx_rate_required`. A base converted at either rate stays within the §4.4 cap (422 `amount_too_large`). A
+  future-dated transaction (a schedule, §5.6) stores the rate sent, or none: its occurrence gets the NBP rate of the
+  day it is entered. An edit keeps the stored rate unless a new one is sent, except that a new date replaces an NBP
+  rate with that day's. Bulk edits never change dates and use stored rates only. `GET /api/fx/rates/:currency/:date`
+  gives the sheet the NBP rate (no future dates).
+- "Latest available NBP rate" is today's quote (falling back like any quote). Account reads quote it once per foreign
+  currency per request; so do the month view and auto-assign for foreign linked accounts (§6).
 - **Split lines** use the parent's rate. The rounding remainder goes to the last line so that
   Σ line base = parent base.
 - **Cross-currency transfers**: the user enters both actual amounts.
@@ -372,6 +409,10 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 - **Revalue**: unrealized difference = round(native balance × latest rate) − Σ `amount_base`. The action posts a
   transaction with `amount = 0`, `amount_base = diff`, payee "FX revaluation", cleared. On-budget accounts get
   category RTA; tracking accounts get no category.
+  It takes an optional manual rate (else the latest NBP rate) and is refused for PLN and closed accounts and when the
+  difference is 0; a difference above the §4.4 cap is 422 `amount_too_large` (on `fxRate`). A revaluation keeps its
+  amounts: only its memo, flag, cleared and approved status change (`revaluation_fixed` otherwise); deleting it takes
+  it back.
 - Reconciliation uses native amounts.
 
 ## 10. Transactions and related workflows
@@ -416,6 +457,11 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 - **No** → the user enters the statement balance and sees the difference. They can keep reviewing, or "Create
   adjustment & finish". The adjustment is payee "Reconciliation Balance Adjustment", cleared, category RTA (on-budget)
   or none (tracking), after which everything cleared is marked reconciled.
+- `POST /api/accounts/:id/reconcile` takes `statementBalance` (an entered amount, capped like the others, §4.4),
+  `createAdjustment` and, for a foreign adjustment, an optional `fxRate` (else today's NBP rate). A difference without
+  `createAdjustment` is 422 `reconcile_mismatch` with the `difference`; an adjustment whose PLN amount is above the
+  §4.4 cap is 422 `amount_too_large` on `statementBalance`. Closed accounts are refused. It is one undoable command; a
+  loan's cleared balance includes the interest and escrow of months whose payments are all cleared (§8).
 
 **Scheduled transactions**
 - A croner job runs daily at 00:05 Europe/Warsaw and also once at server start (catch-up). For each schedule with
@@ -553,6 +599,8 @@ signs out other sessions.
   since." (or "Can't redo: …"); an empty stack → 409 `nothing_to_undo` / `nothing_to_redo`.
 - **Unconfirmed changes to reconciled transactions** → HTTP 409 `confirm_reconciled`; the UI asks and resends with
   `confirmReconciled: true`.
+- **Reconcile mismatch** (statement ≠ cleared balance, no adjustment asked for) → HTTP 422 `reconcile_mismatch` with
+  `difference` = statement − cleared, in the account's minor units.
 - **Auth failures** → 401 (no session) or 429 (rate limited / locked).
 - **Unexpected errors** → 500 with a generic message. The server logs details with pino (JSON to stdout, including a
   request ID); the UI shows a toast with Retry.

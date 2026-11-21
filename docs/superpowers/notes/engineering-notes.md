@@ -77,7 +77,9 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - Every transaction write is planned first: build a `Draft` (what the user describes) and call
   `planTransaction(db, draft, context)` in `src/server/transactions/plan.ts`. It applies spec §5.5 and §9 and returns
   the rows (`Plan`); `insertPlan` writes a new transaction and `syncPlan` brings a saved one in line. P2d's schedule
-  job, reconcile adjustments and FX revaluation should build drafts too, so they get the same rules.
+  job and reconcile adjustments build drafts too, so they get the same rules (an adjustment's system payee needs
+  `PlanContext.systemPayee`). An FX revaluation (amount 0, a PLN difference) can't be planned and is inserted
+  directly, like an account's starting balance; edits keep its amounts.
 - `loadAggregate(db, id)` returns a transaction with its transfer side, live split lines with their counterparts, or,
   for a split line's counterpart, its owning split and line (`owner`).
 - Rows that point at each other (the two sides of a transfer, a line and its counterpart) are inserted first and then
@@ -85,15 +87,57 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - The category of a budget↔tracking transfer lives on the budget-side row; `draftOf` reads it from either side.
 - Amount caps (spec §4.4): request money that becomes a ledger row uses `boundedMoneySchema` (|x| ≤ `MAX_AMOUNT`,
   1e13); every computed PLN amount goes through `assertBaseAmount` (|x| ≤ `MAX_BASE_AMOUNT`, 1e14) in
-  `transactions/rules.ts`. P2d's drafts (schedules, revaluation, reconcile) must stay within the same caps.
-- `fx_rate` holds the rate a base amount was computed with (always user-entered in P2c, so `fx_rate_manual`); sides
-  whose base is derived from the other side of a transfer store null. `effectiveRate` in the DTOs shows the rate.
+  `transactions/rules.ts`. P2d's writes (schedules, revaluation, reconcile) must stay within the same caps; P2d1's do:
+  the reconcile `statementBalance` and the interest override `amount` (≥ 0) use `boundedMoneySchema`; the reconcile
+  adjustment's base, the revalue difference and bases converted at an NBP rate (starting balances, transactions) are
+  checked, 422 `amount_too_large`. The error must name a field of the request (`statementBalance`, `fxRate`,
+  `startingBalance`, `amount`), so reconcile remaps the planner's `amount` to `statementBalance`.
+- `fx_rate` holds the rate a base amount was computed with; `fx_rate_manual` says whether the user entered it (NBP
+  rates from P2d1 on are not manual; rows without a rate store false). Sides whose base is derived from the other
+  side of a transfer store null. `effectiveRate` in the DTOs shows the rate, and `fxRateManual` the flag.
+
+### FX and loans (P2d1)
+- NBP quotes come from `deps.fx.quote(currency, date)` (`FxRates`, `src/server/fx/fx-rates.ts`). It never throws and
+  must never run inside a DB transaction or under the command lock: quote first, then call `runCommand` or open the
+  read transaction. `latestRates(fx, currencies, today)` quotes several currencies at once, once each. Account
+  creation, Revalue and the reconcile adjustment know their currency and date up front, so their routes quote
+  directly (only when no `fxRate` is sent and the account is foreign).
+- Transaction writes learn which rates they need from a dry run (`createDefaultRates` / `editDefaultRates` in
+  `src/server/transactions/default-rates.ts`): it plans the draft read-only with `PlanContext.unknownRates`, quotes
+  what is missing, and the command plans again with `PlanContext.defaults`. A rate is a `Rate { rate, manual }`;
+  `storedRates(db, agg, sameDate)` drops NBP rates when the date changes. A future-dated create skips the dry run's
+  quotes and stores the sent rate or none.
+- Account DTOs for responses come from `readAccounts` / `readAccount` (they quote the latest rates for "≈ X zł");
+  `listAccounts` / `getAccount` inside commands leave `latestRate` null. The month view and auto-assign quote
+  `latestRates(deps.fx, await linkedForeignCurrencies(deps.db), today)` before their transaction and pass the rates to
+  `loadBudgetMonth` / `autoAssignMonth`.
+- An FX revaluation is inserted directly (`revalueAccount`, `src/server/accounts/revalue.ts`); `updateTransaction`
+  sends it to `updateRevaluation`, which takes only memo, flag, cleared and approved (422 `revaluation_fixed`).
+- Tests: `createTestApp(db, { fx: stubFx({ EUR: '4.3' }) })` (or rates by date); `stub.calls` records the quotes, and
+  mutating the rates object changes later answers. The NBP client itself is tested against a `node:http` server on
+  port 0 with a short `timeoutMs`. Real table A rates are below 10 zł, so only a stub (e.g. `KWD: '13.2'`) can cross
+  `MAX_BASE_AMOUNT` in cap tests.
+- Loan balances: `loanBalances(db, accountIds)` (`src/server/loans/loan-balances.ts`) runs `computeLoanMonths` for
+  loan accounts and `loanCharges(loan, before?)` sums the synthetic interest and escrow; every balance of a loan goes
+  through them (accounts list, register header, reconcile, close, Revalue, debt targets, the loan schedule and panel).
+  - A payment is `amount > 0` with no system payee (`payee.system_kind is null`): the starting balance,
+    reconciliation adjustments and FX revaluations count in a month's total but never as payments, so they never
+    charge interest or escrow.
+  - A month's charges follow its payments' cleared status: `LoanBalances.unclearedMonths` lists months with an
+    uncleared payment, `loanCharges` returns the total plus its `cleared` and `uncleared` parts, and `listAccounts`
+    adds each part to its bucket. The working balance, close, Revalue and debt targets use the total.
+    `GET /api/accounts/:id/loan` reports the same rule per month as `chargesCleared`.
+  - The loan panel's "paid this month" is the current month's `chargedOn` from `loanBalances`, so it uses the same
+    payment definition.
+  - A loan's first month has no interest (its start balance is 0); users add an interest override for it.
+  - A foreign loan's charges are converted at Σ payment base / Σ payment amount of the month, with no NBP call.
 
 ### Budget read model
 - `loadBudgetInput(db, { throughMonth, today })` (`src/server/budget/budget-input.ts`) is the only place that turns
   the ledger into `computeBudget` input; it starts at `firstEditableMonth()`, the lower bound `assertBudgetMonth()`
-  allows, so every allowed month is in the result. `loadBudgetMonth(db, month, today)` checks the month range, runs
-  `computeBudget` once and builds the month view. Read routes run it in
+  allows, so every allowed month is in the result. `loadBudgetMonth(db, month, today, rates?)` checks the month range,
+  runs `computeBudget` once and builds the month view (`rates` are the latest NBP rates of foreign linked accounts,
+  quoted before the transaction, see "FX and loans"). Read routes run it in
   `db.transaction(fn, { isolationLevel: 'repeatable read', accessMode: 'read only' })` so every query sees one
   snapshot. Auto-assign calls it with `rec.tx` inside `runCommand`; closing a card calls `loadBudgetInput` and
   `computeBudget` directly with `rec.tx`.

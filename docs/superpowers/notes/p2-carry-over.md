@@ -63,6 +63,7 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - P2d: the scheduled-transaction job writes outside `runCommand` (no undo entry, redo kept) but should hold
   `lockCommands()` (advisory key 727274002) so it can't interleave with an undo replay.
 - P2d: `fxRate` is required to create a foreign-currency account; make it optional once the NBP lookup exists.
+  (Resolved in P2d1.)
 
 ## From P2b1 final review
 - P2d2 (not done in P2b2): a snapshot round-trip (undo/redo) test matrix for every command: PATCH account with its rename cascade,
@@ -108,10 +109,11 @@ These items were found in the P1 final review and deferred. Fold them into the P
   and "Need X to pay in full" read `transaction` (like account balances), while the budget reads `v_ledger_line`.
 - P2d: a loan's `balanceAtMonthStart` (pay-off-by-date targets) is the PLN sum of its transactions; it ignores the
   synthetic interest and escrow rows of §8 until the loan engine (`computeLoanMonths`, interest overrides) is wired in.
+  (Resolved in P2d1.)
 - P2d: the loan panel of a paired category (balance, APR, minimum payment, projected payoff, Record payment); the month
-  view only gives `linkedAccountId`.
+  view only gives `linkedAccountId`. (Resolved in P2d1.)
 - P2d: foreign-currency cards and loans: debt targets use `min_payment` and `escrow_amount` as PLN amounts, which is
-  right only for PLN accounts.
+  right only for PLN accounts. (Resolved in P2d1.)
 - P2d / final review: cap target amounts (e.g. ≤ 1e13) in the targets API. `evaluateTarget` only checks that the
   amount is a safe integer, so a huge weekly target (2e15 on a weekday that occurs 5 times) makes `GET
   /api/budget/:month` return a raw `need`/`underfunded` above 2^53. Auto-assign already clamps it (see above).
@@ -154,8 +156,9 @@ These items were found in the P1 final review and deferred. Fold them into the P
   are refused (`future_transfer_currency`). Add a column (and allow them) with the scheduled-transaction CRUD.
 - P2d: NBP rates. Until then `fxRate` is required for foreign-currency transactions and stored with
   `fx_rate_manual = true`; edits keep the stored rate unless a new one is sent. With NBP, a date change should
-  re-fetch a non-manual rate.
-- P2d: only the reconcile flow sets `reconciled`; users switch between `uncleared` and `cleared`.
+  re-fetch a non-manual rate. (Resolved in P2d1.)
+- P2d: only the reconcile flow sets `reconciled`; users switch between `uncleared` and `cleared`. (The flow exists
+  since P2d1.)
 - Later: `ChangeRecorder.update` re-selects the rows it changed with one IN list, so a single update of more than about
   65 000 rows (merging a payee with that many transactions, or P2b1's category delete) would exceed Postgres'
   bind-parameter limit. Batch it there if that ever matters.
@@ -200,3 +203,91 @@ These items were found in the P1 final review and deferred. Fold them into the P
   for replacing or removing a reconciled split's lines, moving a transfer whose other side is reconciled and deleting
   a split whose line counterpart is reconciled; `account_in_use` for each of the four tables that can use the
   transfer payee (`it.each`).
+
+## Resolved in P2d1
+- NBP rates (spec §9): `src/server/fx/fx-rates.ts` implements `FxRates.quote` (fx_rate cache, 7-day fallback, 5 s
+  timeout, null on any failure) and `AppDeps.fx`; `NBP_BASE_URL` configures it. Tests use `stubFx` or a local
+  `node:http` stub server.
+- `fxRate` is optional when creating a foreign-currency account: the starting balance takes the NBP rate of its date.
+- Foreign transactions, splits and transfers without `fxRate` are booked at the NBP rate of their date
+  (`fx_rate_manual = false`); a sent rate is manual. A date change re-fetches a non-manual rate and rebooks the base
+  amounts, the split lines and the other side of a transfer. A future-dated transaction stores the rate sent or none.
+- "≈ X zł" on accounts (`latestRate`, `balanceAtLatestRate`) and Revalue (`POST /api/accounts/:id/revalue`); an FX
+  revaluation keeps its amounts on edit (`revaluation_fixed`).
+- The reconcile flow exists (`GET`/`POST /api/accounts/:id/reconcile`); it is still the only way to set `reconciled`.
+  Its adjustment is planned with `PlanContext.systemPayee`.
+- Amount caps on P2d1's inputs (the P2c rule): the reconcile `statementBalance` and the interest override `amount`
+  (0 … 1e13) use `boundedMoneySchema` (400 "Amount is too large."). The reconcile adjustment's PLN amount
+  (`statementBalance`), the revalue difference (`fxRate`) and bases converted at an NBP rate (a foreign starting
+  balance's `startingBalance`, a transaction's `amount`) stay within `MAX_BASE_AMOUNT`, otherwise 422
+  `amount_too_large` with that field.
+- A loan's balances include the synthetic interest and escrow everywhere (`loanBalances` / `loanCharges` in
+  `src/server/loans/loan-balances.ts`), so debt targets' `balanceAtMonthStart` counts them.
+  - The charges follow their payments' cleared status: a month's interest and escrow are cleared once every payment
+    of the month is, so entering an uncleared payment never moves the cleared balance. The loan schedule reports it
+    per month as `chargesCleared`.
+  - Reconciliation adjustments, FX revaluations and the starting balance (rows with a system payee) never count as
+    loan payments, so they never charge interest or escrow.
+  - A loan's first month has no interest, even with a payment in it (its start balance is 0); the user can add an
+    interest override for that month. Spec §8 says so.
+- The loan schedule and interest overrides: `GET /api/accounts/:id/loan`, and `PUT` / `DELETE` on
+  `/api/accounts/:id/interest-overrides/:month`.
+- The loan panel of a paired category (`BudgetCategoryDto.loan`): balance, APR, minimum payment, escrow, projected
+  payoff and the Record-payment prefill. Its "paid this month" uses the `loanBalances` payment definition (the current
+  month's `chargedOn`), so a reconciliation adjustment doesn't move the projection to next month.
+- Foreign-currency cards and loans: debt targets convert `min_payment` and `escrow_amount` to PLN at the latest NBP
+  rate (0 and `incomplete` without one, except for `fixed` targets).
+
+## From P2d1
+- P2d2: entering a schedule whose `fx_rate` is null quotes the NBP rate of the occurrence date before the job's
+  transaction and lock (`deps.fx.quote`), and books it with `fx_rate_manual = false`; a schedule's manual rate stays.
+  `planTransaction` takes it as `PlanContext.defaults`.
+- P2d2: a future-dated same-currency foreign transfer entered from the receiving side still loses its `fxRate` on the
+  schedule (see "From P2c"); the P2d2 plan fixes `insertSchedule`.
+- NBP has no negative cache: a currency outside table A costs 8 requests (within the 5 s timeout) on every quote, and
+  today's rate is fetched on every read until NBP publishes it (around noon on working days).
+- `GET /api/accounts`, `GET /api/budget/:month` and auto-assign can wait up to 5 s per foreign currency for NBP when
+  the cache can't answer; the quotes run in parallel.
+- Bulk edits don't fetch NBP rates; they never change dates, so stored rates cover them.
+- Accepted limitation: `fx_rate` is `numeric(14,6)`, so a currency quoted far below 1 zł loses precision. IDR's NBP mid
+  0.00022236 is stored as 0.000222 (≈ 0.2 % off). This stays unless the rate scale is widened later (e.g. to 8
+  decimals, with a migration of the three rate columns).
+- P3: the transaction sheet pre-fills the rate from `GET /api/fx/rates/:currency/:date`, shows `fxRateManual`, and
+  interleaves a loan's synthetic rows from `GET /api/accounts/:id/loan` by `chargedOn` (cleared per
+  `chargesCleared`). The Record-payment amount is PLN; when the suggested cash account isn't PLN the sheet has to
+  convert it.
+- A loan with interest overrides counts as in use, so it can't be deleted (close it instead), like an account with
+  transactions.
+- FX revaluations and the account's starting balance are the only transactions written outside `planTransaction`
+  (an amount of 0 with a PLN difference can't be planned); reconciliation adjustments go through it with
+  `PlanContext.systemPayee`.
+- P2d1 final fix pass, code (minors from the task reviews):
+  - FINAL FIX PASS: the NBP answer is barely checked. Its `code` should equal the currency asked for, its
+    `effectiveDate` the day requested (not just one on or before the date), and a mid that rounds to 0 at 6 decimals
+    should mean "no rate".
+  - FINAL FIX PASS: the default rates of a transaction write are keyed by currency only, so a race between the dry run
+    and the command can book an NBP rate quoted for another date. Carry the quoted date and ignore defaults whose date
+    isn't the draft's (→ `fx_rate_required`).
+  - FINAL FIX PASS: Revalue and a same-day foreign account create quote today's rate twice (in the route and again in
+    `readAccount`). Pass the fetched rate into `readAccount`.
+  - FINAL FIX PASS: an interest override in a month without a payment is kept but unused, yet the month shows
+    `interestOverridden: true` with `interest: 0`. Report it only when `chargedOn` is set, and refuse a new `PUT` for
+    a month without a payment (422).
+  - FINAL FIX PASS: a foreign loan's `interestBase` (interest × Σ payment base / Σ payments) isn't capped; a 1e13
+    override with an extreme manual payment rate can pass `MAX_BASE_AMOUNT` (even 2^53). Recheck after the write and
+    answer 422 `amount_too_large`.
+  - FINAL FIX PASS: `loadLoanInfo` runs one query per loan for the last-used cash account (use `selectDistinct on`),
+    and `loanBalances` runs three times per month view.
+- P2d1 final fix pass, tests (minors from the task reviews):
+  - FINAL FIX PASS: the NBP client's timeout budget shared by all fallback steps, and the weekend branch of
+    `isFinal`.
+  - FINAL FIX PASS: `fx.calls` on Revalue.
+  - FINAL FIX PASS: later months' interest follows an overridden balance; an undo round trip of an override update;
+    `GET /api/accounts/:id/loan` for a foreign loan.
+  - FINAL FIX PASS: the panel of a foreign loan (the projected payment converted back from PLN, the minimum-payment
+    fallback without a rate, `balanceBase`); a `fixed` debt target stays complete without a rate; a foreign card's
+    minimum payment converted to PLN.
+  - Reconcile: a transfer side and a split line's counterpart among the rows it marks reconciled; no NBP quote when
+    no adjustment is made.
+  - Loan payments: a positive starting balance and an FX revaluation don't count as payments (only the reconciliation
+    adjustment has a test).
