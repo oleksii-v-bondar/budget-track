@@ -1,6 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { AccountClass } from '../../shared/accounts';
 import { BASE_CURRENCY } from '../../shared/api/accounts';
+import { MAX_BASE_AMOUNT } from '../../shared/api/common';
 import type { PayeeKind } from '../../shared/api/payees';
 import { convertToBase, type Money } from '../../engine';
 import { categoryKindOf } from '../categories/category-queries';
@@ -164,10 +165,16 @@ export function assertRateUsed(rates: Rates): void {
   }
 }
 
-export function toBase(amount: Money, rate: string): Money {
-  const base = convertToBase(amount, rate);
-  if (!Number.isSafeInteger(base)) throw new DomainError('amount_too_large', 'That amount is too large.', 'amount');
+/** Spec §4.4: a PLN amount computed from a foreign one stays within ±MAX_BASE_AMOUNT (1e14), so sums stay exact. */
+export function assertBaseAmount(base: Money, field: string): Money {
+  if (!(Math.abs(base) <= MAX_BASE_AMOUNT)) {
+    throw new DomainError('amount_too_large', 'That amount is too large.', field);
+  }
   return base;
+}
+
+export function toBase(amount: Money, rate: string, field: string): Money {
+  return assertBaseAmount(convertToBase(amount, rate), field);
 }
 
 /** Native amount → PLN (spec §9): PLN amounts are their own base; foreign ones need a rate. */
@@ -178,5 +185,5 @@ export function bookedBase(
 ): { amountBase: Money; fxRate: string | null } {
   if (currency === BASE_CURRENCY) return { amountBase: amount, fxRate: null };
   const rate = rateFor(rates, currency);
-  return { amountBase: toBase(amount, rate), fxRate: rate };
+  return { amountBase: toBase(amount, rate, 'amount'), fxRate: rate };
 }

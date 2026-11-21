@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AccountListResponse } from '../../shared/api/accounts';
 import type { CreateTransactionResponse, TransactionDto } from '../../shared/api/transactions';
 import { systemCategoryId, systemPayeeId } from '../db/lookups';
 import { category, ledgerLine, payee, scheduledTransaction, transaction } from '../db/schema';
@@ -139,6 +140,21 @@ describe('POST /api/transactions', () => {
       [rta, 100_000],
       [rta, 500_000],
     ]);
+  });
+
+  it('treats payeeId: null like an omitted payee', async () => {
+    const { checking } = await setUp();
+    expect(await createTransaction(ctx.client, { accountId: checking.id, payeeId: null, amount: -1 })).toMatchObject({
+      payeeId: null,
+      payeeName: null,
+    });
+    const named = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      payeeId: null,
+      payeeName: 'Lidl',
+      amount: -1,
+    });
+    expect(named.payeeName).toBe('Lidl');
   });
 
   it('books a foreign amount in PLN at the entered rate', async () => {
@@ -307,6 +323,81 @@ describe('POST /api/transactions', () => {
       undone: { label: 'Schedule transaction "Landlord"' },
     });
     expect(await snapshot(t.db)).toEqual(before);
+  });
+});
+
+describe('amount caps', () => {
+  // 100 bn zł in grosze: the largest amount a request may carry.
+  const MAX = 10_000_000_000_000;
+  const tooLarge = ['Amount is too large.'];
+  const fieldErrors = async (res: Response) =>
+    (await json<{ fieldErrors: Record<string, string[]> }>(res)).body.fieldErrors;
+
+  it('refuses amounts, other-side amounts and line amounts above 1e13, on create and on edit', async () => {
+    const { checking } = await setUp();
+    const euro = await createAccount(ctx.client, { name: 'Revolut', type: 'savings', currency: 'EUR', fxRate: '4' });
+    const toEuro = { accountId: checking.id, payeeId: euro.transferPayeeId };
+
+    expect(await fieldErrors(await post({ accountId: checking.id, amount: MAX + 1 }))).toEqual({ amount: tooLarge });
+    expect(await fieldErrors(await post({ accountId: checking.id, amount: -MAX - 1 }))).toEqual({ amount: tooLarge });
+    expect(await fieldErrors(await post({ ...toEuro, amount: -1, transferAmount: MAX + 1 }))).toEqual({
+      transferAmount: tooLarge,
+    });
+    const lines = [{ amount: MAX + 1 }, { amount: -MAX }];
+    expect(await fieldErrors(await post({ accountId: checking.id, amount: 1, lines }))).toEqual({
+      'lines.0.amount': tooLarge,
+    });
+
+    const txn = await createTransaction(ctx.client, { accountId: checking.id, amount: -MAX });
+    const transfer = await createTransaction(ctx.client, { ...toEuro, amount: -MAX, transferAmount: MAX });
+    const patch = (id: string, body: object) => ctx.client.send('PATCH', `/api/transactions/${id}`, body);
+    expect(await fieldErrors(await patch(txn.id, { amount: -MAX - 1 }))).toEqual({ amount: tooLarge });
+    expect(await fieldErrors(await patch(transfer.id, { transferAmount: MAX + 1 }))).toEqual({
+      transferAmount: tooLarge,
+    });
+    expect(await fieldErrors(await patch(txn.id, { lines: [{ amount: 1 }, { amount: -MAX - 1 }] }))).toEqual({
+      'lines.1.amount': tooLarge,
+    });
+  });
+
+  it('refuses a foreign amount whose PLN amount would exceed 1e14', async () => {
+    const euro = await createAccount(ctx.client, { name: 'Revolut', currency: 'EUR', fxRate: '4' });
+    const dollar = await createAccount(ctx.client, { name: 'USD', type: 'savings', currency: 'USD', fxRate: '4' });
+    const message = 'That amount is too large.';
+    const error = (field: string) => ({
+      status: 422,
+      body: { code: 'amount_too_large', message, fieldErrors: { [field]: [message] } },
+    });
+
+    expect(await json(await post({ accountId: euro.id, amount: MAX, fxRate: '10.000001' }))).toEqual(error('amount'));
+    // Received from the dollar account: the sending (EUR) amount is converted.
+    const received = { accountId: dollar.id, payeeId: euro.transferPayeeId, amount: 1, transferAmount: -MAX };
+    expect(await json(await post({ ...received, fxRate: '10.000001' }))).toEqual(error('transferAmount'));
+    const lines = [{ amount: MAX }, { amount: -MAX + 1 }];
+    expect(await json(await post({ accountId: euro.id, amount: 1, fxRate: '10.000001', lines }))).toEqual(
+      error('lines.0.amount'),
+    );
+
+    // 1e13 at a rate of 10 is exactly the limit.
+    const txn = await createTransaction(ctx.client, { accountId: euro.id, amount: MAX, fxRate: '10' });
+    expect(txn.amountBase).toBe(10 * MAX);
+    expect(await json(await ctx.client.send('PATCH', `/api/transactions/${txn.id}`, { fxRate: '10.5' }))).toEqual(
+      error('amount'),
+    );
+  });
+
+  it('keeps balances readable with the largest amounts it accepts', async () => {
+    const { checking } = await setUp();
+    // Two rows near 2^53 used to overflow every balance sum (500 on GET).
+    expect((await post({ accountId: checking.id, amount: Number.MAX_SAFE_INTEGER })).status).toBe(400);
+    await createTransaction(ctx.client, { accountId: checking.id, amount: MAX });
+    await createTransaction(ctx.client, { accountId: checking.id, amount: MAX });
+
+    const res = await json<AccountListResponse>(await ctx.client.get('/api/accounts'));
+    expect(res.status).toBe(200);
+    expect(res.body.accounts.find((a) => a.id === checking.id)!.balance.working).toBe(100_000 + 2 * MAX);
+    expect((await ctx.client.get(`/api/transactions?accountId=${checking.id}`)).status).toBe(200);
+    expect((await ctx.client.get('/api/budget/2026-11')).status).toBe(200);
   });
 });
 

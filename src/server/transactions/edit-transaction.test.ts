@@ -297,6 +297,9 @@ describe('PATCH /api/transactions/:id', () => {
     expect((await json(await patch(opening!.id, { payeeName: 'Me' }))).body).toMatchObject({
       code: 'starting_balance',
     });
+    const split = { lines: [{ amount: 60_000 }, { amount: 60_000 }] };
+    const { body } = await json<{ code: string; fieldErrors: object }>(await patch(opening!.id, split));
+    expect([body.code, Object.keys(body.fieldErrors)]).toEqual(['starting_balance', ['lines']]);
     await t.db.update(transaction).set({ deletedAt: new Date() }).where(eq(transaction.id, txn.id));
     for (const id of [txn.id, crypto.randomUUID()]) {
       expect(await json(await patch(id, { memo: 'x' }))).toEqual({

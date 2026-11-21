@@ -141,7 +141,9 @@ change.
 - `transaction`:
   - `account_id`, `date`, `payee_id`, `category_id` (null for splits, budget↔budget transfers, tracking-only
     transactions, credit/tracking starting balances), `memo`
-  - `amount` (native), `amount_base` (PLN), `fx_rate`, `fx_rate_manual` (bool)
+  - `amount` (native), `amount_base` (PLN), `fx_rate`, `fx_rate_manual` (bool). Entered amounts (transaction, transfer
+    other side, split line, starting balance) are capped at ±10^13 minor units (100 bn zł) and computed PLN amounts at
+    ±10^14, so sums over many rows stay exact below 2^53.
   - `cleared` (`uncleared` | `cleared` | `reconciled`), `approved` (bool), `flag` (`red` | `orange` | `yellow` |
     `green` | `blue` | `purple` | null)
   - `transfer_account_id`, `transfer_txn_id`, `transfer_subtxn_id`
@@ -542,9 +544,11 @@ signs out other sessions.
 
 - **zod validation failures** → HTTP 400 `{ code: "validation", fieldErrors }`; the UI shows them inline. Field
   errors are keyed by the dotted path of the field (`lines.1.amount`); a domain error about one field (or split
-  line, or bulk row: `ids.3`) carries the same `fieldErrors`.
+  line, or bulk row: `ids.3`) carries the same `fieldErrors`. An amount above the §4.4 cap is a 400 ("Amount is too
+  large.").
 - **Domain rule violations** throw a typed `DomainError(code, message)` → HTTP 422; the UI shows the message.
-  Examples: split sum mismatch, category on a budget↔budget transfer, closing an account with a non-zero balance.
+  Examples: split sum mismatch, category on a budget↔budget transfer, closing an account with a non-zero balance,
+  a PLN amount above the §4.4 cap (`amount_too_large`, with the field that caused it).
 - **Undo/redo conflicts** (a row changed since the command) → HTTP 409 `undo_conflict` "Can't undo: data changed
   since." (or "Can't redo: …"); an empty stack → 409 `nothing_to_undo` / `nothing_to_redo`.
 - **Unconfirmed changes to reconciled transactions** → HTTP 409 `confirm_reconciled`; the UI asks and resends with

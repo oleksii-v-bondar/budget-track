@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ACCOUNT_TYPES, type AccountClass, type AccountType, accountClassOf, isLoanType } from '../accounts';
-import { isoDateSchema, moneySchema, nameSchema, nonNegativeMoneySchema, noteSchema } from './common';
+import { boundedMoneySchema, isoDateSchema, nameSchema, nonNegativeMoneySchema, noteSchema } from './common';
 
 /** Spec §1: the budget currency. */
 export const BASE_CURRENCY = 'PLN';
@@ -38,7 +38,7 @@ export const createAccountRequestSchema = z
     type: z.enum(ACCOUNT_TYPES),
     currency: currencySchema.default(BASE_CURRENCY),
     /** Native minor units; negative for debt. */
-    startingBalance: moneySchema,
+    startingBalance: boundedMoneySchema,
     /** Defaults to today in the budget's time zone; may not be in the future. */
     startingDate: startingDateSchema.optional(),
     /** Required for foreign currencies until the NBP lookup exists (P2d). */

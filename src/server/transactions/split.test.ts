@@ -15,6 +15,7 @@ import {
   ledgerLines,
 } from '../test/fixtures';
 import { snapshot } from '../test/snapshot';
+import { type Draft, planTransaction } from './plan';
 
 let t: TestDatabase;
 let ctx: TestApp;
@@ -232,6 +233,28 @@ describe('splits', () => {
     });
     expect(payout.lines.map((l) => l.categoryId)).toEqual([null, null]);
     expect((await get(payout.lines[1]!.transfer!.transactionId)).categoryId).toBe(rta);
+  });
+
+  it('compares the lines with the amount exactly, even past 2^53', async () => {
+    const { checking } = await setUp();
+    // Requests can't send such amounts; P2d's internal drafts go through the same planner. In JS numbers,
+    // (2^53 − 1) + 1 + 1 − 2 rounds to 2^53 − 2.
+    const big = Number.MAX_SAFE_INTEGER;
+    const draft: Draft = {
+      accountId: checking.id,
+      date: '2026-11-20',
+      payeeId: null,
+      categoryId: null,
+      memo: null,
+      amount: big - 1,
+      transferAmount: null,
+      fxRate: null,
+      cleared: 'uncleared',
+      approved: true,
+      flag: null,
+      lines: [big, 1, 1, -2].map((amount) => ({ amount, payeeId: null, categoryId: null, memo: null })),
+    };
+    await expect(planTransaction(t.db, draft)).rejects.toMatchObject({ code: 'split_sum' });
   });
 
   it('reports invalid lines with the path of the field', async () => {

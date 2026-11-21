@@ -78,18 +78,21 @@ export async function softDelete(rec: ChangeRecorder, ids: string[], now: Date):
   if (ids.length > 0) await rec.update(transaction, inArray(transaction.id, ids), { deletedAt: now });
 }
 
-/** Soft-deletes a split's live lines and the counterparts of its transfer lines. */
-async function softDeleteLines(rec: ChangeRecorder, agg: Aggregate, now: Date): Promise<void> {
+/** Soft-deletes a split's live lines and the counterparts of its transfer lines; returns the counterparts' ids. */
+async function softDeleteLines(rec: ChangeRecorder, agg: Aggregate, now: Date): Promise<string[]> {
   const ids = agg.lines.map(({ line }) => line.id);
   if (ids.length > 0) await rec.update(subtransaction, inArray(subtransaction.id, ids), { deletedAt: now });
-  await softDelete(rec, agg.lines.flatMap(({ counterpart }) => (counterpart ? [counterpart.id] : [])), now);
+  const counterparts = agg.lines.flatMap(({ counterpart }) => (counterpart ? [counterpart.id] : []));
+  await softDelete(rec, counterparts, now);
+  return counterparts;
 }
 
 /**
  * Brings a saved transaction's rows in line with its new plan. A transfer side in the same account is updated in
  * place (keeping its cleared, approved and flag); a transfer that moves to another account, or stops being one,
  * loses its old side, and a new side is created. Split lines are updated in place, unless `replaceLines` is set:
- * then the old lines and their counterparts are soft-deleted and the plan's lines are created.
+ * then the old lines and their counterparts are soft-deleted and the plan's lines are created. Returns the ids of
+ * the transactions it soft-deleted.
  */
 export async function syncPlan(
   rec: ChangeRecorder,
@@ -97,15 +100,19 @@ export async function syncPlan(
   plan: Plan,
   now: Date,
   replaceLines: boolean,
-): Promise<void> {
+): Promise<string[]> {
   const id = agg.main.id;
   const old = agg.counterpart;
   const next = plan.counterpart;
+  const deleted: string[] = [];
   if (old && next && old.accountId === next.accountId) {
     await rec.update(transaction, eq(transaction.id, id), plan.main);
     await rec.update(transaction, eq(transaction.id, old.id), next);
   } else {
-    if (old) await softDelete(rec, [old.id], now);
+    if (old) {
+      await softDelete(rec, [old.id], now);
+      deleted.push(old.id);
+    }
     await rec.update(transaction, eq(transaction.id, id), { ...plan.main, transferTxnId: null });
     if (next) {
       const [other] = await rec.insert(transaction, { ...next, transferTxnId: id });
@@ -113,9 +120,9 @@ export async function syncPlan(
     }
   }
   if (replaceLines) {
-    await softDeleteLines(rec, agg, now);
+    deleted.push(...(await softDeleteLines(rec, agg, now)));
     if (plan.lines) await insertLines(rec, id, plan.lines);
-    return;
+    return deleted;
   }
   for (const [index, { line, counterpart }] of agg.lines.entries()) {
     const { counterpart: nextCounterpart, ...nextLine } = plan.lines![index]!;
@@ -124,4 +131,5 @@ export async function syncPlan(
       await rec.update(transaction, eq(transaction.id, counterpart.id), nextCounterpart);
     }
   }
+  return deleted;
 }

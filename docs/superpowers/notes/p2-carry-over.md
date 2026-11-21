@@ -165,13 +165,8 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - P3: register rows of the same date are ordered by id (spec: date desc, id), not by entry time.
 - P3: unknown ids in transaction bodies are 422 with a field (`invalid_account`, `invalid_payee`, `invalid_category`);
   the "unify 404 vs 422" item from the P2b1 final review stays open for the older endpoints.
-- P2c final fix pass, code (minors from the task reviews):
-  - `planLines` (`plan.ts`) sums split lines with JS numbers, which lose precision above 2^53, and doesn't check that
-    each foreign line's base is a safe integer, so huge amounts answer 500. Sum with BigInt and refuse an unsafe base
-    with 422 `amount_too_large` at `lines.<n>.amount`.
-  - `POST /api/transactions` refuses `payeeId: null` while PATCH accepts it; make it nullable on create too.
-  - Editing a cash account's starting balance with `lines` reports `fieldErrors.categoryId`
-    (`assertStartingBalanceKept`); check `lines` first.
+- P2c final fix pass, code (minors from the task reviews; the fixed ones are listed under "Resolved in the P2c final
+  fix pass" below):
   - A future-dated same-currency foreign transfer entered from the receiving side loses its `fxRate` on the schedule
     (`insertSchedule` stores the main row's rate). Use `draft.fxRate`; the P2d2 prototype reportedly does.
   - PATCH clears a memo only with `''` (`memo: null` is a 400); decide whether to accept `null`.
@@ -189,3 +184,19 @@ These items were found in the P1 final review and deferred. Fold them into the P
     Also a move and `lines` in one request.
   - Account deletion: the transfer-payee in-use check is tested only for `scheduled_subtransaction`; cover all four
     tables (`it.each`).
+
+### Resolved in the P2c final fix pass
+- Amount caps (spec §4.4, §13): every amount that becomes a ledger row (`amount`, `transferAmount` and `lines[].amount`
+  of transactions, on create and edit, and an account's `startingBalance`) uses `boundedMoneySchema`
+  (|amount| ≤ `MAX_AMOUNT` = 1e13, 100 bn zł; 400 "Amount is too large."). Computed PLN amounts (`toBase`, the
+  sending side of a transfer, split line bases, foreign starting balances) must stay within `MAX_BASE_AMOUNT` = 1e14
+  (rates up to 10), otherwise 422 `amount_too_large` with the field (`amount`, `transferAmount`, `lines.<n>.amount`,
+  `startingBalance`). Before, two rows near 2^53 in one account made `GET /api/accounts`, the register and the budget
+  answer 500 (the int8 parser throws on their sum). The caps keep sums of up to ≈ 90 maximal rows exact; assignments,
+  targets and loan fields are not capped.
+- `planLines` sums split lines with BigInt and checks each line's base (`lines.<n>.amount`).
+- `POST /api/transactions` accepts `payeeId: null` (no payee, like omitting it; a `payeeName` may go with it).
+- Editing a starting balance with `lines` reports `fieldErrors.lines` (`assertStartingBalanceKept` checks `lines`
+  before `categoryId`).
+- Bulk edits skip rows that an earlier row of the same command soft-deleted (`updateTransaction` returns
+  `deletedIds`), e.g. `setPayee` on both sides of a transfer no longer answers 404 for the side the first row ended.

@@ -209,8 +209,9 @@ function assertStartingBalanceKept(agg: Aggregate, draft: Draft): void {
     [
       ['accountId', draft.accountId !== main.accountId],
       ['payeeId', draft.payeeId !== main.payeeId],
-      ['categoryId', draft.categoryId !== main.categoryId],
+      // Before categoryId: new lines leave the split itself uncategorized.
       ['lines', draft.lines !== null],
+      ['categoryId', draft.categoryId !== main.categoryId],
     ] as const
   ).find(([, differs]) => differs);
   if (changed) {
@@ -238,18 +239,19 @@ async function assertSameCurrency(rec: ChangeRecorder, agg: Aggregate, draft: Dr
 
 /**
  * PATCH /api/transactions/:id (spec §10 "Creating and editing", "Transfers"): the edited transaction is planned again
- * with every rule of a new one, then its rows are brought in line.
+ * with every rule of a new one, then its rows are brought in line. `deletedIds` lists the transactions the edit
+ * soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts).
  */
 export async function updateTransaction(
   rec: ChangeRecorder,
   id: string,
   patch: UpdateTransactionRequest,
   context: EditContext,
-): Promise<{ payeeName: string | null }> {
+): Promise<{ payeeName: string | null; deletedIds: string[] }> {
   const agg = await loadAggregate(rec.tx, id);
   if (agg.owner) {
     await updateLineCounterpart(rec, { ...agg, owner: agg.owner }, patch);
-    return { payeeName: await payeeNameOf(rec, agg.main.payeeId) };
+    return { payeeName: await payeeNameOf(rec, agg.main.payeeId), deletedIds: [] };
   }
   const draft = await applyPatch(rec, agg, patch);
   if (patch.date !== undefined && patch.date > context.today) {
@@ -271,11 +273,11 @@ export async function updateTransaction(
   });
   const replaceLines = !sameLines(draftOf(agg).lines, draft.lines);
   assertConfirmed(editTouchesReconciled(agg, plan, replaceLines), patch.confirmReconciled);
-  await syncPlan(rec, agg, plan, context.now, replaceLines);
+  const deletedIds = await syncPlan(rec, agg, plan, context.now, replaceLines);
   if (draft.payeeId !== agg.main.payeeId || draft.categoryId !== agg.main.categoryId) {
     await rememberCategory(rec, plan);
   }
-  return { payeeName: plan.payee?.name ?? null };
+  return { payeeName: plan.payee?.name ?? null, deletedIds };
 }
 
 /** "Delete transaction "Biedronka"" */

@@ -83,6 +83,9 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - Rows that point at each other (the two sides of a transfer, a line and its counterpart) are inserted first and then
   linked with `rec.update`, because foreign keys are checked immediately; undo replays the steps in reverse.
 - The category of a budget↔tracking transfer lives on the budget-side row; `draftOf` reads it from either side.
+- Amount caps (spec §4.4): request money that becomes a ledger row uses `boundedMoneySchema` (|x| ≤ `MAX_AMOUNT`,
+  1e13); every computed PLN amount goes through `assertBaseAmount` (|x| ≤ `MAX_BASE_AMOUNT`, 1e14) in
+  `transactions/rules.ts`. P2d's drafts (schedules, revaluation, reconcile) must stay within the same caps.
 - `fx_rate` holds the rate a base amount was computed with (always user-entered in P2c, so `fx_rate_manual`); sides
   whose base is derived from the other side of a transfer store null. `effectiveRate` in the DTOs shows the rate.
 

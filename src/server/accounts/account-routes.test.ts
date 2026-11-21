@@ -160,13 +160,23 @@ describe('POST /api/accounts', () => {
     });
   });
 
-  it('refuses a foreign starting balance whose PLN amount is too large to store exactly', async () => {
-    const huge = { name: 'Huge', type: 'savings', currency: 'EUR', startingBalance: Number.MAX_SAFE_INTEGER };
-    expect(await json(await ctx.client.post('/api/accounts', { ...huge, fxRate: '4.25' }))).toEqual({
+  it('caps the starting balance at 1e13 and its PLN amount at 1e14', async () => {
+    const max = 10_000_000_000_000;
+    const huge = { name: 'Huge', type: 'savings', currency: 'EUR', startingBalance: max } as const;
+    const create = async (body: object) => json(await ctx.client.post('/api/accounts', { ...huge, ...body }));
+    expect(await create({ startingBalance: -max - 1, fxRate: '1' })).toMatchObject({
+      status: 400,
+      body: { fieldErrors: { startingBalance: ['Amount is too large.'] } },
+    });
+    const message = 'That amount is too large.';
+    expect(await create({ fxRate: '10.000001' })).toEqual({
       status: 422,
-      body: { code: 'amount_too_large', message: 'That amount is too large.' },
+      body: { code: 'amount_too_large', message, fieldErrors: { startingBalance: [message] } },
     });
     expect(await t.db.select().from(account)).toEqual([]);
+    expect(await createAccount(ctx.client, { ...huge, fxRate: '10' })).toMatchObject({
+      balanceBase: { working: 10 * max },
+    });
   });
 
   it("defaults the starting date to today in the budget's time zone and refuses future dates", async () => {

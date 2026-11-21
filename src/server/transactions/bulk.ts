@@ -52,8 +52,8 @@ function patchFor(
 /**
  * Spec §10 "Search and bulk operations": applies the action to every selected transaction inside the caller's
  * command, re-checking every rule per row. A failure names the row (`ids.<index>`) and rolls everything back.
- * Deleting skips rows already deleted with an earlier selected row (the other side of a transfer, or a split
- * line's counterpart whose split is selected too).
+ * Rows that an earlier selected row already deleted are skipped: the other side of a transfer that was deleted or
+ * ended (e.g. by a new payee), or a split line's counterpart whose split is deleted too.
  */
 export async function bulkUpdate(rec: ChangeRecorder, request: BulkRequest, context: EditContext): Promise<void> {
   const { ids, action, confirmReconciled } = request;
@@ -61,11 +61,12 @@ export async function bulkUpdate(rec: ChangeRecorder, request: BulkRequest, cont
   const deleted = new Set<string>();
   for (const [index, id] of ids.entries()) {
     try {
+      if (deleted.has(id)) continue;
       if (action.type !== 'delete') {
-        await updateTransaction(rec, id, patchFor(action, confirmReconciled), context);
+        const result = await updateTransaction(rec, id, patchFor(action, confirmReconciled), context);
+        for (const gone of result.deletedIds) deleted.add(gone);
         continue;
       }
-      if (deleted.has(id)) continue;
       const agg = await loadAggregate(rec.tx, id);
       if (agg.owner && selected.has(agg.owner.parent.id)) continue;
       const result = await deleteTransaction(rec, id, { now: context.now, confirmReconciled });

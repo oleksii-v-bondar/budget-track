@@ -155,6 +155,29 @@ describe('POST /api/transactions/bulk', () => {
     });
   });
 
+  it('skips a row that an earlier row deleted, such as the other side of a transfer it ended', async () => {
+    const { savings, shop, add } = await setUp();
+    const sent = await add({ payeeId: savings.transferPayeeId });
+    const received = sent.transfer!.transactionId;
+    const gone = await add();
+    await ctx.client.send('DELETE', `/api/transactions/${gone.id}`);
+    const before = await snapshot(t.db);
+
+    expect(await json(await bulk([sent.id, received], { type: 'setPayee', payeeId: shop.id }))).toEqual({
+      status: 200,
+      body: { ids: [sent.id, received] },
+    });
+    expect(await get(sent.id)).toMatchObject({ payeeId: shop.id, transfer: null });
+    expect((await ctx.client.get(`/api/transactions/${received}`)).status).toBe(404);
+    await ctx.client.post('/api/undo');
+    expect(await snapshot(t.db)).toEqual(before);
+    // A row deleted before the command is still not found.
+    expect(await json(await bulk([sent.id, gone.id], { type: 'approve' }))).toMatchObject({
+      status: 404,
+      body: { fieldErrors: { 'ids.1': ['Transaction not found.'] } },
+    });
+  });
+
   it('deletes the selection, including both sides of transfers and splits with their line counterparts', async () => {
     const { savings, add } = await setUp();
     const plain = await add();

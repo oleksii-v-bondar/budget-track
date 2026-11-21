@@ -6,7 +6,7 @@ import {
   type CreateAccountRequest,
   type UpdateAccountRequest,
 } from '../../shared/api/accounts';
-import { computeBudget, convertToBase, type IsoDate, monthOf } from '../../engine';
+import { computeBudget, type IsoDate, monthOf } from '../../engine';
 import { loadBudgetInput } from '../budget/budget-input';
 import type { ChangeRecorder } from '../commands/recorder';
 import { applyOrder } from '../commands/reorder';
@@ -25,6 +25,7 @@ import {
   transaction,
 } from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
+import { toBase } from '../transactions/rules';
 import { getAccount } from './account-queries';
 
 type AccountRow = typeof account.$inferSelect;
@@ -61,8 +62,7 @@ export async function createAccount(
   const foreign = input.currency !== BASE_CURRENCY;
   // The schema requires fxRate exactly when the currency is foreign.
   const rate = foreign ? input.fxRate! : null;
-  const amountBase = rate === null ? input.startingBalance : convertToBase(input.startingBalance, rate);
-  if (!Number.isSafeInteger(amountBase)) throw new DomainError('amount_too_large', 'That amount is too large.');
+  const amountBase = rate === null ? input.startingBalance : toBase(input.startingBalance, rate, 'startingBalance');
 
   const [created] = await rec.insert(account, {
     name: input.name,

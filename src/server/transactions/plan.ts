@@ -5,6 +5,7 @@ import type { Executor } from '../db/client';
 import { DomainError } from '../http/errors';
 import {
   type AccountInfo,
+  assertBaseAmount,
   assertNotSelf,
   assertNotSystemPayee,
   assertOpen,
@@ -147,7 +148,7 @@ function transferSides(main: AccountInfo, other: AccountInfo, draft: Draft, rate
   const to = mainSends ? there : here;
   const rate = from.currency !== BASE_CURRENCY && to.currency !== BASE_CURRENCY ? rateFor(rates, from.currency) : null;
   const { fromBase, toBase } = transferBases(BASE_CURRENCY, { ...from, rate }, { ...to, rate: null });
-  if (!Number.isSafeInteger(fromBase)) throw new DomainError('amount_too_large', 'That amount is too large.', 'amount');
+  assertBaseAmount(fromBase, mainSends || main.currency === other.currency ? 'amount' : 'transferAmount');
   return mainSends
     ? { mainBase: fromBase, mainRate: rate, otherAmount, otherBase: toBase, otherRate: null }
     : { mainBase: toBase, mainRate: null, otherAmount, otherBase: fromBase, otherRate: rate };
@@ -161,8 +162,8 @@ async function planLines(
   rates: Rates,
   open: (target: AccountInfo, field: string) => void,
 ): Promise<{ amountBase: Money; fxRate: string | null; lines: LinePlan[] }> {
-  const total = draft.lines.reduce((sum, line) => sum + line.amount, 0);
-  if (total !== draft.amount) {
+  const total = draft.lines.reduce((sum, line) => sum + BigInt(line.amount), 0n);
+  if (total !== BigInt(draft.amount)) {
     throw new DomainError('split_sum', 'The lines must add up to the transaction amount.', 'lines');
   }
   const { amountBase, fxRate } = bookedBase(main.currency, draft.amount, rates);
@@ -174,7 +175,7 @@ async function planLines(
     const field = (name: string) => `lines.${index}.${name}`;
     const linePayee = line.payeeId === null ? null : await requirePayee(db, line.payeeId, field('payeeId'));
     if (linePayee) assertNotSystemPayee(linePayee, field('payeeId'));
-    const lineBase = bases[index]!;
+    const lineBase = assertBaseAmount(bases[index]!, field('amount'));
     const base = {
       amount: line.amount,
       amountBase: lineBase,

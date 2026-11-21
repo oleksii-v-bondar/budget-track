@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { type AccountBalances, fxRateSchema } from './accounts';
-import { idSchema, isoDateSchema, moneySchema, nameSchema } from './common';
+import { boundedMoneySchema, idSchema, isoDateSchema, moneySchema, nameSchema } from './common';
 
 export const FLAG_COLORS = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'] as const;
 export type FlagColor = (typeof FLAG_COLORS)[number];
@@ -24,7 +24,7 @@ export const transactionDateSchema = isoDateSchema.refine((date) => date >= '197
  * currency only); the line's category follows the same rules as a transaction in the split's account.
  */
 export const splitLineSchema = z.object({
-  amount: moneySchema,
+  amount: boundedMoneySchema,
   payeeId: idSchema.nullable().default(null),
   categoryId: idSchema.nullable().default(null),
   memo: memoSchema.default(''),
@@ -52,14 +52,15 @@ export const createTransactionRequestSchema = z
     accountId: idSchema,
     /** Defaults to today. */
     date: transactionDateSchema.optional(),
-    payeeId: idSchema.optional(),
+    /** null = no payee, like omitting it. */
+    payeeId: idSchema.nullable().optional(),
     payeeName: nameSchema.optional(),
     /** null = Uncategorized on budget accounts; tracking accounts never take one. */
     categoryId: idSchema.nullable().default(null),
     memo: memoSchema.default(''),
-    amount: moneySchema,
+    amount: boundedMoneySchema,
     /** Transfers between currencies: the other account's native amount (opposite sign). */
-    transferAmount: moneySchema.optional(),
+    transferAmount: boundedMoneySchema.optional(),
     /**
      * Rate to PLN; required for foreign-currency accounts until the NBP lookup exists (P2d). For a transfer between
      * two foreign-currency accounts it is the rate of the sending account's currency (spec §9).
@@ -69,7 +70,7 @@ export const createTransactionRequestSchema = z
     flag: flagSchema.nullable().default(null),
     lines: splitLinesSchema.optional(),
   })
-  .refine((body) => body.payeeId === undefined || body.payeeName === undefined, {
+  .refine((body) => body.payeeId == null || body.payeeName === undefined, {
     path: ['payeeName'],
     message: 'Choose a payee or type a new name, not both.',
   })
@@ -101,8 +102,8 @@ export const updateTransactionRequestSchema = z
     payeeName: nameSchema.optional(),
     categoryId: idSchema.nullable().optional(),
     memo: memoSchema.optional(),
-    amount: moneySchema.optional(),
-    transferAmount: moneySchema.optional(),
+    amount: boundedMoneySchema.optional(),
+    transferAmount: boundedMoneySchema.optional(),
     fxRate: fxRateSchema.optional(),
     cleared: userClearedSchema.optional(),
     approved: z.boolean().optional(),
@@ -144,7 +145,8 @@ export type BulkAction = z.infer<typeof bulkActionSchema>;
 
 /**
  * POST /api/transactions/bulk: one undoable command. Each row gets exactly the checks of a single edit or delete;
- * if any row fails, nothing changes and the error's `fieldErrors` names it (`ids.<index>`).
+ * if any row fails, nothing changes and the error's `fieldErrors` names it (`ids.<index>`). A row that an earlier
+ * row already deleted (the other side of a transfer it deleted or ended) is skipped.
  */
 export const bulkRequestSchema = z.object({
   ids: z
