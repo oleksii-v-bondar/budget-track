@@ -4,6 +4,9 @@ import {
   type AccountListResponse,
   BASE_CURRENCY,
   createAccountRequestSchema,
+  type ReconcileResponse,
+  type ReconcileStatusDto,
+  reconcileRequestSchema,
   revalueRequestSchema,
   type RevalueResponse,
   updateAccountRequestSchema,
@@ -17,6 +20,7 @@ import { validate } from '../http/validate';
 import { getTransaction } from '../transactions/transaction-queries';
 import { createAccount, deleteAccount, reorderAccounts, setAccountClosed, updateAccount } from './account-commands';
 import { getAccount, readAccount, readAccounts } from './account-queries';
+import { reconcileAccount, reconcileStatus } from './reconcile';
 import { revalueAccount } from './revalue';
 
 /**
@@ -86,6 +90,32 @@ export function accountRoutes(deps: AppDeps) {
       return c.json<RevalueResponse>({
         account: await readAccount(deps, now, id),
         transaction: await getTransaction(deps.db, transactionId),
+      });
+    })
+    .get('/:id/reconcile', validate('param', idParamSchema), async (c) =>
+      c.json<ReconcileStatusDto>(await reconcileStatus(deps.db, c.req.valid('param').id)),
+    )
+    .post('/:id/reconcile', validate('param', idParamSchema), validate('json', reconcileRequestSchema), async (c) => {
+      const { id } = c.req.valid('param');
+      const body = c.req.valid('json');
+      const now = today();
+      // Spec §9: a foreign adjustment's NBP rate is quoted before the command, and only when one will be needed.
+      const current = await getAccount(deps.db, id);
+      const defaults = new Map<string, string>();
+      const adjusts = body.createAdjustment && current.balance.cleared !== body.statementBalance;
+      if (adjusts && body.fxRate === undefined && current.currency !== BASE_CURRENCY) {
+        const nbp = await deps.fx.quote(current.currency, now);
+        if (nbp) defaults.set(current.currency, nbp.rate);
+      }
+      const result = await runCommand(
+        deps,
+        (r: Named) => `Reconcile "${r.name}"`,
+        (rec) => reconcileAccount(rec, id, body, { today: now, now: deps.clock.now(), defaults }),
+      );
+      return c.json<ReconcileResponse>({
+        ...(await reconcileStatus(deps.db, id)),
+        adjustment: result.adjustmentId === null ? null : await getTransaction(deps.db, result.adjustmentId),
+        reconciledCount: result.reconciledCount,
       });
     })
     .delete('/:id', validate('param', idParamSchema), async (c) => {

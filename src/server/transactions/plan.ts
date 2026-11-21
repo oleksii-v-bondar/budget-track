@@ -108,6 +108,8 @@ export interface PlanContext {
   defaults?: Map<string, string>;
   /** Collects currencies that have no rate instead of refusing them (see `Rates.unknown`). */
   unknownRates?: Set<string>;
+  /** Rows the app books (reconciliation adjustments) may use a system payee; users can't choose one. */
+  systemPayee?: boolean;
 }
 
 /** PLN rows, rows whose base comes from the other side of a transfer, and rates nobody has yet store none. */
@@ -245,7 +247,7 @@ export async function planTransaction(db: Executor, draft: Draft, context: PlanC
   const main = await requireAccount(db, draft.accountId, 'accountId');
   open(main, 'accountId');
   const payee = draft.payeeId === null ? null : await requirePayee(db, draft.payeeId, 'payeeId');
-  if (payee && draft.payeeId !== existing?.payeeId) assertNotSystemPayee(payee, 'payeeId');
+  if (payee && !context.systemPayee && draft.payeeId !== existing?.payeeId) assertNotSystemPayee(payee, 'payeeId');
   const rates: Rates = {
     input: draft.fxRate,
     stored: existing?.rates ?? new Map(),

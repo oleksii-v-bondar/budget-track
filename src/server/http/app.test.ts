@@ -90,6 +90,8 @@ describe('route guard', () => {
         'DELETE /api/categories/:id/target/snooze',
         'GET /api/fx/rates/:currency/:date',
         'POST /api/accounts/:id/revalue',
+        'GET /api/accounts/:id/reconcile',
+        'POST /api/accounts/:id/reconcile',
       ]),
     );
 

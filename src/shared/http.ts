@@ -12,4 +12,6 @@ export interface ApiErrorBody {
   formErrors?: string[];
   /** Present for code "internal": quote it when reporting a bug. */
   requestId?: string;
+  /** Present for code "reconcile_mismatch": statement balance − cleared balance, in the account's minor units. */
+  difference?: number;
 }

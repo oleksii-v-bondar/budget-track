@@ -147,3 +147,37 @@ export interface RevalueResponse {
   /** The FX revaluation transaction: amount 0, `amountBase` = the difference. */
   transaction: TransactionDto;
 }
+
+/** POST /api/accounts/:id/reconcile (spec §10 "Reconcile flow"). Amounts are in the account's currency. */
+export const reconcileRequestSchema = z
+  .object({
+    /** The bank statement's balance. */
+    statementBalance: boundedMoneySchema,
+    /** When the statement differs: book the difference as a cleared adjustment, then reconcile. */
+    createAdjustment: z.boolean().default(false),
+    /** Foreign accounts: the adjustment's rate to PLN; without it, today's NBP rate. */
+    fxRate: fxRateSchema.optional(),
+  })
+  .refine((body) => body.fxRate === undefined || body.createAdjustment, {
+    path: ['fxRate'],
+    message: 'Only an adjustment takes an exchange rate.',
+  });
+
+export type ReconcileRequest = z.infer<typeof reconcileRequestSchema>;
+
+/** GET /api/accounts/:id/reconcile: "Is your cleared balance X?" */
+export interface ReconcileStatusDto {
+  accountId: string;
+  currency: string;
+  /** Cleared and reconciled transactions (for loans with their interest and escrow), in the account's currency. */
+  clearedBalance: number;
+  lastReconciledAt: string | null;
+  lastReconciledBalance: number | null;
+}
+
+export interface ReconcileResponse extends ReconcileStatusDto {
+  /** The "Reconciliation Balance Adjustment" booked for the difference, if there was one. */
+  adjustment: TransactionDto | null;
+  /** How many cleared transactions became reconciled (the adjustment included). */
+  reconciledCount: number;
+}
