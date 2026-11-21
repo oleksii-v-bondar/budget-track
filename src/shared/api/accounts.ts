@@ -41,7 +41,10 @@ export const createAccountRequestSchema = z
     startingBalance: boundedMoneySchema,
     /** Defaults to today in the budget's time zone; may not be in the future. */
     startingDate: startingDateSchema.optional(),
-    /** Required for foreign currencies until the NBP lookup exists (P2d). */
+    /**
+     * Foreign currencies: the starting balance's rate to PLN. Without it the server uses the NBP rate of the starting
+     * date (spec §9) and answers 422 `fx_rate_required` when NBP has none.
+     */
     fxRate: fxRateSchema.optional(),
     note: noteSchema.optional(),
     interestRate: interestRateSchema.optional(),
@@ -67,9 +70,6 @@ export const createAccountRequestSchema = z
     }
     if (body.currency === BASE_CURRENCY && body.fxRate !== undefined) {
       reject('fxRate', `${BASE_CURRENCY} accounts don't need an exchange rate.`);
-    }
-    if (body.currency !== BASE_CURRENCY && body.fxRate === undefined) {
-      reject('fxRate', `Enter the exchange rate to ${BASE_CURRENCY} for the starting balance.`);
     }
   });
 

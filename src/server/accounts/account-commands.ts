@@ -24,6 +24,7 @@ import {
   target,
   transaction,
 } from '../db/schema';
+import type { FxQuote } from '../fx/fx-rates';
 import { AppError, DomainError } from '../http/errors';
 import { toBase } from '../transactions/rules';
 import { getAccount } from './account-queries';
@@ -46,12 +47,14 @@ export async function assertAccountNameFree(db: Executor, name: string, exceptId
 /**
  * Spec §10 "Accounts" and "Starting balance": the account, its transfer payee, its cleared starting-balance
  * transaction, and for credit accounts the credit card payment category (spec §5.3); for loans that opt in, the
- * paired Debt Payments category with a minimum-payment target (spec §8).
+ * paired Debt Payments category with a minimum-payment target (spec §8). A foreign starting balance is booked at the
+ * rate sent (manual) or else at `nbp`, the NBP rate of its date that the caller quoted before the command.
  */
 export async function createAccount(
   rec: ChangeRecorder,
   input: CreateAccountRequest,
   today: IsoDate,
+  nbp: FxQuote | null = null,
 ): Promise<{ id: string }> {
   const startingDate = input.startingDate ?? today;
   if (startingDate > today) {
@@ -60,8 +63,14 @@ export async function createAccount(
   await assertAccountNameFree(rec.tx, input.name);
   const accountClass = accountClassOf(input.type);
   const foreign = input.currency !== BASE_CURRENCY;
-  // The schema requires fxRate exactly when the currency is foreign.
-  const rate = foreign ? input.fxRate! : null;
+  const rate = foreign ? (input.fxRate ?? nbp?.rate ?? null) : null;
+  if (foreign && rate === null) {
+    throw new DomainError(
+      'fx_rate_required',
+      `Enter the exchange rate of ${input.currency} to ${BASE_CURRENCY} for the starting balance.`,
+      'fxRate',
+    );
+  }
   const amountBase = rate === null ? input.startingBalance : toBase(input.startingBalance, rate, 'startingBalance');
 
   const [created] = await rec.insert(account, {
@@ -86,8 +95,7 @@ export async function createAccount(
     amount: input.startingBalance,
     amountBase,
     fxRate: rate,
-    // Entered by the user until the NBP lookup exists (P2d).
-    fxRateManual: foreign,
+    fxRateManual: input.fxRate !== undefined,
     cleared: 'cleared',
     isStartingBalance: true,
   });

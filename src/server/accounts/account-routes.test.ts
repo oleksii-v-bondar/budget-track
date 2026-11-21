@@ -218,9 +218,6 @@ describe('POST /api/accounts', () => {
     expect(await errors({ type: 'mortgage', createPairedCategory: true })).toEqual({
       minPayment: ["Enter the minimum payment: it becomes the paired category's target."],
     });
-    expect(await errors({ type: 'savings', currency: 'EUR' })).toEqual({
-      fxRate: ['Enter the exchange rate to PLN for the starting balance.'],
-    });
     expect(await errors({ type: 'savings', fxRate: '4.2' })).toEqual({
       fxRate: ["PLN accounts don't need an exchange rate."],
     });

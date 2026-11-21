@@ -16,6 +16,7 @@ import { redoRoutes, undoRoutes } from '../commands/undo-routes';
 import type { Config } from '../config';
 import type { Db } from '../db/client';
 import type { FxRates } from '../fx/fx-rates';
+import { fxRoutes } from '../fx/fx-routes';
 import type { Logger } from '../logger';
 import { payeeRoutes } from '../payees/payee-routes';
 import { transactionRoutes } from '../transactions/transaction-routes';
@@ -83,7 +84,8 @@ export function createApp(deps: AppDeps) {
     .route('/api/categories', categoryRoutes(deps))
     .route('/api/budget', budgetRoutes(deps))
     .route('/api/payees', payeeRoutes(deps))
-    .route('/api/transactions', transactionRoutes(deps));
+    .route('/api/transactions', transactionRoutes(deps))
+    .route('/api/fx', fxRoutes(deps));
 
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);

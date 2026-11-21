@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import {
   type AccountDto,
   type AccountListResponse,
+  BASE_CURRENCY,
   createAccountRequestSchema,
   updateAccountRequestSchema,
 } from '../../shared/api/accounts';
@@ -23,8 +24,13 @@ export function accountRoutes(deps: AppDeps) {
     .get('/', async (c) => c.json<AccountListResponse>({ accounts: await listAccounts(deps.db) }))
     .post('/', validate('json', createAccountRequestSchema), async (c) => {
       const body = c.req.valid('json');
+      const now = today();
+      const date = body.startingDate ?? now;
+      // Spec §9: the NBP rate is quoted before the command, outside its transaction.
+      const needsRate = body.currency !== BASE_CURRENCY && body.fxRate === undefined && date <= now;
+      const nbp = needsRate ? await deps.fx.quote(body.currency, date) : null;
       const { id } = await runCommand(deps, `Create account "${body.name}"`, (rec) =>
-        createAccount(rec, body, today()),
+        createAccount(rec, body, now, nbp),
       );
       return c.json<AccountDto>(await getAccount(deps.db, id), 201);
     })
