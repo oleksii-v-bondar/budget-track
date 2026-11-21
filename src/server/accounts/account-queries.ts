@@ -49,8 +49,8 @@ function atRate(working: number, quote: FxQuote | null): number | null {
 
 /**
  * Accounts in display order (spec §11 Accounts), with their balances; a loan's include the interest and escrow it was
- * charged (spec §8), as cleared amounts. `rates` holds the latest NBP rate by currency for "≈ X zł" (see
- * `readAccounts`); without one, a foreign account's `latestRate` is null.
+ * charged (spec §8), cleared once that month's payments are (see `loanBalances`). `rates` holds the latest NBP rate by
+ * currency for "≈ X zł" (see `readAccounts`); without one, a foreign account's `latestRate` is null.
  */
 export async function listAccounts(
   db: Executor,
@@ -69,11 +69,12 @@ export async function listAccounts(
   const loans = await loanBalances(db, ids);
   return rows.map(({ account: a, transferPayeeId, linkedCategoryId }) => {
     const booked = sums.get(a.id) ?? ZERO;
-    const charges = loanCharges(loans.get(a.id));
+    const { cleared, uncleared } = loanCharges(loans.get(a.id));
     const s = {
-      ...booked,
-      cleared: booked.cleared + charges.amount,
-      clearedBase: booked.clearedBase + charges.amountBase,
+      cleared: booked.cleared + cleared.amount,
+      uncleared: booked.uncleared + uncleared.amount,
+      clearedBase: booked.clearedBase + cleared.amountBase,
+      unclearedBase: booked.unclearedBase + uncleared.amountBase,
     };
     const latestRate = a.currency === BASE_CURRENCY ? null : (rates.get(a.currency) ?? null);
     return {

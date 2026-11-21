@@ -26,8 +26,8 @@ async function json<T>(res: Response) {
   return (await res.json()) as T;
 }
 
-/** 100 000 zł at 6 % APR from 1 October, with escrow 200 zł; paid 1 000 zł on 5 November. */
-async function mortgage(extra: object = {}) {
+/** 100 000 zł at 6 % APR from 1 October, with escrow 200 zł; paid 1 000 zł on 5 November unless `paid` is false. */
+async function mortgage(extra: object = {}, paid = true) {
   const loan = await createAccount(ctx.client, {
     name: 'Mortgage',
     type: 'mortgage',
@@ -39,15 +39,24 @@ async function mortgage(extra: object = {}) {
     createPairedCategory: true,
     ...extra,
   });
-  await createTransaction(ctx.client, {
+  if (paid) await pay(loan);
+  return loan;
+}
+
+/** Pays 1 000 zł from mBank into `loan` on 5 November; returns the id of the loan's side, which is uncleared. */
+async function pay(loan: AccountDto): Promise<string> {
+  const sent = await createTransaction(ctx.client, {
     accountId: checking.id,
     date: '2026-11-05',
     payeeId: loan.transferPayeeId,
     categoryId: loan.pairedCategoryId,
     amount: -100_000,
   });
-  return loan;
+  return sent.transfer!.transactionId;
 }
+
+const clear = (transactionId: string) =>
+  ctx.client.send('PATCH', `/api/transactions/${transactionId}`, { cleared: 'cleared' });
 
 const accountNamed = async (name: string) =>
   (await json<AccountListResponse>(await ctx.client.get('/api/accounts'))).accounts.find((a) => a.name === name)!;
@@ -85,13 +94,59 @@ describe('loanBalances', () => {
       },
     ]);
 
-    // Interest and escrow count as cleared; the payment itself is still uncleared.
-    const balance = { cleared: -10_070_000, uncleared: 100_000, working: -9_970_000 };
+    // The payment is still uncleared, and so are its month's interest and escrow.
+    const balance = { cleared: -10_000_000, uncleared: 30_000, working: -9_970_000 };
     expect(await accountNamed('Mortgage')).toMatchObject({ balance, balanceBase: balance });
     const register = await json<RegisterResponse>(await ctx.client.get(`/api/transactions?accountId=${loan.id}`));
     expect(register.balances).toEqual({ balance, balanceBase: balance });
     // Cash accounts are untouched.
     expect((await accountNamed('mBank')).balance.working).toBe(900_000);
+  });
+
+  it("leaves the register header's cleared balance alone when an uncleared payment is entered", async () => {
+    const loan = await mortgage({}, false);
+    const header = async () =>
+      (await json<RegisterResponse>(await ctx.client.get(`/api/transactions?accountId=${loan.id}`))).balances!.balance;
+    expect(await header()).toEqual({ cleared: -10_000_000, uncleared: 0, working: -10_000_000 });
+
+    await pay(loan);
+    expect(await header()).toEqual({ cleared: -10_000_000, uncleared: 30_000, working: -9_970_000 });
+  });
+
+  it('reconciles against a statement without an uncleared payment, and with it once it is cleared', async () => {
+    const loan = await mortgage({}, false);
+    const payment = await pay(loan);
+    const reconcile = async (statementBalance: number) => {
+      const res = await ctx.client.post(`/api/accounts/${loan.id}/reconcile`, { statementBalance });
+      expect(res.status).toBe(200);
+      return json<ReconcileResponse>(res);
+    };
+    // The statement has neither the 1 000 zł payment nor November's 500 zł interest and 200 zł escrow.
+    expect(await reconcile(-10_000_000)).toMatchObject({ clearedBalance: -10_000_000, adjustment: null });
+
+    expect((await clear(payment)).status).toBe(200);
+    const balance = { cleared: -9_970_000, uncleared: 0, working: -9_970_000 };
+    expect(await accountNamed('Mortgage')).toMatchObject({ balance, balanceBase: balance });
+    expect(await reconcile(-9_970_000)).toMatchObject({ clearedBalance: -9_970_000, adjustment: null });
+  });
+
+  it("keeps a month's interest and escrow uncleared while any of its payments is", async () => {
+    const loan = await mortgage({}, false);
+    const payments = [await pay(loan), await pay(loan)];
+    await clear(payments[0]!);
+    // The other payment is still uncleared, so November's 700 zł of interest and escrow are too.
+    expect((await accountNamed('Mortgage')).balance).toEqual({
+      cleared: -9_900_000,
+      uncleared: 30_000,
+      working: -9_870_000,
+    });
+
+    await clear(payments[1]!);
+    expect((await accountNamed('Mortgage')).balance).toEqual({
+      cleared: -9_870_000,
+      uncleared: 0,
+      working: -9_870_000,
+    });
   });
 
   it('feeds debt targets the balance with its charges', async () => {
@@ -117,8 +172,13 @@ describe('loanBalances', () => {
       principalPaid: 60_000,
       endBalance: -9_940_000,
     });
-    expect(loanCharges(loans.get(loan.id))).toEqual({ amount: -40_000, amountBase: -40_000 });
-    expect(loanCharges(loans.get(loan.id), '2026-11')).toEqual({ amount: 0, amountBase: 0 });
+    expect(loanCharges(loans.get(loan.id))).toEqual({
+      amount: -40_000,
+      amountBase: -40_000,
+      cleared: { amount: 0, amountBase: 0 },
+      uncleared: { amount: -40_000, amountBase: -40_000 },
+    });
+    expect(loanCharges(loans.get(loan.id), '2026-11')).toMatchObject({ amount: 0, amountBase: 0 });
   });
 
   it("books a foreign loan's charges in PLN at the rate of the month's payments", async () => {

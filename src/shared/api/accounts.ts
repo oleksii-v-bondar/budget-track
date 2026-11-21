@@ -169,7 +169,10 @@ export type ReconcileRequest = z.infer<typeof reconcileRequestSchema>;
 export interface ReconcileStatusDto {
   accountId: string;
   currency: string;
-  /** Cleared and reconciled transactions (for loans with their interest and escrow), in the account's currency. */
+  /**
+   * Cleared and reconciled transactions (for loans with the interest and escrow of months whose payments are all
+   * cleared), in the account's currency.
+   */
   clearedBalance: number;
   lastReconciledAt: string | null;
   lastReconciledBalance: number | null;

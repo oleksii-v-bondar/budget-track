@@ -4707,22 +4707,25 @@ index 2291e40..aaf329a 100644
  - **Progress** = (need − underfunded) / need, or Available / A for balance targets.
  - **Snooze:** if `snoozed_month = m`, underfunded is 0 and the category matches the "Snoozed" filter. Progress for a
    snoozed target still reflects its real funding (it is computed from the unsnoozed underfunded amount).
-@@ -337,6 +340,14 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
+@@ -337,6 +340,17 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
  - APR must be ≥ 0; the engine rejects a negative APR.
  - The register shows synthetic read-only "Interest charge" / "Escrow" rows per month. Editing the interest row writes
    a `loan_interest_override`.
 +- The loan's displayed balances (accounts list, register header, reconcile, close, debt targets, loan panel) include
-+  the interest and escrow charged, as cleared amounts. The loan engine runs in the loan's currency; a foreign loan's
-+  charges are converted to PLN at the rate its payments that month were booked at.
++  the interest and escrow charged. A month's charges are cleared once every payment in that month is cleared, and
++  uncleared while any of them is uncleared. The loan engine runs in the loan's currency; a foreign loan's charges are
++  converted to PLN at the rate its payments that month were booked at.
 +- `GET /api/accounts/:id/loan` returns the months with their interest, escrow and principal. A month's synthetic rows
 +  are dated on its first payment (`chargedOn`); the register interleaves them by date, and its cursor paging over
 +  transactions is unchanged.
 +- An interest override is set for a month from the loan's first transaction to the current month, in the loan's
 +  currency (≥ 0). It applies in months with a payment, and later months' interest follows the new balance.
++- A loan's first month has no interest, even with a payment in it, because its balance at the start of that month is
++  0. An interest override for that month adds it.
  
  **Payoff and inspector**
  - **Projected payoff date**: amortize from the current balance at APR/12 using the debt target amount (or
-@@ -349,6 +360,10 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
+@@ -349,6 +363,10 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
  - The paired category's inspector shows balance, APR, minimum payment, projected payoff date and a **Record payment**
    shortcut. The shortcut opens the transaction sheet prefilled: transfer from the last-used cash account to the loan,
    category = paired category, amount = target need.
@@ -4733,7 +4736,7 @@ index 2291e40..aaf329a 100644
  
  ## 9. Multi-currency (FX)
  
-@@ -358,6 +373,16 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
+@@ -358,6 +376,16 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
    up to 7 days. Results are cached in `fx_rate`.
  - The user can override the rate (`fx_rate_manual = true`). Changing the date re-fetches the rate unless it's manual.
  - Unsupported currency or NBP unreachable → the rate field is required and the UI asks for it.
@@ -4750,7 +4753,7 @@ index 2291e40..aaf329a 100644
  - **Split lines** use the parent's rate. The rounding remainder goes to the last line so that
    Σ line base = parent base.
  - **Cross-currency transfers**: the user enters both actual amounts.
-@@ -370,6 +395,9 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
+@@ -370,6 +398,9 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
  - **Revalue**: unrealized difference = round(native balance × latest rate) − Σ `amount_base`. The action posts a
    transaction with `amount = 0`, `amount_base = diff`, payee "FX revaluation", cleared. On-budget accounts get
    category RTA; tracking accounts get no category.
@@ -4760,18 +4763,18 @@ index 2291e40..aaf329a 100644
  - Reconciliation uses native amounts.
  
  ## 10. Transactions and related workflows
-@@ -414,6 +442,10 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
+@@ -414,6 +445,10 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
  - **No** → the user enters the statement balance and sees the difference. They can keep reviewing, or "Create
    adjustment & finish". The adjustment is payee "Reconciliation Balance Adjustment", cleared, category RTA (on-budget)
    or none (tracking), after which everything cleared is marked reconciled.
 +- `POST /api/accounts/:id/reconcile` takes `statementBalance`, `createAdjustment` and, for a foreign adjustment, an
 +  optional `fxRate` (else today's NBP rate). A difference without `createAdjustment` is 422 `reconcile_mismatch` with
-+  the `difference`. Closed accounts are refused. It is one undoable command; a loan's cleared balance includes its
-+  interest and escrow.
++  the `difference`. Closed accounts are refused. It is one undoable command; a loan's cleared balance includes the
++  interest and escrow of months whose payments are all cleared (§8).
  
  **Scheduled transactions**
  - A croner job runs daily at 00:05 Europe/Warsaw and also once at server start (catch-up). For each schedule with
-@@ -549,6 +581,8 @@ signs out other sessions.
+@@ -549,6 +584,8 @@ signs out other sessions.
    since." (or "Can't redo: …"); an empty stack → 409 `nothing_to_undo` / `nothing_to_redo`.
  - **Unconfirmed changes to reconciled transactions** → HTTP 409 `confirm_reconciled`; the UI asks and resends with
    `confirmReconciled: true`.
@@ -4830,11 +4833,12 @@ Choices made where the spec is silent, ambiguous or in conflict with the brief:
 8. **Account creation** books a foreign starting balance at the NBP rate of its date when no rate is sent; 422 `fx_rate_required` when NBP has none (even for a 0 balance, for consistency with transactions).
 9. **Latest rate** = today's quote with the normal fallback. Account responses quote each foreign currency once per request, in parallel, before reading; closed accounts are included. `latestRate`/`balanceAtLatestRate` are null when there is no rate, and in DTOs built inside commands (none are returned from there). The register header keeps only `balance`/`balanceBase`.
 10. **Revalue** takes an optional manual `fxRate` (an unsupported currency could never be revalued otherwise) and uses the same latest rate the account shows, so it books exactly `balanceAtLatestRate − balanceBase.working`. Refused for PLN (`revalue_pln`), closed accounts (`account_closed`, as closed accounts take no new rows) and a zero difference (`revalue_no_difference`). The row is inserted directly, not planned (amount 0 with a base ≠ 0); its `fx_rate` is the rate used. Edits may change only memo, flag, cleared and approved (`revaluation_fixed`), since planning would recompute its base to 0; deleting takes it back.
-11. **Reconcile** compares native cleared balances (`balance.cleared`, which for loans includes their charges). `reconcile_mismatch` is a 422 carrying `difference` (statement − cleared); `ApiErrorBody` gains the optional field. The adjustment is planned like any transaction (with `PlanContext.systemPayee`), so its category and FX follow §5.5 and §9; its NBP rate is quoted only when an adjustment will be made. Reconciling with nothing to change still records the reconciliation time (one undo entry). Closed accounts are refused.
+11. **Reconcile** compares native cleared balances (`balance.cleared`, which for loans includes the charges of months whose payments are cleared, decision 13). `reconcile_mismatch` is a 422 carrying `difference` (statement − cleared); `ApiErrorBody` gains the optional field. The adjustment is planned like any transaction (with `PlanContext.systemPayee`), so its category and FX follow §5.5 and §9; its NBP rate is quoted only when an adjustment will be made. Reconciling with nothing to change still records the reconciliation time (one undo entry). Closed accounts are refused.
 12. **Loan math runs in the loan's currency.** A foreign loan's interest and escrow are converted to PLN at the rate the month's payments were booked at (Σ payment base / Σ payment amount), so the payment's PLN value splits like its native one and no NBP call is needed.
-13. **Synthetic charges count as cleared** in a loan's balances everywhere: accounts list, register header, reconcile, close (a loan can't close while interest is owed), Revalue and debt targets (`balanceAtMonthStart` before m, `balanceAtMonthEnd` through m). Credit cards with an APR get no synthetic interest (spec §8 is about loans).
+13. **Synthetic charges follow their payments' cleared status.** A month's interest and escrow are cleared iff every payment in that month (an inflow without a system payee) is cleared or reconciled; while any of them is uncleared, so are the charges. `loanCharges` returns the cleared and uncleared parts, and the accounts list, register header and reconcile add each to its bucket, so entering an uncleared payment never moves the cleared balance and a statement without that payment still matches. (A second, uncleared payment in a month whose first is cleared moves the month's charges back to uncleared until it clears.) The working balance counts all charges, and so do close (a loan can't close while interest is owed), Revalue and debt targets (`balanceAtMonthStart` before m, `balanceAtMonthEnd` through m). Credit cards with an APR get no synthetic interest (spec §8 is about loans).
 14. **Synthetic register rows** come from `GET /api/accounts/:id/loan`, dated `chargedOn` (the month's first payment). The register's cursor paging is untouched; the UI interleaves the rows by date.
 15. **Interest overrides** are in the loan's currency, 0 … 10^13, for months from the first live transaction to the current month. A month without a payment keeps its override unused. Deleting a missing override is 404, like deleting a missing target. A loan with overrides counts as in use for account deletion (P2b1's rule), so it is closed instead.
 16. **Loan panel** is part of the month view (`BudgetCategoryDto.loan`) because it needs the month's target need. The projection's payment is a `fixed`/`payoff_by_date` target's need, else the minimum payment (min-payment targets project at the native minimum payment, so a foreign loan's projection needs no conversion then). It starts this month, or next month when this month's payment is in. "Last-used cash account" = the open cash account of the latest transfer into the loan, else the first open cash account; the amount is −need in PLN.
 17. **Foreign cards and loans in debt targets:** `min_payment` and `escrow_amount` are converted at the latest NBP rate quoted before the month view or auto-assign (only for currencies of foreign linked accounts). Without a rate they count as 0 and non-`fixed` debt targets are `incomplete`. The card's "Need X to pay in full" already used PLN base balances.
 18. **No migration and no engine change:** every table exists, and the engine's `revaluationDiff`, `computeLoanMonths` and `projectPayoff` are used as they are.
+19. **No interest in a loan's first month**, even with a payment in it: spec §8 taken literally, as the balance at the start of that month is 0 (the starting balance is one of its transactions); escrow is still charged. The behaviour is kept; the user can add an interest override for that month. Task 9 documents it in spec §8.
