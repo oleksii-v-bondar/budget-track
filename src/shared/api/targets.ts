@@ -46,7 +46,8 @@ export interface TargetEvaluationDto {
   snoozed: boolean;
   /**
    * A debt target whose account lacks a field it needs: the minimum payment (`min_payment`) or the APR
-   * (`payoff_by_date`). The missing value counts as 0 until the user enters it on the account.
+   * (`payoff_by_date`). The missing value counts as 0 until the user enters it on the account. For a foreign
+   * account it is also set while there is no NBP rate to convert its minimum payment and escrow to PLN.
    */
   incomplete: boolean;
 }

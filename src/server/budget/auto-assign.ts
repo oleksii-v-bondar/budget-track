@@ -4,6 +4,7 @@ import type { AutoAssignRequest, BudgetCategoryDto, BudgetMonthDto } from '../..
 import type { ChangeRecorder } from '../commands/recorder';
 import type { Executor } from '../db/client';
 import { categoryGroup } from '../db/schema';
+import type { FxQuote } from '../fx/fx-rates';
 import { DomainError } from '../http/errors';
 import { assignableCategory, setAssigned } from './assignments';
 import { loadBudgetMonth } from './budget-month';
@@ -56,9 +57,10 @@ export async function autoAssignMonth(
   month: Month,
   request: AutoAssignRequest,
   today: IsoDate,
+  rates = new Map<string, FxQuote>(),
 ): Promise<AssignmentChange[]> {
   await assertScope(rec.tx, request.scope);
-  const { result, view } = await loadBudgetMonth(rec.tx, month, today);
+  const { result, view } = await loadBudgetMonth(rec.tx, month, today, rates);
   const categories = categoriesInScope(view, request.scope);
   const changes = autoAssign({
     strategy: request.strategy,

@@ -1,7 +1,8 @@
-import { and, eq, isNull, lte, sql } from 'drizzle-orm';
+import { and, eq, isNull, lte, ne, sql } from 'drizzle-orm';
 import {
   addMonths,
   type BudgetResult,
+  convertToBase,
   dateInMonth,
   evaluateTarget,
   type IsoDate,
@@ -11,10 +12,12 @@ import {
   type TargetContext,
   type TargetDef,
 } from '../../engine';
+import { BASE_CURRENCY } from '../../shared/api/accounts';
 import type { TargetDto, TargetEvaluationDto } from '../../shared/api/targets';
 import { monthStart } from '../budget/assignments';
 import type { Executor } from '../db/client';
 import { account, category, type target, transaction } from '../db/schema';
+import type { FxQuote } from '../fx/fx-rates';
 import { loanBalances, loanCharges } from '../loans/loan-balances';
 
 export type TargetRow = typeof target.$inferSelect;
@@ -64,21 +67,36 @@ export interface LinkedAccount {
   accountId: string;
   /** PLN balance at the end of the month, or today if that is earlier (negative while money is owed). */
   balanceAtMonthEnd: Money;
-  /** Debt target inputs (spec §6, §8); a missing minimum payment or APR is 0 here. */
+  /**
+   * Debt target inputs (spec §6, §8) in PLN; a missing minimum payment or APR is 0 here. A foreign account's minimum
+   * payment and escrow are converted at the latest NBP rate, or count as 0 without one.
+   */
   debt: DebtContext;
-  /** Account fields that are not set (PATCH /api/accounts/:id can clear them). */
-  missing: { minPayment: boolean; interestRate: boolean };
+  /** Account fields that are not set (PATCH /api/accounts/:id can clear them), and a foreign account's missing rate. */
+  missing: { minPayment: boolean; interestRate: boolean; rate: boolean };
+}
+
+/** Currencies of the foreign accounts behind live credit card payment and paired loan categories. */
+export async function linkedForeignCurrencies(db: Executor): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ currency: account.currency })
+    .from(category)
+    .innerJoin(account, eq(account.id, category.linkedAccountId))
+    .where(and(isNull(category.deletedAt), ne(account.currency, BASE_CURRENCY)));
+  return rows.map((row) => row.currency);
 }
 
 /**
  * The linked account of every live credit card payment and paired loan category, keyed by category id. Balances are
  * PLN base sums of the account's live transactions dated `today` or earlier (a split parent carries its lines' sum);
  * a loan's also include the interest and escrow charged in the months before (start) or through (end) `month`.
+ * `rates` holds the latest NBP rate by currency (see `latestRates`), quoted before any transaction.
  */
 export async function loadLinkedAccounts(
   db: Executor,
   month: Month,
   today: IsoDate,
+  rates = new Map<string, FxQuote>(),
 ): Promise<Map<string, LinkedAccount>> {
   const monthEnd = dateInMonth(month, 31);
   const through = monthEnd < today ? monthEnd : today;
@@ -88,6 +106,7 @@ export async function loadLinkedAccounts(
       categoryId: category.id,
       accountId: account.id,
       accountClass: account.accountClass,
+      currency: account.currency,
       interestRate: account.interestRate,
       minPayment: account.minPayment,
       escrowAmount: account.escrowAmount,
@@ -104,27 +123,38 @@ export async function loadLinkedAccounts(
     .groupBy(category.id, account.id);
   const loans = await loanBalances(db, rows.map((row) => row.accountId));
   return new Map(
-    rows.map((row) => [
-      row.categoryId,
-      {
+    rows.map((row) => {
+      const foreign = row.currency !== BASE_CURRENCY;
+      const rate = rates.get(row.currency)?.rate ?? null;
+      // Spec §6 takes these as PLN; a foreign account's are in its own currency.
+      const toPln = (amount: Money) =>
+        !foreign ? amount : rate === null ? 0 : Math.min(convertToBase(amount, rate), Number.MAX_SAFE_INTEGER);
+      const loan = loans.get(row.accountId);
+      const linked: LinkedAccount = {
         accountId: row.accountId,
-        balanceAtMonthEnd: row.throughMonth + loanCharges(loans.get(row.accountId), addMonths(month, 1)).amountBase,
+        balanceAtMonthEnd: row.throughMonth + loanCharges(loan, addMonths(month, 1)).amountBase,
         debt: {
-          minPayment: row.minPayment ?? 0,
+          minPayment: toPln(row.minPayment ?? 0),
           apr: row.interestRate ?? '0',
-          balanceAtMonthStart: row.beforeMonth + loanCharges(loans.get(row.accountId), month).amountBase,
+          balanceAtMonthStart: row.beforeMonth + loanCharges(loan, month).amountBase,
           // Spec §6: escrow is added for loans only.
-          escrow: row.accountClass === 'tracking' ? (row.escrowAmount ?? 0) : 0,
+          escrow: row.accountClass === 'tracking' ? toPln(row.escrowAmount ?? 0) : 0,
         },
-        missing: { minPayment: row.minPayment === null, interestRate: row.interestRate === null },
-      },
-    ]),
+        missing: {
+          minPayment: row.minPayment === null,
+          interestRate: row.interestRate === null,
+          rate: foreign && rate === null,
+        },
+      };
+      return [row.categoryId, linked];
+    }),
   );
 }
 
 /**
  * Evaluates a category's target for `month` (spec §6); null before the target's start month. A debt target whose
- * account lacks its minimum payment or APR is evaluated with 0 for it and flagged `incomplete`.
+ * account lacks its minimum payment or APR, or a foreign account's latest NBP rate, is evaluated with 0 for it and
+ * flagged `incomplete`.
  */
 export function evaluateCategoryTarget(
   def: TargetDef,
@@ -138,6 +168,7 @@ export function evaluateCategoryTarget(
   const incomplete =
     def.kind === 'debt' &&
     ((def.debtMode === 'min_payment' && linked?.missing.minPayment === true) ||
-      (def.debtMode === 'payoff_by_date' && linked?.missing.interestRate === true));
+      (def.debtMode === 'payoff_by_date' && linked?.missing.interestRate === true) ||
+      (def.debtMode !== 'fixed' && linked?.missing.rate === true));
   return { ...evaluation, incomplete };
 }

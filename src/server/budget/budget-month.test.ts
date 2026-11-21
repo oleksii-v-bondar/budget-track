@@ -42,7 +42,7 @@ const evaluation = (values: Partial<TargetEvaluationDto>): TargetEvaluationDto =
   incomplete: false,
   ...values,
 });
-const noTarget = { target: null, targetEvaluation: null, needToPayInFull: null };
+const noTarget = { target: null, targetEvaluation: null, needToPayInFull: null, loan: null };
 
 function row(c: CategoryDto, values: Partial<BudgetCategoryDto>): BudgetCategoryDto {
   return {
@@ -206,6 +206,7 @@ describe('GET /api/budget/:month', () => {
             pill: 'green',
             target: { ...debtTarget, categoryId: mortgage.pairedCategoryId!, startMonth: '2026-11' },
             targetEvaluation: evaluation({ need: 60_000, progress: 1 }),
+            loan: expect.objectContaining({ accountId: mortgage.id }),
           }),
         ]),
         group('normal', 'Everyday', [

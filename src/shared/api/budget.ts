@@ -110,6 +110,8 @@ export interface BudgetCategoryDto {
   targetEvaluation: TargetEvaluationDto | null;
   /** Credit card payment categories: "Need X to pay in full" (spec §5.3); null for every other category. */
   needToPayInFull: number | null;
+  /** Paired loan categories: the loan panel (spec §8); null for every other category. */
+  loan: LoanPanelDto | null;
 }
 
 export interface BudgetGroupDto {
@@ -141,4 +143,37 @@ export interface BudgetMonthDto {
   groups: BudgetGroupDto[];
   /** Spec §3: present only while Uncategorized has activity or money in this month. */
   uncategorized: BudgetCategoryDto | null;
+}
+
+/** The loan panel of a paired loan category's sheet (spec §8, §11). */
+export interface LoanPanelDto {
+  accountId: string;
+  accountName: string;
+  currency: string;
+  /** Today's balance with the interest and escrow charged (negative while owed), in the loan's currency. */
+  balance: number;
+  /** The same in PLN. */
+  balanceBase: number;
+  /** APR in percent, e.g. "6.0000". */
+  interestRate: string | null;
+  /** In the loan's currency. */
+  minPayment: number | null;
+  escrowAmount: number | null;
+  /**
+   * 'YYYY-MM' of the last payment at the debt target's monthly amount (the minimum payment without a fixed or
+   * pay-off-by-date target), from the first month without a payment yet; 'never' when it can't pay the loan off
+   * within 1200 months.
+   */
+  projectedPayoff: string;
+  /** "Record payment" pre-fills the transaction sheet with this transfer to the loan. */
+  recordPayment: {
+    /** The cash account of the latest payment, else the first open cash account; null without one. */
+    accountId: string | null;
+    /** The loan's transfer payee. */
+    payeeId: string;
+    /** This paired category. */
+    categoryId: string;
+    /** −(the target's need this month), in PLN minor units; 0 without a target. */
+    amount: number;
+  };
 }

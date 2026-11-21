@@ -14,6 +14,8 @@ import type { CategoryDto } from '../../shared/api/categories';
 import { listCategoryGroups } from '../categories/category-queries';
 import type { Executor } from '../db/client';
 import { monthNote, target } from '../db/schema';
+import type { FxQuote } from '../fx/fx-rates';
+import { loadLoanInfo, loanPanel } from '../loans/loan-panel';
 import { evaluateCategoryTarget, loadLinkedAccounts, toTargetDto } from '../targets/target-model';
 import { assertBudgetMonth, budgetStartMonth, MONTHS_AHEAD, monthStart } from './assignments';
 import { loadBudgetInput } from './budget-input';
@@ -27,15 +29,25 @@ export interface BudgetMonth {
 /**
  * The Budget screen for `month` (spec §11) from one `computeBudget` run. Throws 422 `month_out_of_range` outside the
  * first editable month .. current month + 24. Callers run it in one transaction, so every query reads one snapshot.
+ * `rates` holds the latest NBP rates of foreign linked accounts (`linkedForeignCurrencies`), quoted before it.
  */
-export async function loadBudgetMonth(db: Executor, month: Month, today: IsoDate): Promise<BudgetMonth> {
+export async function loadBudgetMonth(
+  db: Executor,
+  month: Month,
+  today: IsoDate,
+  rates = new Map<string, FxQuote>(),
+): Promise<BudgetMonth> {
   await assertBudgetMonth(db, month, today);
   const input = await loadBudgetInput(db, { throughMonth: month, today });
   const result = computeBudget(input);
   const cells = result.byMonth[month]!;
   const groups = await listCategoryGroups(db);
   const targets = new Map((await db.select().from(target)).map((row) => [row.categoryId, toTargetDto(row)]));
-  const linked = await loadLinkedAccounts(db, month, today);
+  const linked = await loadLinkedAccounts(db, month, today, rates);
+  const pairedLoans = groups.flatMap((g) =>
+    g.categories.flatMap((c) => (c.kind === 'debt_payment' && c.linkedAccountId ? [c.linkedAccountId] : [])),
+  );
+  const loans = await loadLoanInfo(db, pairedLoans, today);
   const [note] = await db
     .select({ note: monthNote.note })
     .from(monthNote)
@@ -46,6 +58,7 @@ export async function loadBudgetMonth(db: Executor, month: Month, today: IsoDate
     const def = targets.get(c.id) ?? null;
     const account = linked.get(c.id);
     const evaluation = def && evaluateCategoryTarget(def, result, month, c.id, account);
+    const loan = c.kind === 'debt_payment' && c.linkedAccountId ? loans.get(c.linkedAccountId) : undefined;
     return {
       id: c.id,
       name: c.name,
@@ -64,6 +77,7 @@ export async function loadBudgetMonth(db: Executor, month: Month, today: IsoDate
       targetEvaluation: evaluation,
       needToPayInFull:
         c.kind === 'cc_payment' && account ? cardPaymentShortfall(account.balanceAtMonthEnd, cell.available) : null,
+      loan: loan ? loanPanel(loan, c.id, def, evaluation?.need ?? null, today, rates.get(loan.account.currency)) : null,
     };
   };
 

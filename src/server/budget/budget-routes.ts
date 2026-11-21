@@ -16,7 +16,9 @@ import { type AuthedEnv, requireSession } from '../auth/sessions';
 import { todayIn } from '../clock';
 import { type Named, runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
+import { latestRates } from '../fx/fx-rates';
 import { validate } from '../http/validate';
+import { linkedForeignCurrencies } from '../targets/target-model';
 import { assertBudgetMonth, assignableCategory, assignedIn, moveMoney, setAssigned, setMonthNote } from './assignments';
 import { autoAssignMonth, STRATEGY_LABELS } from './auto-assign';
 import { loadBudgetMonth } from './budget-month';
@@ -27,13 +29,17 @@ import { loadBudgetMonth } from './budget-month';
  */
 export function budgetRoutes(deps: AppDeps) {
   const today = () => todayIn(deps.config.timeZone, deps.clock.now());
+  // Spec §6, §9: debt targets of foreign cards and loans convert at the latest NBP rate, quoted before the
+  // transaction (cache first, at most once per currency, bounded by NBP's 5 s timeout).
+  const rates = async () => latestRates(deps.fx, await linkedForeignCurrencies(deps.db), today());
 
   return new Hono<AuthedEnv>()
     .use('*', requireSession(deps))
     .get('/:month', validate('param', monthParamSchema), async (c) => {
       const { month } = c.req.valid('param');
+      const latest = await rates();
       // One read-only snapshot for all the month view's queries.
-      const { view } = await deps.db.transaction((tx) => loadBudgetMonth(tx, month, today()), {
+      const { view } = await deps.db.transaction((tx) => loadBudgetMonth(tx, month, today(), latest), {
         isolationLevel: 'repeatable read',
         accessMode: 'read only',
       });
@@ -84,8 +90,9 @@ export function budgetRoutes(deps: AppDeps) {
       async (c) => {
         const { month } = c.req.valid('param');
         const body = c.req.valid('json');
+        const latest = await rates();
         const changes = await runCommand(deps, `Auto-assign: ${STRATEGY_LABELS[body.strategy]}`, (rec) =>
-          autoAssignMonth(rec, month, body, today()),
+          autoAssignMonth(rec, month, body, today(), latest),
         );
         return c.json<AutoAssignResponse>({
           assignments: changes.map((change) => ({ month, categoryId: change.categoryId, amount: change.to })),

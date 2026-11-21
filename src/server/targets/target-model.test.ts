@@ -106,7 +106,7 @@ describe('loadLinkedAccounts', () => {
             accountId: visa.id,
             balanceAtMonthEnd: -125_000,
             debt: { minPayment: 5_000, apr: '24.0000', balanceAtMonthStart: -120_000, escrow: 0 },
-            missing: { minPayment: false, interestRate: false },
+            missing: { minPayment: false, interestRate: false, rate: false },
           },
         ],
         [
@@ -116,7 +116,7 @@ describe('loadLinkedAccounts', () => {
             // The November payment is charged interest (6 % / 12 of 100 000 zł = 500 zł) and escrow (200 zł).
             balanceAtMonthEnd: -10_010_000,
             debt: { minPayment: 60_000, apr: '6.0000', balanceAtMonthStart: -10_000_000, escrow: 20_000 },
-            missing: { minPayment: false, interestRate: false },
+            missing: { minPayment: false, interestRate: false, rate: false },
           },
         ],
       ]),
