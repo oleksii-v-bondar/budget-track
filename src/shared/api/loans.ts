@@ -5,7 +5,8 @@ export const loanMonthParamSchema = z.object({ id: idSchema, month: monthSchema 
 
 /**
  * PUT /api/accounts/:id/interest-overrides/:month: the month's interest, in the loan's currency (spec §8), 0 …
- * MAX_AMOUNT like every amount that ends up in a balance.
+ * MAX_AMOUNT like every amount that ends up in a balance. Only months with a payment take one (422 `no_loan_payment`),
+ * and its PLN value at the rate of the month's payments stays within MAX_BASE_AMOUNT (422 `amount_too_large`).
  */
 export const interestOverrideRequestSchema = z.object({
   amount: boundedMoneySchema.min(0, 'Enter 0 or more.'),
@@ -24,7 +25,7 @@ export interface LoanMonthDto {
   /** The "Interest charge" row; editing it sets an interest override. */
   interest: number;
   interestBase: number;
-  /** The interest is an override rather than APR / 12 of the start balance. */
+  /** The interest is an override rather than APR / 12 of the start balance; false in a month without a payment. */
   interestOverridden: boolean;
   /** The "Escrow" row. */
   escrow: number;

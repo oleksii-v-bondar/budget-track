@@ -7,6 +7,7 @@ import type { ChangeRecorder } from '../commands/recorder';
 import type { Executor } from '../db/client';
 import { account, loanInterestOverride, transaction } from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
+import { assertBaseAmount } from '../transactions/rules';
 import { loanBalances } from './loan-balances';
 
 type AccountRow = typeof account.$inferSelect;
@@ -59,7 +60,9 @@ const overrideWhere = (id: string, month: Month) =>
 
 /**
  * Spec §8: editing a month's "Interest charge" row replaces the computed interest with `amount` (in the loan's
- * currency). It applies in months with a payment, and later months' interest follows the new balance.
+ * currency). Only months with a payment have that row (422 `no_loan_payment` otherwise), and later months' interest
+ * follows the new balance. Every month's interest stays within ±MAX_BASE_AMOUNT in PLN at the rate of its payments
+ * (spec §4.4; `amount_too_large` on `amount`).
  */
 export async function setInterestOverride(
   rec: ChangeRecorder,
@@ -70,9 +73,18 @@ export async function setInterestOverride(
 ): Promise<{ name: string }> {
   const loan = await loanAccount(rec.tx, id);
   await assertLoanMonth(rec.tx, id, month, today);
+  const months = async () => (await loanBalances(rec.tx, [id])).get(id)?.months ?? [];
+  if (!(await months()).find((m) => m.month === month)?.chargedOn) {
+    throw new DomainError(
+      'no_loan_payment',
+      'Interest is charged only in months with a payment. Enter the payment first.',
+      'month',
+    );
+  }
   const [existing] = await rec.tx.select().from(loanInterestOverride).where(overrideWhere(id, month));
   if (existing) await rec.update(loanInterestOverride, overrideWhere(id, month), { amount });
   else await rec.insert(loanInterestOverride, { accountId: id, month: monthStart(month), amount });
+  for (const m of await months()) assertBaseAmount(m.interestBase, 'amount');
   return { name: loan.name };
 }
 

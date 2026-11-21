@@ -241,7 +241,8 @@ These items were found in the P1 final review and deferred. Fold them into the P
 ## From P2d1
 - P2d2: entering a schedule whose `fx_rate` is null quotes the NBP rate of the occurrence date before the job's
   transaction and lock (`deps.fx.quote`), and books it with `fx_rate_manual = false`; a schedule's manual rate stays.
-  `planTransaction` takes it as `PlanContext.defaults`.
+  `planTransaction` takes it as `PlanContext.defaults = { date: <occurrence date>, rates }` (the planner ignores
+  defaults quoted for another date than the draft's).
 - P2d2: a future-dated same-currency foreign transfer entered from the receiving side still loses its `fxRate` on the
   schedule (see "From P2c"); the P2d2 plan fixes `insertSchedule`.
 - NBP has no negative cache: a currency outside table A costs 8 requests (within the 5 s timeout) on every quote, and
@@ -262,26 +263,22 @@ These items were found in the P1 final review and deferred. Fold them into the P
   (an amount of 0 with a PLN difference can't be planned); reconciliation adjustments go through it with
   `PlanContext.systemPayee`.
 - P2d1 final fix pass, code (minors from the task reviews):
-  - FINAL FIX PASS: the NBP answer is barely checked. Its `code` should equal the currency asked for, its
-    `effectiveDate` the day requested (not just one on or before the date), and a mid that rounds to 0 at 6 decimals
-    should mean "no rate".
-  - FINAL FIX PASS: the default rates of a transaction write are keyed by currency only, so a race between the dry run
-    and the command can book an NBP rate quoted for another date. Carry the quoted date and ignore defaults whose date
-    isn't the draft's (→ `fx_rate_required`).
-  - FINAL FIX PASS: Revalue and a same-day foreign account create quote today's rate twice (in the route and again in
-    `readAccount`). Pass the fetched rate into `readAccount`.
-  - FINAL FIX PASS: an interest override in a month without a payment is kept but unused, yet the month shows
-    `interestOverridden: true` with `interest: 0`. Report it only when `chargedOn` is set, and refuse a new `PUT` for
-    a month without a payment (422).
-  - FINAL FIX PASS: a foreign loan's `interestBase` (interest × Σ payment base / Σ payments) isn't capped; a 1e13
-    override with an extreme manual payment rate can pass `MAX_BASE_AMOUNT` (even 2^53). Recheck after the write and
-    answer 422 `amount_too_large`.
-  - FINAL FIX PASS: `loadLoanInfo` runs one query per loan for the last-used cash account (use `selectDistinct on`),
-    and `loanBalances` runs three times per month view.
+  - RESOLVED (final fix pass): the NBP answer is checked: its `code` must equal the currency asked for, its
+    `effectiveDate` the day requested, and a mid that rounds to 0 at 6 decimals means "no rate".
+  - RESOLVED (final fix pass): the default rates of a transaction write carry the date they were quoted for
+    (`DefaultRates { date, rates }`); the planner ignores them for a draft of another date (→ `fx_rate_required`).
+  - RESOLVED (final fix pass): Revalue and a same-day foreign account create pass the rate they quoted to
+    `readAccount` (`quoted`), so each currency is quoted once per request.
+  - RESOLVED (final fix pass): `interestOverridden` is true only in a month with a payment (`chargedOn` set), and a
+    `PUT` for a month without a payment is 422 `no_loan_payment`.
+  - RESOLVED (final fix pass): after an override is written, every month's `interestBase` is checked against
+    `MAX_BASE_AMOUNT` (422 `amount_too_large` on `amount`).
+  - RESOLVED (final fix pass): `loadLoanInfo` finds every loan's last-used cash account in one `select distinct on`
+    query. Still open: `loanBalances` runs three times per month view.
 - P2d1 final fix pass, tests (minors from the task reviews):
   - FINAL FIX PASS: the NBP client's timeout budget shared by all fallback steps, and the weekend branch of
     `isFinal`.
-  - FINAL FIX PASS: `fx.calls` on Revalue.
+  - RESOLVED (final fix pass): `fx.calls` on Revalue (and on a same-day foreign account create).
   - FINAL FIX PASS: later months' interest follows an overridden balance; an undo round trip of an override update;
     `GET /api/accounts/:id/loan` for a foreign loan.
   - FINAL FIX PASS: the panel of a foreign loan (the projected payment converted back from PLN, the minimum-payment
@@ -291,3 +288,10 @@ These items were found in the P1 final review and deferred. Fold them into the P
     no adjustment is made.
   - Loan payments: a positive starting balance and an FX revaluation don't count as payments (only the reconciliation
     adjustment has a test).
+- Resolved in the P2d1 final fix pass (final review):
+  - A loan month's interest and escrow are cleared once any of its payments is cleared (not only when all are): a
+    second, uncleared payment in a month whose first one is cleared no longer moves the cleared balance, so reconcile
+    against the same statement still matches instead of booking a false adjustment.
+  - `monthSchema` refuses year 0000 (400), which Postgres dates lack (DELETE of an interest override was a 500).
+  - An account's `minPayment` and `escrowAmount` are capped at 0 … 1e13 (`boundedMoneySchema`), and "≈ X zł" is null
+    for a working balance outside the safe integer range instead of a 500.

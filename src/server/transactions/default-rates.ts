@@ -5,7 +5,7 @@ import type { FxRates } from '../fx/fx-rates';
 import { AppError } from '../http/errors';
 import { findUserPayeeByName } from '../payees/payee-commands';
 import { loadAggregate } from './aggregate';
-import { type Draft, type PlanContext, planTransaction } from './plan';
+import { type DefaultRates, type Draft, type PlanContext, planTransaction } from './plan';
 import { createDraft, editDraft, type PayeeByName } from './transaction-commands';
 
 interface Deps {
@@ -23,28 +23,30 @@ const lookUpPayee =
  * Spec §9 default rates, resolved before the command: plans the write without writing (outside any transaction and
  * the command lock) to learn which currencies still need a rate, i.e. none was sent or stored, and quotes them from
  * NBP for the draft's date. The command then plans again with these defaults; a currency NBP has no rate for stays
- * missing, so the command answers 422 `fx_rate_required`. Errors of the dry run are left to the command to report.
+ * missing, so the command answers 422 `fx_rate_required`, and so does a draft whose date changed in between (the
+ * defaults carry the date they were quoted for). Errors of the dry run are left to the command to report.
  */
 async function quoteMissingRates(
   deps: Deps,
   prepare: () => Promise<{ draft: Draft; context: PlanContext } | null>,
-): Promise<Map<string, string>> {
+): Promise<DefaultRates | undefined> {
   const unknownRates = new Set<string>();
   let date: IsoDate | null = null;
   try {
     const prepared = await prepare();
-    if (!prepared) return new Map();
+    if (!prepared) return undefined;
     date = prepared.draft.date;
     await planTransaction(deps.db, prepared.draft, { ...prepared.context, unknownRates });
   } catch (err) {
     if (!(err instanceof AppError)) throw err;
   }
-  const defaults = new Map<string, string>();
+  if (date === null) return undefined;
+  const rates = new Map<string, string>();
   for (const currency of unknownRates) {
-    const quote = await deps.fx.quote(currency, date!);
-    if (quote) defaults.set(currency, quote.rate);
+    const quote = await deps.fx.quote(currency, date);
+    if (quote) rates.set(currency, quote.rate);
   }
-  return defaults;
+  return { date, rates };
 }
 
 /** NBP rates a new transaction needs. A future-dated one becomes a schedule, which takes no NBP rate. */
@@ -52,7 +54,7 @@ export function createDefaultRates(
   deps: Deps,
   input: CreateTransactionRequest,
   today: IsoDate,
-): Promise<Map<string, string>> {
+): Promise<DefaultRates | undefined> {
   return quoteMissingRates(deps, async () => {
     const draft = await createDraft(input, today, lookUpPayee(deps.db));
     return draft.date > today ? null : { draft, context: {} };
@@ -65,7 +67,7 @@ export function editDefaultRates(
   id: string,
   patch: UpdateTransactionRequest,
   today: IsoDate,
-): Promise<Map<string, string>> {
+): Promise<DefaultRates | undefined> {
   return quoteMissingRates(deps, async () => {
     const agg = await loadAggregate(deps.db, id);
     // A split line's counterpart takes no rate, and no edit moves a transaction past today.

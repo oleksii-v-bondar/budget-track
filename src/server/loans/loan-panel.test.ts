@@ -104,6 +104,32 @@ describe('the loan panel of a paired category', () => {
     });
   });
 
+  it('suggests each loan the cash account of its own latest transfer', async () => {
+    const loan = await mortgage();
+    const car = await createAccount(ctx.client, {
+      name: 'Car loan',
+      type: 'auto_loan',
+      startingBalance: -1_000_000,
+      startingDate: '2026-10-01',
+      minPayment: 50_000,
+      createPairedCategory: true,
+    });
+    const pay = (from: AccountDto, to: AccountDto, date: string) =>
+      createTransaction(ctx.client, {
+        accountId: from.id,
+        date,
+        payeeId: to.transferPayeeId,
+        categoryId: to.pairedCategoryId,
+        amount: -1_000,
+      });
+    await pay(checking, loan, '2026-11-02');
+    await pay(savings, loan, '2026-11-03');
+    await pay(savings, car, '2026-11-01');
+    await pay(checking, car, '2026-11-04');
+    expect((await categoryRow(loan.pairedCategoryId!)).loan!.recordPayment.accountId).toBe(savings.id);
+    expect((await categoryRow(car.pairedCategoryId!)).loan!.recordPayment.accountId).toBe(checking.id);
+  });
+
   it("projects with a fixed target's amount, and never pays off when it doesn't beat the interest", async () => {
     const loan = await mortgage();
     expect((await setTarget(loan.pairedCategoryId!, { debtMode: 'fixed', amount: 40_000 })).status).toBe(200);

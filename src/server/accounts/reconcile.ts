@@ -6,7 +6,7 @@ import type { Executor } from '../db/client';
 import { systemCategoryId, systemPayeeId } from '../db/lookups';
 import { account, transaction } from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
-import { planTransaction } from '../transactions/plan';
+import { type DefaultRates, planTransaction } from '../transactions/plan';
 import { assertBaseAmount } from '../transactions/rules';
 import { insertPlan } from '../transactions/write';
 import { getAccount } from './account-queries';
@@ -27,7 +27,7 @@ export interface ReconcileContext {
   today: IsoDate;
   now: Date;
   /** Spec §9: today's NBP rate for a foreign adjustment, quoted before the command. */
-  defaults: Map<string, string>;
+  defaults: DefaultRates;
 }
 
 /**

@@ -19,6 +19,7 @@ import { type Named, runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
 import { deleteInterestOverride, getLoan, setInterestOverride } from '../loans/loan-commands';
+import type { DefaultRates } from '../transactions/plan';
 import { getTransaction } from '../transactions/transaction-queries';
 import { createAccount, deleteAccount, reorderAccounts, setAccountClosed, updateAccount } from './account-commands';
 import { getAccount, readAccount, readAccounts } from './account-queries';
@@ -45,7 +46,9 @@ export function accountRoutes(deps: AppDeps) {
       const { id } = await runCommand(deps, `Create account "${body.name}"`, (rec) =>
         createAccount(rec, body, now, nbp),
       );
-      return c.json<AccountDto>(await readAccount(deps, now, id), 201);
+      // A starting balance dated today was booked at the latest rate, which the response shows too.
+      const quoted = new Map(nbp && date === now ? [[body.currency, nbp]] : []);
+      return c.json<AccountDto>(await readAccount(deps, now, id, quoted), 201);
     })
     .put('/order', validate('json', reorderRequestSchema), async (c) => {
       const { ids } = c.req.valid('json');
@@ -90,7 +93,7 @@ export function accountRoutes(deps: AppDeps) {
         (rec) => revalueAccount(rec, id, rate, now),
       );
       return c.json<RevalueResponse>({
-        account: await readAccount(deps, now, id),
+        account: await readAccount(deps, now, id, new Map(nbp ? [[currency, nbp]] : [])),
         transaction: await getTransaction(deps.db, transactionId),
       });
     })
@@ -103,11 +106,11 @@ export function accountRoutes(deps: AppDeps) {
       const now = today();
       // Spec §9: a foreign adjustment's NBP rate is quoted before the command, and only when one will be needed.
       const current = await getAccount(deps.db, id);
-      const defaults = new Map<string, string>();
+      const defaults: DefaultRates = { date: now, rates: new Map() };
       const adjusts = body.createAdjustment && current.balance.cleared !== body.statementBalance;
       if (adjusts && body.fxRate === undefined && current.currency !== BASE_CURRENCY) {
         const nbp = await deps.fx.quote(current.currency, now);
-        if (nbp) defaults.set(current.currency, nbp.rate);
+        if (nbp) defaults.rates.set(current.currency, nbp.rate);
       }
       const result = await runCommand(
         deps,

@@ -61,6 +61,13 @@ describe('"≈ X zł" on accounts', () => {
     ]);
   });
 
+  it("quotes today's rate once when a foreign account dated today is created", async () => {
+    fx.calls.splice(0);
+    const euro = await foreign('Revolut', { startingDate: '2026-11-20', startingBalance: 1_000 });
+    expect(euro).toMatchObject({ balanceBase: { working: 4_400 }, latestRate: { rate: '4.400000' } });
+    expect(fx.calls).toEqual([{ currency: 'EUR', date: '2026-11-20' }]);
+  });
+
   it('shows no "≈ X zł" for a balance beyond the safe integer range', async () => {
     const loan = await createAccount(ctx.client, {
       name: 'Euro mortgage',
@@ -104,8 +111,11 @@ describe('POST /api/accounts/:id/revalue', () => {
     expect(await readyToAssign()).toBe(100_000);
     const before = await snapshot(t.db);
 
+    fx.calls.splice(0);
     const res = await json<RevalueResponse>(await revalue(euro.id));
     expect(res.status).toBe(200);
+    // The latest rate is quoted once, for the revaluation and the account it answers with.
+    expect(fx.calls).toEqual([{ currency: 'EUR', date: '2026-11-20' }]);
     // 9 300 × 4.4 = 40 920; 40 000 was booked.
     expect(res.body.transaction).toMatchObject<Partial<TransactionDto>>({
       accountId: euro.id,

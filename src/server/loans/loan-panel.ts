@@ -35,22 +35,29 @@ export async function loadLoanInfo(db: Executor, accountIds: string[], today: Is
     .where(openCash)
     .orderBy(asc(paymentAccount.sortOrder), asc(paymentAccount.createdAt), asc(paymentAccount.id))
     .limit(1);
+  // The open cash account of each loan's latest transfer in, in one query.
+  const latest = await db
+    .selectDistinctOn([transaction.accountId], { loanId: transaction.accountId, id: paymentAccount.id })
+    .from(transaction)
+    .innerJoin(paymentAccount, eq(paymentAccount.id, transaction.transferAccountId))
+    .where(
+      and(
+        inArray(transaction.accountId, accountIds),
+        isNull(transaction.deletedAt),
+        gt(transaction.amount, 0),
+        openCash,
+      ),
+    )
+    .orderBy(transaction.accountId, desc(transaction.date), desc(transaction.id));
+  const latestByLoan = new Map(latest.map((row) => [row.loanId, row.id]));
   const balances = await loanBalances(db, accountIds);
   const result = new Map<string, LoanInfo>();
   for (const loan of accounts) {
     const thisMonth = balances.get(loan.id)?.months.find((m) => m.month === monthOf(today));
-    const inflows = and(eq(transaction.accountId, loan.id), isNull(transaction.deletedAt), gt(transaction.amount, 0));
-    const [latest] = await db
-      .select({ id: paymentAccount.id })
-      .from(transaction)
-      .innerJoin(paymentAccount, eq(paymentAccount.id, transaction.transferAccountId))
-      .where(and(inflows, openCash))
-      .orderBy(desc(transaction.date), desc(transaction.id))
-      .limit(1);
     result.set(loan.id, {
       account: loan,
       paidThisMonth: Boolean(thisMonth?.chargedOn),
-      paymentAccountId: latest?.id ?? firstCash?.id ?? null,
+      paymentAccountId: latestByLoan.get(loan.id) ?? firstCash?.id ?? null,
     });
   }
   return result;

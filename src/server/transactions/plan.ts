@@ -93,6 +93,12 @@ export interface Plan {
   payeeDefault: { payeeId: string; categoryId: string } | null;
 }
 
+/** Spec §9: NBP rates by currency, quoted before the command for one date (see `default-rates.ts`). */
+export interface DefaultRates {
+  date: IsoDate;
+  rates: Map<string, string>;
+}
+
 /** What an edited transaction already has; edits may keep values that new transactions can't use. */
 export interface PlanContext {
   existing?: {
@@ -104,8 +110,11 @@ export interface PlanContext {
     /** Accounts that already hold the transaction's rows (they may be closed). */
     accountIds: Set<string>;
   };
-  /** Spec §9: NBP rates for the draft's date by currency, quoted before the command (see `default-rates.ts`). */
-  defaults?: Map<string, string>;
+  /**
+   * Spec §9: NBP rates quoted before the command. They apply only to a draft of the date they were quoted for: if the
+   * transaction's date changed in between, its currencies have no default (422 `fx_rate_required`).
+   */
+  defaults?: DefaultRates;
   /** Collects currencies that have no rate instead of refusing them (see `Rates.unknown`). */
   unknownRates?: Set<string>;
   /** Rows the app books (reconciliation adjustments) may use a system payee; users can't choose one. */
@@ -251,7 +260,7 @@ export async function planTransaction(db: Executor, draft: Draft, context: PlanC
   const rates: Rates = {
     input: draft.fxRate,
     stored: existing?.rates ?? new Map(),
-    defaults: context.defaults ?? new Map(),
+    defaults: context.defaults?.date === draft.date ? context.defaults.rates : new Map(),
     unknown: context.unknownRates ?? null,
     used: false,
   };

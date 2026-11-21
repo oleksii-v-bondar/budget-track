@@ -16,7 +16,7 @@ import { account, loanInterestOverride, payee, transaction } from '../db/schema'
 export interface LoanMonthRow extends LoanMonth {
   /** The day of the month's first payment, when interest and escrow are charged; null in a month without one. */
   chargedOn: IsoDate | null;
-  /** The interest is a `loan_interest_override`, not APR / 12 of the start balance. */
+  /** The interest is a `loan_interest_override`, not APR / 12 of the start balance (only in months with a payment). */
   interestOverridden: boolean;
   /** PLN values at the rate the month's payments were booked at (the native amounts for PLN loans). */
   interestBase: Money;
@@ -99,7 +99,7 @@ export async function loanBalances(db: Executor, accountIds: string[]): Promise<
         return {
           ...m,
           chargedOn: firstPayment,
-          interestOverridden: m.month in interestOverrides,
+          interestOverridden: firstPayment !== null && m.month in interestOverrides,
           interestBase: toBase(m.interest),
           escrowBase: toBase(m.escrow),
         };

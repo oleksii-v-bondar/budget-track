@@ -111,16 +111,28 @@ export async function getAccount(db: Executor, id: string): Promise<AccountDto> 
 
 /**
  * Accounts for API responses, with "≈ X zł": the latest NBP rate of each foreign currency is quoted first, once per
- * currency, outside any transaction (cache first; each quote is bounded by NBP's 5 s timeout).
+ * currency, outside any transaction (cache first; each quote is bounded by NBP's 5 s timeout). `quoted` holds today's
+ * rates the request already has, so they aren't quoted again.
  */
-export async function readAccounts(deps: { db: Db; fx: FxRates }, today: IsoDate, where?: SQL): Promise<AccountDto[]> {
+export async function readAccounts(
+  deps: { db: Db; fx: FxRates },
+  today: IsoDate,
+  where?: SQL,
+  quoted = new Map<string, FxQuote>(),
+): Promise<AccountDto[]> {
   const currencies = await deps.db.selectDistinct({ currency: account.currency }).from(account).where(where);
-  const rates = await latestRates(deps.fx, currencies.map((row) => row.currency), today);
-  return listAccounts(deps.db, where, rates);
+  const missing = currencies.map((row) => row.currency).filter((currency) => !quoted.has(currency));
+  const rates = await latestRates(deps.fx, missing, today);
+  return listAccounts(deps.db, where, new Map([...quoted, ...rates]));
 }
 
-export async function readAccount(deps: { db: Db; fx: FxRates }, today: IsoDate, id: string): Promise<AccountDto> {
-  const [found] = await readAccounts(deps, today, eq(account.id, id));
+export async function readAccount(
+  deps: { db: Db; fx: FxRates },
+  today: IsoDate,
+  id: string,
+  quoted?: Map<string, FxQuote>,
+): Promise<AccountDto> {
+  const [found] = await readAccounts(deps, today, eq(account.id, id), quoted);
   if (!found) throw new AppError(404, 'not_found', 'Account not found.');
   return found;
 }

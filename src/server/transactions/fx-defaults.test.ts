@@ -8,6 +8,7 @@ import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { createAccount, createTransaction } from '../test/fixtures';
 import { type StubFx, stubFx } from '../test/fx';
+import { type Draft, planTransaction } from './plan';
 import { snapshot } from '../test/snapshot';
 
 let t: TestDatabase;
@@ -226,5 +227,34 @@ describe('default NBP rates on edits', () => {
     expect(await snapshot(t.db)).toEqual(before);
     const [row] = await t.db.select().from(transaction).where(eq(transaction.id, txn.id));
     expect(row).toMatchObject({ date: '2026-11-19', fxRate: '4.300000' });
+  });
+});
+
+describe('default rates in the planner', () => {
+  it("ignores an NBP rate quoted for another date than the draft's", async () => {
+    const draft: Draft = {
+      accountId: euro.id,
+      date: '2026-11-19',
+      payeeId: null,
+      categoryId: null,
+      memo: null,
+      amount: -1_000,
+      transferAmount: null,
+      fxRate: null,
+      cleared: 'uncleared',
+      approved: true,
+      flag: null,
+      lines: null,
+    };
+    // A race between the dry run and the command: the rate was quoted for the date the transaction had then.
+    const quotedFor = (date: string) => ({ date, rates: new Map([['EUR', '4.200000']]) });
+    await expect(planTransaction(t.db, draft, { defaults: quotedFor('2026-11-18') })).rejects.toMatchObject({
+      code: 'fx_rate_required',
+    });
+    expect((await planTransaction(t.db, draft, { defaults: quotedFor('2026-11-19') })).main).toMatchObject({
+      amountBase: -4_200,
+      fxRate: '4.200000',
+      fxRateManual: false,
+    });
   });
 });

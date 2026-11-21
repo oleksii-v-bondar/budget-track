@@ -160,7 +160,6 @@ describe('interest overrides', () => {
       },
     });
     expect((await json(await override('2026-12', { amount: 1 }))).body).toMatchObject({ code: 'month_out_of_range' });
-    expect((await override('2026-10', { amount: 0 })).status).toBe(200);
     expect((await json(await override('2026-11', { amount: 1 }, checking.id))).body).toMatchObject({
       code: 'not_a_loan',
     });
@@ -176,5 +175,55 @@ describe('interest overrides', () => {
     expect((await json(await override('2026-13', { amount: 1 }))).body).toMatchObject({
       fieldErrors: { month: ['Use the format YYYY-MM.'] },
     });
+  });
+
+  it('refuses a month without a payment, where no interest is charged', async () => {
+    const before = await snapshot(t.db);
+    const message = 'Interest is charged only in months with a payment. Enter the payment first.';
+    expect(await json(await override('2026-10', { amount: 0 }))).toEqual({
+      status: 422,
+      body: { code: 'no_loan_payment', message, fieldErrors: { month: [message] } },
+    });
+    expect(await snapshot(t.db)).toEqual(before);
+  });
+
+  it("refuses an override whose PLN value at the rate of the month's payments is above MAX_BASE_AMOUNT", async () => {
+    const franc = await createAccount(ctx.client, {
+      name: 'Franc mortgage',
+      type: 'mortgage',
+      currency: 'CHF',
+      startingBalance: -1_000_000,
+      startingDate: '2026-10-01',
+      fxRate: '4',
+      minPayment: 100,
+      createPairedCategory: true,
+    });
+    // 1 franc paid with 11 zł: the month's interest is booked at 11 zł per franc.
+    await createTransaction(ctx.client, {
+      accountId: checking.id,
+      date: '2026-11-05',
+      payeeId: franc.transferPayeeId,
+      categoryId: franc.pairedCategoryId,
+      amount: -11,
+      transferAmount: 1,
+    });
+    const before = await snapshot(t.db);
+    const message = 'That amount is too large.';
+    expect(await json(await override('2026-11', { amount: 10_000_000_000_000 }, franc.id))).toEqual({
+      status: 422,
+      body: { code: 'amount_too_large', message, fieldErrors: { amount: [message] } },
+    });
+    expect(await snapshot(t.db)).toEqual(before);
+    const res = await json<LoanDto>(await override('2026-11', { amount: 9_090_909_090_909 }, franc.id));
+    expect(res.body.months[1]).toMatchObject({ interest: 9_090_909_090_909, interestBase: 99_999_999_999_999 });
+  });
+
+  it('refuses year 0000, which Postgres dates lack', async () => {
+    const res = await json(await reset('0000-01'));
+    expect(res).toMatchObject({
+      status: 400,
+      body: { code: 'validation', fieldErrors: { month: ['Use a year from 0001 on.'] } },
+    });
+    expect((await override('0000-01', { amount: 1 })).status).toBe(400);
   });
 });

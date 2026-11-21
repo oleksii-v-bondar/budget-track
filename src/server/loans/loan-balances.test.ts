@@ -200,6 +200,16 @@ describe('loanBalances', () => {
     expect(loanCharges(loans.get(loan.id), '2026-11')).toMatchObject({ amount: 0, amountBase: 0 });
   });
 
+  it('reports an override as unused in a month without a payment', async () => {
+    const loan = await mortgage();
+    await t.db.insert(loanInterestOverride).values({ accountId: loan.id, month: '2026-10-01', amount: 40_000 });
+    expect((await loanBalances(t.db, [loan.id])).get(loan.id)!.months[0]).toMatchObject({
+      month: '2026-10',
+      interest: 0,
+      interestOverridden: false,
+    });
+  });
+
   it("books a foreign loan's charges in PLN at the rate of the month's payments", async () => {
     const loan = await createAccount(ctx.client, {
       name: 'Franc mortgage',

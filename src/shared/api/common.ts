@@ -22,8 +22,11 @@ export const boundedMoneySchema = z
   .int('Enter a whole amount in minor units.');
 
 export const isoDateSchema = z.iso.date('Use the format YYYY-MM-DD.');
-/** A budget month in URLs and bodies; stored as its first day ('YYYY-MM-01'). */
-export const monthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Use the format YYYY-MM.');
+/** A budget month in URLs and bodies; stored as its first day ('YYYY-MM-01'), so year 0000 (no such date) is out. */
+export const monthSchema = z
+  .string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, { error: 'Use the format YYYY-MM.', abort: true })
+  .refine((month) => !month.startsWith('0000-'), 'Use a year from 0001 on.');
 
 /** Lowercased, so ids that differ only in letter case compare equal. */
 export const idSchema = z.uuid('Invalid id.').transform((id) => id.toLowerCase());

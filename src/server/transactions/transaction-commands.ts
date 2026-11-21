@@ -8,7 +8,15 @@ import { payee, subtransaction, transaction } from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
 import { findOrCreatePayee } from '../payees/payee-commands';
 import { accountsOf, type Aggregate, draftOf, loadAggregate, storedRates } from './aggregate';
-import { type Draft, type DraftLine, type Plan, type PlanContext, planTransaction, type RowPlan } from './plan';
+import {
+  type DefaultRates,
+  type Draft,
+  type DraftLine,
+  type Plan,
+  type PlanContext,
+  planTransaction,
+  type RowPlan,
+} from './plan';
 import { findAccount } from './rules';
 import { insertPlan, insertSchedule, rememberCategory, softDelete, syncPlan } from './write';
 
@@ -63,7 +71,7 @@ export async function createTransaction(
   rec: ChangeRecorder,
   input: CreateTransactionRequest,
   today: IsoDate,
-  defaults = new Map<string, string>(),
+  defaults?: DefaultRates,
 ): Promise<SavedTransaction> {
   const draft = await createDraft(input, today, (name) => findOrCreatePayee(rec, name));
   const future = draft.date > today;
@@ -87,7 +95,7 @@ export interface EditContext {
   today: IsoDate;
   now: Date;
   /** Spec §9: NBP rates for the edited date by currency, quoted before the command (none for bulk edits). */
-  defaults?: Map<string, string>;
+  defaults?: DefaultRates;
 }
 
 /** The payee's name for undo labels. */

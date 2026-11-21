@@ -142,9 +142,10 @@ change.
   - `account_id`, `date`, `payee_id`, `category_id` (null for splits, budget↔budget transfers, tracking-only
     transactions, credit/tracking starting balances), `memo`
   - `amount` (native), `amount_base` (PLN), `fx_rate`, `fx_rate_manual` (bool). Entered amounts (transaction, transfer
-    other side, split line, starting balance, reconcile statement balance, interest override) are capped at ±10^13
-    minor units (100 bn zł) and computed PLN amounts at ±10^14 (including bases converted at an NBP rate, reconcile
-    adjustments and FX revaluations), so sums over many rows stay exact below 2^53.
+    other side, split line, starting balance, reconcile statement balance, interest override, an account's minimum
+    payment and escrow) are capped at ±10^13 minor units (100 bn zł) and computed PLN amounts at ±10^14 (including
+    bases converted at an NBP rate, reconcile adjustments, FX revaluations and a foreign loan's interest), so sums
+    over many rows stay exact below 2^53.
   - `cleared` (`uncleared` | `cleared` | `reconciled`), `approved` (bool), `flag` (`red` | `orange` | `yellow` |
     `green` | `blue` | `purple` | null)
   - `transfer_account_id`, `transfer_txn_id`, `transfer_subtxn_id`
@@ -354,8 +355,10 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
   are dated on its first payment (`chargedOn`) and cleared as above (`chargesCleared`, true in a month without a
   payment); the register interleaves them by date, and its cursor paging over transactions is unchanged.
 - An interest override is set for a month from the loan's first transaction to the current month, in the loan's
-  currency (0 … 10^13, like entered amounts, §4.4). It applies in months with a payment, and later months' interest
-  follows the new balance.
+  currency (0 … 10^13, like entered amounts, §4.4). Only a month with a payment has an interest row to edit (422
+  `no_loan_payment` otherwise), and later months' interest follows the new balance. Every month's interest in PLN,
+  at the rate of its payments, stays within the §4.4 cap (422 `amount_too_large` on `amount`). An override whose
+  month loses its payments is kept but unused (`interestOverridden` is false there).
 - A loan's first month has no interest, even with a payment in it, because its balance at the start of that month is
   0 (escrow is still charged). An interest override for that month adds it.
 
@@ -385,19 +388,21 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 - The user can override the rate (`fx_rate_manual = true`). Changing the date re-fetches the rate unless it's manual.
 - Unsupported currency or NBP unreachable → the rate field is required and the UI asks for it.
 - **NBP client**: one quote tries the date and up to 7 earlier days within a 5 s timeout; any other error, a malformed
-  answer or a timeout means "no rate". Only final rates are cached: published that day, or for a past day or a
-  weekend. Quotes run before a command or read transaction starts, never inside one; PLN is never quoted. Rates keep
-  6 decimals (§2), so a currency quoted far below 1 zł loses precision (IDR's mid 0.00022236 is stored as 0.000222);
-  this is accepted unless the rate scale is widened.
-- Writes (transactions, foreign starting balances, reconcile adjustments) resolve the default rate before the
-  command: a sent rate is manual (`fx_rate_manual = true`), an NBP rate is not. Without either, the answer is 422
-  `fx_rate_required`. A base converted at either rate stays within the §4.4 cap (422 `amount_too_large`). A
-  future-dated transaction (a schedule, §5.6) stores the rate sent, or none: its occurrence gets the NBP rate of the
-  day it is entered. An edit keeps the stored rate unless a new one is sent, except that a new date replaces an NBP
-  rate with that day's. Bulk edits never change dates and use stored rates only. `GET /api/fx/rates/:currency/:date`
-  gives the sheet the NBP rate (no future dates).
+  answer (including one for another currency or day, or a mid that is 0 at 6 decimals) or a timeout means "no rate".
+  Only final rates are cached: published that day, or for a past day or a weekend. Quotes run before a command or read
+  transaction starts, never inside one; PLN is never quoted. Rates keep 6 decimals (§2), so a currency quoted far below
+  1 zł loses precision (IDR's mid 0.00022236 is stored as 0.000222); this is accepted unless the rate scale is widened.
+- Writes (transactions, foreign starting balances, reconcile adjustments) resolve the default rate before the command: a
+  sent rate is manual (`fx_rate_manual = true`), an NBP rate is not. Without either, the answer is 422
+  `fx_rate_required`, and so it is when the transaction's date changed after the rate was quoted (an NBP default only
+  applies to the date it was quoted for). A base converted at either rate stays within the §4.4 cap (422
+  `amount_too_large`). A future-dated transaction (a schedule, §5.6) stores the rate sent, or none: its occurrence gets
+  the NBP rate of the day it is entered. An edit keeps the stored rate unless a new one is sent, except that a new date
+  replaces an NBP rate with that day's. Bulk edits never change dates and use stored rates only.
+  `GET /api/fx/rates/:currency/:date` gives the sheet the NBP rate (no future dates).
 - "Latest available NBP rate" is today's quote (falling back like any quote). Account reads quote it once per foreign
-  currency per request; so do the month view and auto-assign for foreign linked accounts (§6).
+  currency per request (a Revalue or a starting balance dated today reuses the quote it was booked at); so do the month
+  view and auto-assign for foreign linked accounts (§6).
 - **Split lines** use the parent's rate. The rounding remainder goes to the last line so that
   Σ line base = parent base.
 - **Cross-currency transfers**: the user enters both actual amounts.

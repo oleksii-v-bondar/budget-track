@@ -104,11 +104,13 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   directly (only when no `fxRate` is sent and the account is foreign).
 - Transaction writes learn which rates they need from a dry run (`createDefaultRates` / `editDefaultRates` in
   `src/server/transactions/default-rates.ts`): it plans the draft read-only with `PlanContext.unknownRates`, quotes
-  what is missing, and the command plans again with `PlanContext.defaults`. A rate is a `Rate { rate, manual }`;
-  `storedRates(db, agg, sameDate)` drops NBP rates when the date changes. A future-dated create skips the dry run's
-  quotes and stores the sent rate or none.
-- Account DTOs for responses come from `readAccounts` / `readAccount` (they quote the latest rates for "≈ X zł");
-  `listAccounts` / `getAccount` inside commands leave `latestRate` null. The month view and auto-assign quote
+  what is missing, and the command plans again with `PlanContext.defaults` (`DefaultRates { date, rates }`: the
+  planner uses them only for a draft of that date, so a date changed in between ends in `fx_rate_required`). A rate
+  is a `Rate { rate, manual }`; `storedRates(db, agg, sameDate)` drops NBP rates when the date changes. A future-dated
+  create skips the dry run's quotes and stores the sent rate or none.
+- Account DTOs for responses come from `readAccounts` / `readAccount` (they quote the latest rates for "≈ X zł",
+  except currencies in `quoted`: today's quotes the route already holds, e.g. Revalue's); `listAccounts` /
+  `getAccount` inside commands leave `latestRate` null. The month view and auto-assign quote
   `latestRates(deps.fx, await linkedForeignCurrencies(deps.db), today)` before their transaction and pass the rates to
   `loadBudgetMonth` / `autoAssignMonth`.
 - An FX revaluation is inserted directly (`revalueAccount`, `src/server/accounts/revalue.ts`); `updateTransaction`
