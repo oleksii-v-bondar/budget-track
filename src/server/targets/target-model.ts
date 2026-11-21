@@ -1,5 +1,6 @@
 import { and, eq, isNull, lte, sql } from 'drizzle-orm';
 import {
+  addMonths,
   type BudgetResult,
   dateInMonth,
   evaluateTarget,
@@ -14,6 +15,7 @@ import type { TargetDto, TargetEvaluationDto } from '../../shared/api/targets';
 import { monthStart } from '../budget/assignments';
 import type { Executor } from '../db/client';
 import { account, category, type target, transaction } from '../db/schema';
+import { loanBalances, loanCharges } from '../loans/loan-balances';
 
 export type TargetRow = typeof target.$inferSelect;
 export type DebtContext = NonNullable<TargetContext['debt']>;
@@ -70,7 +72,8 @@ export interface LinkedAccount {
 
 /**
  * The linked account of every live credit card payment and paired loan category, keyed by category id. Balances are
- * PLN base sums of the account's live transactions dated `today` or earlier (a split parent carries its lines' sum).
+ * PLN base sums of the account's live transactions dated `today` or earlier (a split parent carries its lines' sum);
+ * a loan's also include the interest and escrow charged in the months before (start) or through (end) `month`.
  */
 export async function loadLinkedAccounts(
   db: Executor,
@@ -99,16 +102,17 @@ export async function loadLinkedAccounts(
     )
     .where(isNull(category.deletedAt))
     .groupBy(category.id, account.id);
+  const loans = await loanBalances(db, rows.map((row) => row.accountId));
   return new Map(
     rows.map((row) => [
       row.categoryId,
       {
         accountId: row.accountId,
-        balanceAtMonthEnd: row.throughMonth,
+        balanceAtMonthEnd: row.throughMonth + loanCharges(loans.get(row.accountId), addMonths(month, 1)).amountBase,
         debt: {
           minPayment: row.minPayment ?? 0,
           apr: row.interestRate ?? '0',
-          balanceAtMonthStart: row.beforeMonth,
+          balanceAtMonthStart: row.beforeMonth + loanCharges(loans.get(row.accountId), month).amountBase,
           // Spec §6: escrow is added for loans only.
           escrow: row.accountClass === 'tracking' ? (row.escrowAmount ?? 0) : 0,
         },

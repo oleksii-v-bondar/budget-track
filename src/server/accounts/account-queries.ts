@@ -5,6 +5,7 @@ import type { Db, Executor } from '../db/client';
 import { account, category, payee, transaction } from '../db/schema';
 import { type FxQuote, type FxRates, latestRates } from '../fx/fx-rates';
 import { AppError } from '../http/errors';
+import { loanBalances, loanCharges } from '../loans/loan-balances';
 
 interface Sums {
   cleared: number;
@@ -47,8 +48,9 @@ function atRate(working: number, quote: FxQuote | null): number | null {
 }
 
 /**
- * Accounts in display order (spec §11 Accounts), with their balances. `rates` holds the latest NBP rate by currency
- * for "≈ X zł" (see `readAccounts`); without one, a foreign account's `latestRate` is null.
+ * Accounts in display order (spec §11 Accounts), with their balances; a loan's include the interest and escrow it was
+ * charged (spec §8), as cleared amounts. `rates` holds the latest NBP rate by currency for "≈ X zł" (see
+ * `readAccounts`); without one, a foreign account's `latestRate` is null.
  */
 export async function listAccounts(
   db: Executor,
@@ -62,9 +64,17 @@ export async function listAccounts(
     .leftJoin(category, and(eq(category.linkedAccountId, account.id), isNull(category.deletedAt)))
     .where(where)
     .orderBy(asc(account.sortOrder), asc(account.createdAt), asc(account.id));
-  const sums = await sumsByAccount(db, rows.map((r) => r.account.id));
+  const ids = rows.map((r) => r.account.id);
+  const sums = await sumsByAccount(db, ids);
+  const loans = await loanBalances(db, ids);
   return rows.map(({ account: a, transferPayeeId, linkedCategoryId }) => {
-    const s = sums.get(a.id) ?? ZERO;
+    const booked = sums.get(a.id) ?? ZERO;
+    const charges = loanCharges(loans.get(a.id));
+    const s = {
+      ...booked,
+      cleared: booked.cleared + charges.amount,
+      clearedBase: booked.clearedBase + charges.amountBase,
+    };
     const latestRate = a.currency === BASE_CURRENCY ? null : (rates.get(a.currency) ?? null);
     return {
       id: a.id,

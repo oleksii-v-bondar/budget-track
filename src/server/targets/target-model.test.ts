@@ -113,7 +113,8 @@ describe('loadLinkedAccounts', () => {
           mortgage.pairedCategoryId!,
           {
             accountId: mortgage.id,
-            balanceAtMonthEnd: -9_940_000,
+            // The November payment is charged interest (6 % / 12 of 100 000 zł = 500 zł) and escrow (200 zł).
+            balanceAtMonthEnd: -10_010_000,
             debt: { minPayment: 60_000, apr: '6.0000', balanceAtMonthStart: -10_000_000, escrow: 20_000 },
             missing: { minPayment: false, interestRate: false },
           },
