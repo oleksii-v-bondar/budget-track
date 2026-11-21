@@ -13,7 +13,7 @@ import { authStatusQuery } from './lib/query';
 import { SettingsScreen } from './settings/settings-screen';
 import { AppShell, AuthLayout } from './shell/app-shell';
 import { OfflineBanner } from './shell/offline-banner';
-import { MoreScreen, NotFoundScreen, PlaceholderScreen } from './shell/screens';
+import { ErrorScreen, MoreScreen, NotFoundScreen, PlaceholderScreen } from './shell/screens';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -139,5 +139,5 @@ const routeTree = rootRoute.addChildren([
 
 /** The app's router; tests pass a memory history. */
 export function createAppRouter(queryClient: QueryClient, history?: RouterHistory) {
-  return createRouter({ routeTree, context: { queryClient }, history });
+  return createRouter({ routeTree, context: { queryClient }, history, defaultErrorComponent: ErrorScreen });
 }

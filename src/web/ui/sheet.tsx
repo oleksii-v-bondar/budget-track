@@ -10,9 +10,33 @@ export interface SheetProps {
   children: ReactNode;
 }
 
+const TABBABLE = [
+  'a[href]',
+  'button:not(:disabled)',
+  'input:not(:disabled):not([type="hidden"])',
+  'select:not(:disabled)',
+  'textarea:not(:disabled)',
+  '[tabindex]',
+].join(', ');
+
+/** Tab and Shift+Tab wrap around inside `panel`, so keyboard focus can't reach the page behind. */
+function keepFocusIn(panel: HTMLElement, event: KeyboardEvent): void {
+  const items = [...panel.querySelectorAll<HTMLElement>(TABBABLE)].filter((item) => item.tabIndex >= 0);
+  const first = items[0] ?? panel;
+  const last = items.at(-1) ?? panel;
+  const active = document.activeElement;
+  // From the panel itself (focused when it has no field), Tab reaches the first item on its own.
+  const wrap = event.shiftKey
+    ? active === first || active === panel || !panel.contains(active)
+    : active === last || !panel.contains(active);
+  if (!wrap) return;
+  event.preventDefault();
+  (event.shiftKey ? last : first).focus();
+}
+
 /**
  * A bottom sheet (modal dialog) for forms and pickers. While it is open the page behind doesn't scroll; focus moves
- * into the sheet and returns to where it was when the sheet closes.
+ * into the sheet, Tab keeps it there, and it returns to where it was when the sheet closes.
  */
 export function Sheet({ open, onClose, title, children }: SheetProps) {
   const titleId = useId();
@@ -31,6 +55,7 @@ export function Sheet({ open, onClose, title, children }: SheetProps) {
     (autofocus ?? panel.current)?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') close.current();
+      else if (event.key === 'Tab' && panel.current) keepFocusIn(panel.current, event);
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {

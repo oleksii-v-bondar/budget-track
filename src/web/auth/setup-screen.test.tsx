@@ -7,6 +7,7 @@ import { renderApp } from '../test/render';
 const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
 const CODES = Array.from({ length: 10 }, (_, i) => `AAAA-BBBB-CC${String(i).padStart(2, '0')}`);
 const PASSWORD = 'correct horse battery staple';
+const ALREADY_SETUP = { code: 'already_setup', message: 'This budget is already set up. Sign in instead.' };
 
 function setupServer() {
   return fakeApi({
@@ -77,12 +78,34 @@ describe('setup wizard', () => {
     const user = userEvent.setup();
     fakeApi({
       'GET /api/auth/status': { body: { setupRequired: true, authenticated: false } },
-      'POST /api/auth/setup/totp': json({ code: 'already_setup', message: 'This budget is already set up. Sign in instead.' }, 409),
+      'POST /api/auth/setup/totp': () => json(ALREADY_SETUP, 409),
     });
-    renderApp('/setup');
+    const { history } = renderApp('/setup');
     await user.type(await screen.findByLabelText('Setup token'), 'the-token');
     await user.click(screen.getByRole('button', { name: 'Continue' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('This budget is already set up.');
-    expect(screen.getByRole('link', { name: 'Go to sign in' })).toHaveAttribute('href', '/login');
+    await user.click(screen.getByRole('link', { name: 'Go to sign in' }));
+    await waitFor(() => expect(history.location.pathname).toBe('/login'));
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
+  it('points to sign-in when the budget was set up while finishing the wizard', async () => {
+    const user = userEvent.setup();
+    fakeApi({
+      'GET /api/auth/status': { body: { setupRequired: true, authenticated: false } },
+      'POST /api/auth/setup/totp': { body: { secret: SECRET, uri: `otpauth://totp/Budget%20Track:owner?secret=${SECRET}` } },
+      'POST /api/auth/setup': () => json(ALREADY_SETUP, 409),
+    });
+    const { history } = renderApp('/setup');
+    await user.type(await screen.findByLabelText('Setup token'), 'the-token');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.type(await screen.findByLabelText('Password'), PASSWORD);
+    await user.type(screen.getByLabelText('Repeat the password'), PASSWORD);
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.type(await screen.findByLabelText('Code from the app'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Finish setup' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('This budget is already set up.');
+    await user.click(screen.getByRole('link', { name: 'Go to sign in' }));
+    await waitFor(() => expect(history.location.pathname).toBe('/login'));
   });
 });

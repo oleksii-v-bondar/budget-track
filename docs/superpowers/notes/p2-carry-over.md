@@ -314,12 +314,28 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - From the P2b1 final review: ESLint forbids `rec.tx.insert/update/delete` in `src/server` (write through the
   recorder). Undo/redo don't need to return table names: the web app invalidates every budget-data query after any
   command, undo or redo (one user, a few queries on screen).
+- Resolved in the P3a final fix pass (final review):
+  - The service worker takes over on deploy: `skipWaiting` and `clientsClaim` in `vite.config.ts` (vite-plugin-pwa
+    sets them for `autoUpdate` only with `injectRegister: 'auto'`); `e2e/service-worker.spec.ts` checks the build.
+  - A committed command never fails on its follow-up read: if `GET /api/undo` fails after the command, the mutation
+    still succeeds without the Undo toast, so there is no Retry toast (which sent the command again) and no form error.
+  - The amount keypad's Enter follows the Done button's guards (busy, offline).
+  - Setup's "Go to sign in" (after `already_setup`, now also from the final setup POST) opens /login: the cached auth
+    status is set to set-up and signed out, so the guards no longer send it back to /setup.
+  - A refused undo or redo (409, e.g. `nothing_to_undo`) re-reads the undo state, so the header drops the stale action.
+  - Routes have an error screen (`defaultErrorComponent`: `ErrorScreen`, Try again runs `router.invalidate()`), so a
+    failed status check is no longer a dead end.
+  - Tab and Shift+Tab wrap inside an open `Sheet`, so keyboard focus can't reach the page behind.
+  - The authenticator-rotation test advances one TOTP step before the confirmation code, so it pins the `Math.max`
+    of `totpLastStep`. A successful setup records a successful sign-in attempt (see "From P3a" below).
 
 ## From P3a
 - Before internet exposure: replace the global lockout with per-device counting (a long-lived device cookie set at
   sign-in; count failures since the last success or lockout; lock only unknown devices), spec §12.
-- Later: a successful setup isn't recorded as a successful sign-in, so wrong setup tokens in the 15 minutes before it
-  still count toward the lockout of the first sign-ins.
+- RESOLVED (P3a final fix pass): a successful setup isn't recorded as a successful sign-in, so wrong setup tokens in
+  the 15 minutes before it still count toward the lockout of the first sign-ins. Setup now records a successful
+  attempt in its transaction, which ends the streak (it also counts toward that IP's 5 attempts per minute, like a
+  sign-in).
 - P3b/P3c: the web app refetches after every command and reads no mutation response yet; build mutation responses
   inside the command (`rec.tx`, P2b1 final review) when a screen starts using one.
 - P3c: the P2c items for the transaction sheet and register stay open (a payee change to a transfer payee needs

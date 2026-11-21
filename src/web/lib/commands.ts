@@ -19,7 +19,8 @@ const COMMAND_TOAST = 'command';
 
 /**
  * Undo and redo (spec §10), for the header buttons and the toasts' Undo. Afterwards every budget-data query is
- * refreshed; a 409 (`undo_conflict`, `nothing_to_undo`, …) is shown as an error toast with the server's message.
+ * refreshed; a 409 (`undo_conflict`, `nothing_to_undo`, …) is shown as an error toast with the server's message, and
+ * the header reads the undo state again.
  */
 export function useUndoRedo() {
   const queryClient = useQueryClient();
@@ -34,7 +35,10 @@ export function useUndoRedo() {
       await invalidateData(queryClient);
     },
     onError: (error) => {
-      if (!isUnauthorized(error)) toast.show({ key: COMMAND_TOAST, tone: 'error', message: errorMessage(error) });
+      if (isUnauthorized(error)) return;
+      toast.show({ key: COMMAND_TOAST, tone: 'error', message: errorMessage(error) });
+      // The history changed elsewhere (another device), so the header's Undo and Redo are out of date.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.undo });
     },
   });
   return {
@@ -47,8 +51,9 @@ export function useUndoRedo() {
 /**
  * A user command (spec §2 write path), e.g. `useCommand((name: string) => unwrap(api.api.payees.$post({ json: { name } })))`.
  * It waits for the server (no optimistic update), then refreshes every budget-data query and shows a toast with the
- * command's undo label and an Undo button (spec §11). The error stays on the mutation for the form to show
- * (`formErrorsOf(mutation.error, fields)`); a network or server failure also gets a toast with Retry.
+ * command's undo label and an Undo button (spec §11), unless reading the undo state fails. The error stays on the
+ * mutation for the form to show (`formErrorsOf(mutation.error, fields)`); a network or server failure also gets a
+ * toast with Retry.
  */
 export function useCommand<TVariables = void, TResult = unknown>(mutationFn: (variables: TVariables) => Promise<TResult>) {
   const queryClient = useQueryClient();
@@ -58,8 +63,10 @@ export function useCommand<TVariables = void, TResult = unknown>(mutationFn: (va
     mutationFn,
     onSuccess: async () => {
       await invalidateData(queryClient);
-      const state = await queryClient.fetchQuery(undoStateQuery);
-      if (state.undo) {
+      // The command is committed: a failed read of the undo state only skips the toast (a thrown error here would
+      // turn the mutation into an error, and its Retry would send the command again).
+      const state = await queryClient.fetchQuery(undoStateQuery).catch(() => null);
+      if (state?.undo) {
         toast.show({ key: COMMAND_TOAST, message: state.undo.label, action: { label: 'Undo', onClick: undo } });
       }
     },

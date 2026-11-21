@@ -1,9 +1,10 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { type FormEvent, useState } from 'react';
 import { PASSWORD_MIN_LENGTH, setupRequestSchema } from '../../shared/auth';
 import { ApiError } from '../lib/api';
 import { type FormErrors, formErrorsOf, NO_ERRORS, zodFormErrors } from '../lib/form-errors';
+import { queryKeys } from '../lib/query';
 import { Button } from '../ui/button';
 import { Checkbox, FormError, TextField } from '../ui/field';
 import { authApi, useEnterApp } from './auth-api';
@@ -11,6 +12,16 @@ import { RecoveryCodes } from './recovery-codes';
 import { TotpQrCode, TotpSecret } from './totp-qr';
 
 type Step = 'token' | 'password' | 'authenticator' | 'codes';
+
+const isAlreadySetUp = (error: unknown) => error instanceof ApiError && error.code === 'already_setup';
+
+function SignInLink() {
+  return (
+    <Link to="/login" className="text-brand underline">
+      Go to sign in
+    </Link>
+  );
+}
 
 const STEP_TITLES: Record<Step, string> = {
   token: 'Set up your budget',
@@ -32,12 +43,18 @@ export function SetupScreen() {
   const [totpCode, setTotpCode] = useState('');
   const [saved, setSaved] = useState(false);
   const enterApp = useEnterApp();
+  const queryClient = useQueryClient();
+  // The cached status (never stale) still says setup is required, so the sign-in route's guard would send the owner
+  // back here.
+  const onError = (error: unknown) => {
+    if (!isAlreadySetUp(error)) return;
+    queryClient.setQueryData(queryKeys.authStatus, { setupRequired: false, authenticated: false });
+  };
 
-  const secret = useMutation({ mutationFn: authApi.setupSecret, onSuccess: () => setStep('password') });
-  const setup = useMutation({ mutationFn: authApi.setup, onSuccess: () => setStep('codes') });
+  const secret = useMutation({ mutationFn: authApi.setupSecret, onSuccess: () => setStep('password'), onError });
+  const setup = useMutation({ mutationFn: authApi.setup, onSuccess: () => setStep('codes'), onError });
   const tokenErrors = formErrorsOf(secret.error, ['setupToken']);
   const setupErrors = formErrorsOf(setup.error, ['totpCode']);
-  const alreadySetUp = [secret.error, setup.error].some((e) => e instanceof ApiError && e.code === 'already_setup');
 
   const submitToken = (event: FormEvent) => {
     event.preventDefault();
@@ -75,11 +92,7 @@ export function SetupScreen() {
             error={tokenErrors.fields.setupToken}
           />
           <FormError message={tokenErrors.form} />
-          {alreadySetUp && (
-            <Link to="/login" className="text-brand underline">
-              Go to sign in
-            </Link>
-          )}
+          {isAlreadySetUp(secret.error) && <SignInLink />}
           <Button type="submit" mutating busy={secret.isPending} block>
             Continue
           </Button>
@@ -130,6 +143,7 @@ export function SetupScreen() {
             error={setupErrors.fields.totpCode}
           />
           <FormError message={setupErrors.form} />
+          {isAlreadySetUp(setup.error) && <SignInLink />}
           <Button type="submit" mutating busy={setup.isPending} block>
             Finish setup
           </Button>

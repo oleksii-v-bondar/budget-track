@@ -60,6 +60,25 @@ describe('AmountKeypad', () => {
     expect(onDone).toHaveBeenCalledWith(4000);
   });
 
+  it('ignores Enter while busy, like Done', async () => {
+    const onDone = vi.fn();
+    render(<AmountKeypad value={500} onDone={onDone} mutating busy />);
+    await userEvent.click(screen.getByRole('button', { name: '1' }));
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('ignores Enter while offline when Done sends a command', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const onDone = vi.fn();
+    render(<AmountKeypad value={500} onDone={onDone} mutating />);
+    await userEvent.click(screen.getByRole('button', { name: '1' }));
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
   it('shows foreign currencies by their code', () => {
     render(<AmountKeypad value={250} currency="EUR" onDone={() => {}} />);
     expect(screen.getByTestId('keypad-result')).toHaveTextContent('= 2,50 EUR');

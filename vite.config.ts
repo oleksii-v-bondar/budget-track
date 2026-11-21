@@ -40,6 +40,10 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api(\/|$)/, /^\/healthz$/],
+        // A new deploy takes over the open app at once. registerType 'autoUpdate' sets these only with injectRegister
+        // 'auto', so without them a new service worker would wait until every tab of the app is closed.
+        skipWaiting: true,
+        clientsClaim: true,
       },
     }),
   ],

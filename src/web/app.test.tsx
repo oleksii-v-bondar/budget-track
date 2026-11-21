@@ -102,11 +102,47 @@ describe('app shell', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent("Can't undo: data changed since.");
   });
 
+  it('refreshes Undo and Redo when the server has nothing to undo', async () => {
+    let undo: { label: string } | null = { label: 'Move money' };
+    fakeApi({
+      ...SIGNED_IN,
+      'GET /api/undo': () => ({ body: { undo, redo: null } }),
+      // Undone meanwhile on another device.
+      'POST /api/undo': () => {
+        undo = null;
+        return json({ code: 'nothing_to_undo', message: 'Nothing to undo.' }, 409);
+      },
+    });
+    renderApp('/budget');
+    await userEvent.click(await screen.findByRole('button', { name: 'Undo Move money' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Nothing to undo.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled());
+  });
+
   it('shows the offline banner and disables Undo while offline', async () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     fakeApi({ ...SIGNED_IN, 'GET /api/undo': { body: { undo: { label: 'Move money' }, redo: null } } });
     renderApp('/budget');
     expect(await screen.findByText(/You're offline/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Undo Move money' })).toBeDisabled());
+  });
+});
+
+describe('error screen', () => {
+  it('offers to try again when a page fails to load', async () => {
+    // The router reports the failed route to the console.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let statusCalls = 0;
+    fakeApi({
+      ...SIGNED_IN,
+      // A proxy's error page the first time (not retried on its own), then the real answer.
+      'GET /api/auth/status': () =>
+        ++statusCalls === 1 ? new Response('<h1>Not Found</h1>', { status: 404 }) : SIGNED_IN['GET /api/auth/status'],
+    });
+    renderApp('/budget');
+    expect(await screen.findByRole('heading', { name: "This page didn't load" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('heading', { name: 'Budget' })).toBeInTheDocument();
+    expect(statusCalls).toBe(2);
   });
 });

@@ -5,7 +5,7 @@ import { createTestApp, type TestApp } from '../test/app';
 import { type SetupResult, setUpBudget, TEST_PASSWORD } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { TestClient } from '../test/http-client';
-import { freshTotpCode, totpCode } from '../test/totp';
+import { freshTotpCode, TOTP_STEP_MS, totpCode } from '../test/totp';
 import { verifyPassword } from './passwords';
 import { decryptSecret } from './secret-box';
 import { SESSION_COOKIE } from './sessions';
@@ -128,6 +128,8 @@ describe('POST /api/auth/password', () => {
   });
 
   it('limits re-authentication to 5 attempts per minute per IP', async () => {
+    // Past the minute of setup's own (successful) attempt from this IP.
+    ctx.clock.advance(60_000);
     // One code for every attempt, so the clock stays inside the minute (a failed attempt doesn't use the code up).
     const totpCode = await code();
     for (let i = 0; i < 5; i++) {
@@ -178,6 +180,8 @@ describe('authenticator rotation', () => {
 
   it("uses up the new authenticator's confirmation code", async () => {
     const secret = await newSecret();
+    // A step after the one setup used up, so only storing the confirmation's own step stops its reuse.
+    ctx.clock.advance(TOTP_STEP_MS);
     const confirmation = await totpCode(secret, ctx.clock.now());
     const res = await call(ctx.client, '/api/auth/totp', {
       currentPassword: TEST_PASSWORD,
@@ -194,6 +198,7 @@ describe('authenticator rotation', () => {
   });
 
   it('keeps the old secret if the confirmation code is wrong', async () => {
+    const attempts = await attemptsFrom(ctx.client.ip);
     const res = await call(ctx.client, '/api/auth/totp', {
       currentPassword: TEST_PASSWORD,
       currentTotpCode: await code(),
@@ -205,11 +210,12 @@ describe('authenticator rotation', () => {
     const [user] = await t.db.select().from(appUser);
     expect(decryptSecret(user!.totpSecretEnc, ctx.config.encryptionKey)).toBe(setup.totpSecret);
     // The new code is checked before re-authenticating, so this is not a sign-in attempt at all.
-    expect(await attemptsFrom(ctx.client.ip)).toEqual([]);
+    expect(await attemptsFrom(ctx.client.ip)).toEqual(attempts);
   });
 
   it('keeps the recovery code if the confirmation code is wrong', async () => {
     const before = (await storedUser()).recoveryCodeHashes;
+    const attempts = await attemptsFrom(ctx.client.ip);
     const res = await call(ctx.client, '/api/auth/totp', {
       currentPassword: TEST_PASSWORD,
       recoveryCode: setup.recoveryCodes[1],
@@ -222,7 +228,7 @@ describe('authenticator rotation', () => {
     expect(user.recoveryCodeHashes).toHaveLength(10);
     expect(user.recoveryCodeHashes).toEqual(before);
     expect(decryptSecret(user.totpSecretEnc, ctx.config.encryptionKey)).toBe(setup.totpSecret);
-    expect(await attemptsFrom(ctx.client.ip)).toEqual([]);
+    expect(await attemptsFrom(ctx.client.ip)).toEqual(attempts);
   });
 
   it('keeps a valid recovery code if the current password is wrong', async () => {

@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useState } from 'react';
 import { amountToExpression, evaluateAmount, formatExpression, OPERATORS } from '../lib/amount-expression';
 import { formatMoney } from '../lib/format';
+import { useOnline } from '../lib/online';
 import { Button } from './button';
 import { cx } from './cx';
 import { BackspaceIcon } from './icons';
@@ -48,6 +49,9 @@ export function AmountKeypad({ value, currency = 'PLN', onDone, doneLabel = 'Don
   // The starting amount is replaced by the first digit typed, as in a calculator.
   const [fresh, setFresh] = useState(true);
   const result = evaluateAmount(expression);
+  const online = useOnline();
+  // Enter follows the same rules as the Done button.
+  const canSubmit = result.ok && !busy && !(mutating && !online);
 
   const press = (key: string) => {
     setFresh(false);
@@ -56,7 +60,7 @@ export function AmountKeypad({ value, currency = 'PLN', onDone, doneLabel = 'Don
     else setExpression((e) => e + key);
   };
   const done = () => {
-    if (result.ok) onDone(result.value);
+    if (canSubmit) onDone(result.value);
   };
   const onKeyDown = (event: KeyboardEvent) => {
     const key = KEYBOARD[event.key] ?? event.key;
@@ -92,7 +96,7 @@ export function AmountKeypad({ value, currency = 'PLN', onDone, doneLabel = 'Don
           </button>
         ))}
       </div>
-      <Button block mutating={mutating} busy={busy} disabled={!result.ok} onClick={done}>
+      <Button block mutating={mutating} busy={busy} disabled={!canSubmit} onClick={done}>
         {doneLabel}
       </Button>
     </div>

@@ -6,7 +6,7 @@ import { setUpBudget, TEST_PASSWORD } from '../test/auth';
 import { TEST_SETUP_TOKEN } from '../test/config';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { TestClient } from '../test/http-client';
-import { totpCode } from '../test/totp';
+import { freshTotpCode, totpCode } from '../test/totp';
 import { verifyPassword } from './passwords';
 import { consumeRecoveryCode } from './recovery-codes';
 import { decryptSecret } from './secret-box';
@@ -171,6 +171,21 @@ describe('POST /api/auth/setup', () => {
     );
     expect(res.status).toBe(400);
     expect(res.body.fieldErrors).toEqual({ password: ['Use at least 12 characters.'] });
+  });
+
+  it("ends the streak of failed attempts, so wrong setup tokens before it don't lock out the first sign-ins", async () => {
+    // Nine wrong tokens (from different addresses: 5 attempts per minute per IP), one short of the lockout.
+    for (let i = 0; i < 9; i++) {
+      const guesser = new TestClient(ctx.app, `198.51.100.${40 + i}`);
+      expect((await guesser.post('/api/auth/setup/totp', { setupToken: `guess ${i}` })).status).toBe(403);
+    }
+    const { totpSecret } = await setUpBudget(ctx);
+    const owner = new TestClient(ctx.app, '198.51.100.60');
+    const signIn = async (password: string) =>
+      (await owner.post('/api/auth/login', { password, totpCode: await freshTotpCode(totpSecret, ctx.clock) })).status;
+    expect(await signIn('not the password')).toBe(401);
+    // Without setup's success, that was the tenth failure in a row: sign-in would be locked for 15 minutes.
+    expect(await signIn(TEST_PASSWORD)).toBe(200);
   });
 
   it('can run only once', async () => {

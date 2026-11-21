@@ -43,6 +43,18 @@ describe('Sheet', () => {
     expect(document.body.style.overflow).toBe('');
   });
 
+  it('keeps keyboard focus inside while open', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    const name = screen.getByRole('textbox', { name: 'Name' });
+    expect(name).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(name).toHaveFocus();
+  });
+
   it('closes on Escape and on a tap outside', async () => {
     const onClose = vi.fn();
     render(<Harness onClose={onClose} />);

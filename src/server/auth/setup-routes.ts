@@ -90,6 +90,8 @@ export function setupRoutes(deps: AppDeps) {
             budgetStartMonth: `${monthIn(deps.config.timeZone, now)}-01`,
           });
           await seedBudget(tx);
+          // Ends the streak of failures: wrong setup tokens before it don't count toward the first sign-ins' lockout.
+          await recordLoginAttempt(tx, deps.clientIp(c), true, now);
           return (await createSession(tx, now, c.req.header('user-agent'))).token;
         });
       } catch (error) {
