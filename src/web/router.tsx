@@ -7,6 +7,8 @@ import {
   redirect,
   type RouterHistory,
 } from '@tanstack/react-router';
+import { LoginScreen } from './auth/login-screen';
+import { SetupScreen } from './auth/setup-screen';
 import { authStatusQuery } from './lib/query';
 import { AppShell, AuthLayout } from './shell/app-shell';
 import { OfflineBanner } from './shell/offline-banner';
@@ -52,7 +54,7 @@ const setupRoute = createRoute({
     const status = await context.queryClient.ensureQueryData(authStatusQuery);
     if (!status.setupRequired) throw redirect({ to: status.authenticated ? '/budget' : '/login' });
   },
-  component: () => <PlaceholderScreen name="Set up" />,
+  component: SetupScreen,
 });
 
 const loginRoute = createRoute({
@@ -67,7 +69,7 @@ const loginRoute = createRoute({
     if (status.setupRequired) throw redirect({ to: '/setup' });
     if (status.authenticated) throw redirect({ to: '/budget' });
   },
-  component: () => <PlaceholderScreen name="Sign in" />,
+  component: LoginScreen,
 });
 
 // Everything else needs a session and lives in the app shell. A later phase adds its screens here.
