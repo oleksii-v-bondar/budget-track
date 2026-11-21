@@ -10,6 +10,7 @@ import {
 import { LoginScreen } from './auth/login-screen';
 import { SetupScreen } from './auth/setup-screen';
 import { authStatusQuery } from './lib/query';
+import { SettingsScreen } from './settings/settings-screen';
 import { AppShell, AuthLayout } from './shell/app-shell';
 import { OfflineBanner } from './shell/offline-banner';
 import { MoreScreen, NotFoundScreen, PlaceholderScreen } from './shell/screens';
@@ -127,7 +128,7 @@ const appRoutes = [
     getParentRoute: () => appLayout,
     path: 'settings',
     staticData: { title: 'Settings' },
-    component: () => <PlaceholderScreen name="Settings" />,
+    component: SettingsScreen,
   }),
 ] as const;
 

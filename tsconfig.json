@@ -19,8 +19,10 @@
   "include": [
     "src",
     "scripts",
+    "e2e",
     "vitest.config.ts",
     "vite.config.ts",
+    "playwright.config.ts",
     "drizzle.config.ts"
   ],
   "exclude": [

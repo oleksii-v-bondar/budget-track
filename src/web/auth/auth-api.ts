@@ -1,6 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import type { LoginRequest, SetupRequest } from '../../shared/auth';
+import type {
+  ChangePasswordRequest,
+  ConfirmTotpRequest,
+  LoginRequest,
+  ReauthRequest,
+  SetupRequest,
+} from '../../shared/auth';
 import { api, unwrap } from '../lib/api';
 import { forgetSession, queryKeys } from '../lib/query';
 
@@ -10,6 +16,11 @@ export const authApi = {
   setup: (body: SetupRequest) => unwrap(api.api.auth.setup.$post({ json: body })),
   login: (body: LoginRequest) => unwrap(api.api.auth.login.$post({ json: body })),
   logout: () => unwrap(api.api.auth.logout.$post()),
+  logoutAll: () => unwrap(api.api.auth['logout-all'].$post()),
+  changePassword: (body: ChangePasswordRequest) => unwrap(api.api.auth.password.$post({ json: body })),
+  newTotpSecret: () => unwrap(api.api.auth.totp.secret.$post()),
+  confirmTotp: (body: ConfirmTotpRequest) => unwrap(api.api.auth.totp.$post({ json: body })),
+  newRecoveryCodes: (body: ReauthRequest) => unwrap(api.api.auth['recovery-codes'].$post({ json: body })),
 };
 
 /** Records a new session (after setup or sign-in) and opens `href` (default: the budget). */
