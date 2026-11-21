@@ -4,8 +4,9 @@ FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY tsconfig.json ./
+COPY tsconfig.json vite.config.ts ./
 COPY src ./src
+# The web app (dist/web, the PWA) and the server bundle (dist/server).
 RUN npm run build
 
 FROM node:22-alpine AS runtime

@@ -22,6 +22,7 @@ describe('loadConfig', () => {
       logLevel: 'info',
       migrationsDir: 'drizzle',
       nbpBaseUrl: 'https://api.nbp.pl',
+      webDir: 'dist/web',
     });
     expect(config.encryptionKey).toEqual(Buffer.alloc(32, 7));
   });
@@ -36,6 +37,7 @@ describe('loadConfig', () => {
       LOG_LEVEL: 'silent',
       MIGRATIONS_DIR: '/app/drizzle',
       NBP_BASE_URL: 'http://localhost:8081/',
+      WEB_DIR: '/app/web',
     });
     expect(config).toMatchObject({
       port: 8080,
@@ -45,6 +47,7 @@ describe('loadConfig', () => {
       logLevel: 'silent',
       migrationsDir: '/app/drizzle',
       nbpBaseUrl: 'http://localhost:8081',
+      webDir: '/app/web',
     });
   });
 

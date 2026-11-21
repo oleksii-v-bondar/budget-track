@@ -29,6 +29,7 @@ const EnvSchema = z.object({
     .url({ protocol: /^https?$/, error: 'must be an http(s) URL, e.g. https://api.nbp.pl' })
     .default('https://api.nbp.pl')
     .transform((url) => url.replace(/\/+$/, '')),
+  WEB_DIR: z.string().default('dist/web'),
 });
 
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -49,6 +50,8 @@ export interface Config {
   migrationsDir: string;
   /** Origin of the NBP exchange-rate API (spec §9), without a trailing slash. */
   nbpBaseUrl: string;
+  /** The built web app (`npm run build:web`), served for every non-/api path. */
+  webDir: string;
 }
 
 /** Parses and validates the process environment; throws one error listing every invalid variable. */
@@ -67,5 +70,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     logLevel: e.LOG_LEVEL,
     migrationsDir: e.MIGRATIONS_DIR,
     nbpBaseUrl: e.NBP_BASE_URL,
+    webDir: e.WEB_DIR,
   };
 }

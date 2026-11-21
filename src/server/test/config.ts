@@ -16,6 +16,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     migrationsDir: 'drizzle',
     // Tests use stubFx (src/server/test/fx.ts) or a local NBP stub server; nothing listens here.
     nbpBaseUrl: 'http://127.0.0.1:9',
+    webDir: 'src/server/test/web-fixture',
     ...overrides,
   };
 }

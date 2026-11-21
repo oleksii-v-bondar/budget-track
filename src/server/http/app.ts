@@ -24,6 +24,7 @@ import type { ClientIpResolver } from './client-ip';
 import type { AppEnv } from './env';
 import { AppError, errorHandler } from './errors';
 import { csrfGuard, noStore, requestLogger } from './middleware';
+import { serveWeb } from './web';
 
 export interface AppDeps {
   db: Db;
@@ -87,6 +88,8 @@ export function createApp(deps: AppDeps) {
     .route('/api/transactions', transactionRoutes(deps))
     .route('/api/fx', fxRoutes(deps));
 
+  // Outside the chain above, so the RPC type (App) has only API routes; every API route matches first.
+  app.get('*', serveWeb(deps.config.webDir, deps.logger));
   app.notFound((c) => c.json<ApiErrorBody>({ code: 'not_found', message: 'Not found.' }, 404));
   app.onError(errorHandler);
   return app;
