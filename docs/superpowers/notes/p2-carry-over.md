@@ -174,7 +174,8 @@ These items were found in the P1 final review and deferred. Fold them into the P
   - Transfers: a successful tracking↔tracking transfer, and an undo round trip of a transfer between currencies.
   - Splits: a transfer line to a closed account; the 100-line cap; the category of a future-dated budget↔tracking
     transfer line.
-  - Edits: edits of a foreign↔foreign transfer; a no-op split edit records no undo entry.
+  - Edits: edits of a foreign↔foreign transfer; a no-op split edit records no undo entry; editing a transaction whose
+    own account is closed (only the closed other side is tested).
   - Reconciled rows: a move and `lines` in one request.
 
 ### Resolved in the P2c final fix pass
