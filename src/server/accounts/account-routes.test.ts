@@ -68,6 +68,8 @@ describe('POST /api/accounts', () => {
       pairedCategoryId: null,
       balance,
       balanceBase: balance,
+      latestRate: null,
+      balanceAtLatestRate: null,
     });
     const [transferPayee] = await t.db.select().from(payee).where(eq(payee.id, res.body.transferPayeeId));
     expect(transferPayee).toMatchObject({ name: 'Transfer : mBank', transferAccountId: res.body.id });

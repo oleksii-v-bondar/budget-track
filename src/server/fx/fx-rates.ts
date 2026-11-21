@@ -109,3 +109,18 @@ export function nbpRates(options: NbpRatesOptions): FxRates {
     },
   };
 }
+
+/**
+ * Spec §9 "the latest available NBP rate" of each currency: today's quote (NBP falls back to the last published day),
+ * asked once per currency and all at once. Run it before any transaction: final rates come from the cache, and each
+ * NBP quote is bounded by its 5 s timeout. Currencies without a rate are left out.
+ */
+export async function latestRates(
+  fx: FxRates,
+  currencies: Iterable<string>,
+  today: IsoDate,
+): Promise<Map<string, FxQuote>> {
+  const foreign = [...new Set(currencies)].filter((currency) => currency !== BASE_CURRENCY);
+  const quotes = await Promise.all(foreign.map((currency) => fx.quote(currency, today)));
+  return new Map(foreign.flatMap((currency, i) => (quotes[i] ? [[currency, quotes[i]] as const] : [])));
+}

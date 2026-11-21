@@ -4,6 +4,8 @@ import {
   type AccountListResponse,
   BASE_CURRENCY,
   createAccountRequestSchema,
+  revalueRequestSchema,
+  type RevalueResponse,
   updateAccountRequestSchema,
 } from '../../shared/api/accounts';
 import { idParamSchema, type IdResponse, type ReorderResponse, reorderRequestSchema } from '../../shared/api/common';
@@ -12,16 +14,21 @@ import { todayIn } from '../clock';
 import { type Named, runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
+import { getTransaction } from '../transactions/transaction-queries';
 import { createAccount, deleteAccount, reorderAccounts, setAccountClosed, updateAccount } from './account-commands';
-import { getAccount, listAccounts } from './account-queries';
+import { getAccount, readAccount, readAccounts } from './account-queries';
+import { revalueAccount } from './revalue';
 
-/** /api/accounts (spec §10 "Accounts"): every change is one undoable command. */
+/**
+ * /api/accounts (spec §10 "Accounts", §9): every change is one undoable command. Account DTOs carry "≈ X zł" at
+ * the latest NBP rate, quoted after the command (see `readAccounts`).
+ */
 export function accountRoutes(deps: AppDeps) {
   const today = () => todayIn(deps.config.timeZone, deps.clock.now());
 
   return new Hono<AuthedEnv>()
     .use('*', requireSession(deps))
-    .get('/', async (c) => c.json<AccountListResponse>({ accounts: await listAccounts(deps.db) }))
+    .get('/', async (c) => c.json<AccountListResponse>({ accounts: await readAccounts(deps, today()) }))
     .post('/', validate('json', createAccountRequestSchema), async (c) => {
       const body = c.req.valid('json');
       const now = today();
@@ -32,7 +39,7 @@ export function accountRoutes(deps: AppDeps) {
       const { id } = await runCommand(deps, `Create account "${body.name}"`, (rec) =>
         createAccount(rec, body, now, nbp),
       );
-      return c.json<AccountDto>(await getAccount(deps.db, id), 201);
+      return c.json<AccountDto>(await readAccount(deps, now, id), 201);
     })
     .put('/order', validate('json', reorderRequestSchema), async (c) => {
       const { ids } = c.req.valid('json');
@@ -43,7 +50,7 @@ export function accountRoutes(deps: AppDeps) {
       const { id } = c.req.valid('param');
       const body = c.req.valid('json');
       await runCommand(deps, (r: Named) => `Edit account "${r.name}"`, (rec) => updateAccount(rec, id, body));
-      return c.json<AccountDto>(await getAccount(deps.db, id));
+      return c.json<AccountDto>(await readAccount(deps, today(), id));
     })
     .post('/:id/close', validate('param', idParamSchema), async (c) => {
       const { id } = c.req.valid('param');
@@ -52,7 +59,7 @@ export function accountRoutes(deps: AppDeps) {
         (r: Named) => `Close account "${r.name}"`,
         (rec) => setAccountClosed(rec, id, true, today()),
       );
-      return c.json<AccountDto>(await getAccount(deps.db, id));
+      return c.json<AccountDto>(await readAccount(deps, today(), id));
     })
     .post('/:id/reopen', validate('param', idParamSchema), async (c) => {
       const { id } = c.req.valid('param');
@@ -61,7 +68,25 @@ export function accountRoutes(deps: AppDeps) {
         (r: Named) => `Reopen account "${r.name}"`,
         (rec) => setAccountClosed(rec, id, false, today()),
       );
-      return c.json<AccountDto>(await getAccount(deps.db, id));
+      return c.json<AccountDto>(await readAccount(deps, today(), id));
+    })
+    .post('/:id/revalue', validate('param', idParamSchema), validate('json', revalueRequestSchema), async (c) => {
+      const { id } = c.req.valid('param');
+      const { fxRate } = c.req.valid('json');
+      const now = today();
+      // Spec §9: the latest NBP rate is quoted before the command, outside its transaction.
+      const { currency } = await getAccount(deps.db, id);
+      const nbp = fxRate === undefined && currency !== BASE_CURRENCY ? await deps.fx.quote(currency, now) : null;
+      const rate = fxRate === undefined ? nbp && { rate: nbp.rate, manual: false } : { rate: fxRate, manual: true };
+      const { transactionId } = await runCommand(
+        deps,
+        (r: Named) => `Revalue "${r.name}"`,
+        (rec) => revalueAccount(rec, id, rate, now),
+      );
+      return c.json<RevalueResponse>({
+        account: await readAccount(deps, now, id),
+        transaction: await getTransaction(deps.db, transactionId),
+      });
     })
     .delete('/:id', validate('param', idParamSchema), async (c) => {
       const { id } = c.req.valid('param');

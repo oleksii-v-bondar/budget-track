@@ -3,6 +3,7 @@ import type { CreateTransactionRequest, UpdateTransactionRequest } from '../../s
 import type { IsoDate } from '../../engine';
 import type { ChangeRecorder } from '../commands/recorder';
 import type { Executor } from '../db/client';
+import { systemPayeeId } from '../db/lookups';
 import { payee, subtransaction, transaction } from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
 import { findOrCreatePayee } from '../payees/payee-commands';
@@ -138,15 +139,19 @@ function editTouchesReconciled(agg: Aggregate, plan: Plan, replaceLines: boolean
 /** Fields that a split line's counterpart takes; everything else belongs to the split (spec §10 "Splits"). */
 const COUNTERPART_FIELDS = new Set(['memo', 'cleared', 'approved', 'flag', 'confirmReconciled']);
 
+/** The first field the patch changes beyond memo, cleared, approved and flag. */
+const amountsField = (patch: UpdateTransactionRequest) =>
+  Object.keys(patch).find(
+    (key) => patch[key as keyof UpdateTransactionRequest] !== undefined && !COUNTERPART_FIELDS.has(key),
+  );
+
 /** The counterpart of a split line: its memo mirrors the line's; cleared, approved and flag are its own. */
 async function updateLineCounterpart(
   rec: ChangeRecorder,
   agg: Aggregate & { owner: NonNullable<Aggregate['owner']> },
   patch: UpdateTransactionRequest,
 ): Promise<void> {
-  const field = Object.keys(patch).find(
-    (key) => patch[key as keyof UpdateTransactionRequest] !== undefined && !COUNTERPART_FIELDS.has(key),
-  );
+  const field = amountsField(patch);
   if (field !== undefined) {
     const split = await findAccount(rec.tx, agg.owner.parent.accountId);
     throw new DomainError(
@@ -165,6 +170,28 @@ async function updateLineCounterpart(
     flag: patch.flag,
   });
   await rec.update(subtransaction, eq(subtransaction.id, agg.owner.line.id), { memo });
+}
+
+/**
+ * Spec §9: an FX revaluation books a PLN difference on an amount of 0, which planning would turn back into 0. It takes
+ * what a split line's counterpart takes; deleting it takes the revaluation back.
+ */
+async function updateRevaluation(rec: ChangeRecorder, agg: Aggregate, patch: UpdateTransactionRequest): Promise<void> {
+  const field = amountsField(patch);
+  if (field !== undefined) {
+    throw new DomainError(
+      'revaluation_fixed',
+      'An FX revaluation only takes a memo, flag or cleared status. Delete it to take it back.',
+      field,
+    );
+  }
+  assertConfirmed(agg.main.cleared === 'reconciled' && patch.cleared !== undefined, patch.confirmReconciled);
+  await rec.update(transaction, eq(transaction.id, agg.main.id), {
+    memo: patch.memo === undefined ? undefined : patch.memo || null,
+    cleared: patch.cleared,
+    approved: patch.approved,
+    flag: patch.flag,
+  });
 }
 
 const sameLines = (a: DraftLine[] | null, b: DraftLine[] | null) =>
@@ -287,6 +314,10 @@ export async function updateTransaction(
   const agg = await loadAggregate(rec.tx, id);
   if (agg.owner) {
     await updateLineCounterpart(rec, { ...agg, owner: agg.owner }, patch);
+    return { payeeName: await payeeNameOf(rec, agg.main.payeeId), deletedIds: [] };
+  }
+  if (agg.main.payeeId !== null && agg.main.payeeId === (await systemPayeeId(rec.tx, 'fx_revaluation'))) {
+    await updateRevaluation(rec, agg, patch);
     return { payeeName: await payeeNameOf(rec, agg.main.payeeId), deletedIds: [] };
   }
   const prepared = await editDraft(rec.tx, agg, patch, (name) => findOrCreatePayee(rec, name));

@@ -1,7 +1,9 @@
 import { and, asc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
-import type { AccountBalances, AccountDto } from '../../shared/api/accounts';
-import type { Executor } from '../db/client';
+import { type AccountBalances, type AccountDto, BASE_CURRENCY } from '../../shared/api/accounts';
+import { convertToBase, type IsoDate } from '../../engine';
+import type { Db, Executor } from '../db/client';
 import { account, category, payee, transaction } from '../db/schema';
+import { type FxQuote, type FxRates, latestRates } from '../fx/fx-rates';
 import { AppError } from '../http/errors';
 
 interface Sums {
@@ -38,8 +40,21 @@ async function sumsByAccount(db: Executor, accountIds: string[]): Promise<Map<st
   return new Map(rows.map(({ accountId, ...sums }) => [accountId, sums]));
 }
 
-/** Accounts in display order (spec §11 Accounts), with their balances. */
-export async function listAccounts(db: Executor, where?: SQL): Promise<AccountDto[]> {
+/** The working balance in PLN at the latest rate ("≈ X zł"); null when it can't be stored exactly. */
+function atRate(working: number, quote: FxQuote | null): number | null {
+  const base = quote && convertToBase(working, quote.rate);
+  return base !== null && Number.isSafeInteger(base) ? base : null;
+}
+
+/**
+ * Accounts in display order (spec §11 Accounts), with their balances. `rates` holds the latest NBP rate by currency
+ * for "≈ X zł" (see `readAccounts`); without one, a foreign account's `latestRate` is null.
+ */
+export async function listAccounts(
+  db: Executor,
+  where?: SQL,
+  rates = new Map<string, FxQuote>(),
+): Promise<AccountDto[]> {
   const rows = await db
     .select({ account, transferPayeeId: payee.id, linkedCategoryId: category.id })
     .from(account)
@@ -50,6 +65,7 @@ export async function listAccounts(db: Executor, where?: SQL): Promise<AccountDt
   const sums = await sumsByAccount(db, rows.map((r) => r.account.id));
   return rows.map(({ account: a, transferPayeeId, linkedCategoryId }) => {
     const s = sums.get(a.id) ?? ZERO;
+    const latestRate = a.currency === BASE_CURRENCY ? null : (rates.get(a.currency) ?? null);
     return {
       id: a.id,
       name: a.name,
@@ -69,12 +85,30 @@ export async function listAccounts(db: Executor, where?: SQL): Promise<AccountDt
       pairedCategoryId: a.pairedCategoryId,
       balance: balances(s.cleared, s.uncleared),
       balanceBase: balances(s.clearedBase, s.unclearedBase),
+      latestRate,
+      balanceAtLatestRate: atRate(s.cleared + s.uncleared, latestRate),
     };
   });
 }
 
 export async function getAccount(db: Executor, id: string): Promise<AccountDto> {
   const [found] = await listAccounts(db, eq(account.id, id));
+  if (!found) throw new AppError(404, 'not_found', 'Account not found.');
+  return found;
+}
+
+/**
+ * Accounts for API responses, with "≈ X zł": the latest NBP rate of each foreign currency is quoted first, once per
+ * currency, outside any transaction (cache first; each quote is bounded by NBP's 5 s timeout).
+ */
+export async function readAccounts(deps: { db: Db; fx: FxRates }, today: IsoDate, where?: SQL): Promise<AccountDto[]> {
+  const currencies = await deps.db.selectDistinct({ currency: account.currency }).from(account).where(where);
+  const rates = await latestRates(deps.fx, currencies.map((row) => row.currency), today);
+  return listAccounts(deps.db, where, rates);
+}
+
+export async function readAccount(deps: { db: Db; fx: FxRates }, today: IsoDate, id: string): Promise<AccountDto> {
+  const [found] = await readAccounts(deps, today, eq(account.id, id));
   if (!found) throw new AppError(404, 'not_found', 'Account not found.');
   return found;
 }

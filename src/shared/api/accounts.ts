@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { ACCOUNT_TYPES, type AccountClass, type AccountType, accountClassOf, isLoanType } from '../accounts';
 import { boundedMoneySchema, isoDateSchema, nameSchema, nonNegativeMoneySchema, noteSchema } from './common';
+import type { FxRateDto } from './fx';
+import type { TransactionDto } from './transactions';
 
 /** Spec §1: the budget currency. */
 export const BASE_CURRENCY = 'PLN';
@@ -121,8 +123,27 @@ export interface AccountDto {
   balance: AccountBalances;
   /** In PLN: the sum of the booked base amounts. */
   balanceBase: AccountBalances;
+  /**
+   * Foreign-currency accounts: the latest NBP rate (today's, or the last published day's; spec §9). Null for PLN
+   * accounts, when NBP has none, and in responses built inside a command.
+   */
+  latestRate: FxRateDto | null;
+  /**
+   * "≈ X zł" (spec §9, §11): the working balance at `latestRate`, in PLN; null without a rate. Revalue books
+   * `balanceAtLatestRate − balanceBase.working`.
+   */
+  balanceAtLatestRate: number | null;
 }
 
 export interface AccountListResponse {
   accounts: AccountDto[];
+}
+
+/** POST /api/accounts/:id/revalue (spec §9). Without `fxRate` the latest NBP rate applies. */
+export const revalueRequestSchema = z.object({ fxRate: fxRateSchema.optional() });
+
+export interface RevalueResponse {
+  account: AccountDto;
+  /** The FX revaluation transaction: amount 0, `amountBase` = the difference. */
+  transaction: TransactionDto;
 }
