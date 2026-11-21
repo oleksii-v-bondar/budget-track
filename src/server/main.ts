@@ -3,6 +3,7 @@ import { systemClock } from './clock';
 import { loadConfig } from './config';
 import { createDatabase } from './db/client';
 import { runMigrations } from './db/migrate';
+import { nbpRates } from './fx/fx-rates';
 import { createApp } from './http/app';
 import { clientIpResolver } from './http/client-ip';
 import { createLogger } from './logger';
@@ -21,6 +22,13 @@ async function main(): Promise<void> {
     clock: systemClock,
     logger,
     clientIp: clientIpResolver(config.trustProxy),
+    fx: nbpRates({
+      db: database.db,
+      logger,
+      clock: systemClock,
+      timeZone: config.timeZone,
+      baseUrl: config.nbpBaseUrl,
+    }),
   });
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     logger.info({ port: info.port }, 'listening');

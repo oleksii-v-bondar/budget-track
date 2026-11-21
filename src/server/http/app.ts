@@ -15,6 +15,7 @@ import type { Clock } from '../clock';
 import { redoRoutes, undoRoutes } from '../commands/undo-routes';
 import type { Config } from '../config';
 import type { Db } from '../db/client';
+import type { FxRates } from '../fx/fx-rates';
 import type { Logger } from '../logger';
 import { payeeRoutes } from '../payees/payee-routes';
 import { transactionRoutes } from '../transactions/transaction-routes';
@@ -29,6 +30,8 @@ export interface AppDeps {
   clock: Clock;
   logger: Logger;
   clientIp: ClientIpResolver;
+  /** NBP rates (spec §9). Quote before a command or read transaction starts, never inside one. */
+  fx: FxRates;
 }
 
 export function createApp(deps: AppDeps) {

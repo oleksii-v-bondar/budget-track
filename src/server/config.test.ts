@@ -21,6 +21,7 @@ describe('loadConfig', () => {
       trustProxy: false,
       logLevel: 'info',
       migrationsDir: 'drizzle',
+      nbpBaseUrl: 'https://api.nbp.pl',
     });
     expect(config.encryptionKey).toEqual(Buffer.alloc(32, 7));
   });
@@ -34,6 +35,7 @@ describe('loadConfig', () => {
       TRUST_PROXY: 'true',
       LOG_LEVEL: 'silent',
       MIGRATIONS_DIR: '/app/drizzle',
+      NBP_BASE_URL: 'http://localhost:8081/',
     });
     expect(config).toMatchObject({
       port: 8080,
@@ -42,6 +44,7 @@ describe('loadConfig', () => {
       trustProxy: true,
       logLevel: 'silent',
       migrationsDir: '/app/drizzle',
+      nbpBaseUrl: 'http://localhost:8081',
     });
   });
 
@@ -58,6 +61,7 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...validEnv, TZ: 'Mars/Olympus' })).toThrow('TZ');
     expect(() => loadConfig({ ...validEnv, SETUP_TOKEN: 'short' })).toThrow('SETUP_TOKEN');
     expect(() => loadConfig({ ...validEnv, COOKIE_SECURE: 'yes' })).toThrow('COOKIE_SECURE');
+    expect(() => loadConfig({ ...validEnv, NBP_BASE_URL: 'ftp://api.nbp.pl' })).toThrow('NBP_BASE_URL');
   });
 
   it('rejects setup tokens longer than 256 characters', () => {

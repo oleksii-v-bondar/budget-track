@@ -14,6 +14,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     trustProxy: true,
     logLevel: 'silent',
     migrationsDir: 'drizzle',
+    // Tests use stubFx (src/server/test/fx.ts) or a local NBP stub server; nothing listens here.
+    nbpBaseUrl: 'http://127.0.0.1:9',
     ...overrides,
   };
 }

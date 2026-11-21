@@ -66,3 +66,4 @@ docker rm -f $(docker ps -aq --filter label=org.testcontainers=true)
 | `TRUST_PROXY` | no | `false` | Take the client IP from `X-Forwarded-For` (behind a reverse proxy only) |
 | `LOG_LEVEL` | no | `info` | pino log level |
 | `MIGRATIONS_DIR` | no | `drizzle` | Folder with SQL migrations |
+| `NBP_BASE_URL` | no | `https://api.nbp.pl` | NBP exchange-rate API for foreign-currency accounts (outbound HTTPS) |
