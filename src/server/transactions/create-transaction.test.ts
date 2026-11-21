@@ -273,6 +273,23 @@ describe('POST /api/transactions', () => {
     });
   });
 
+  it('creates no payee for a new name when the transaction is refused', async () => {
+    await setUp();
+    const old = await createAccount(ctx.client, { name: 'Old', type: 'savings' });
+    await ctx.client.post(`/api/accounts/${old.id}/close`);
+
+    for (const [accountId, code] of [
+      [old.id, 'account_closed'],
+      [crypto.randomUUID(), 'invalid_account'],
+    ]) {
+      expect(await json(await post({ accountId, payeeName: 'New', amount: -1 }))).toMatchObject({
+        status: 422,
+        body: { code },
+      });
+    }
+    expect(await t.db.select().from(payee).where(eq(payee.name, 'New'))).toEqual([]);
+  });
+
   it('saves a transaction dated after today (in the budget time zone) as a one-time schedule', async () => {
     const { checking, groceries } = await setUp();
     // 23:30 UTC is already 2026-11-21 in Warsaw.

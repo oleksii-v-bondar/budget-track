@@ -13,7 +13,7 @@ import {
   createTransaction,
   ledgerLines,
 } from '../test/fixtures';
-import { snapshot } from '../test/snapshot';
+import { type DbSnapshot, snapshot } from '../test/snapshot';
 
 let t: TestDatabase;
 let ctx: TestApp;
@@ -39,6 +39,14 @@ const edit = async (id: string, body: object) => {
 const get = async (id: string) => (await json<TransactionDto>(await ctx.client.get(`/api/transactions/${id}`))).body;
 const rowOf = async (id: string) => (await t.db.select().from(transaction).where(eq(transaction.id, id)))[0]!;
 const undoCount = async () => (await t.db.select({ n: count() }).from(undoEntry))[0]!.n;
+/** Undo restores `before`; redo restores the state the last command left. */
+async function expectRoundTrip(before: DbSnapshot) {
+  const after = await snapshot(t.db);
+  await ctx.client.post('/api/undo');
+  expect(await snapshot(t.db)).toEqual(before);
+  await ctx.client.post('/api/redo');
+  expect(await snapshot(t.db)).toEqual(after);
+}
 
 async function setUp() {
   const checking = await createAccount(ctx.client, { name: 'mBank', startingBalance: 100_000 });
@@ -181,6 +189,46 @@ describe('PATCH /api/transactions/:id', () => {
     expect((await json(await patch(sent.id, { amount: 100 }))).body).toMatchObject({ code: 'transfer_amount_sign' });
   });
 
+  it('edits a transfer from its foreign side, keeping the PLN side unless transferAmount is sent', async () => {
+    const { checking } = await setUp();
+    const euro = await createAccount(ctx.client, { name: 'Revolut', type: 'savings', currency: 'EUR', fxRate: '4.25' });
+    const sent = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      payeeId: euro.transferPayeeId,
+      amount: -40_000,
+      transferAmount: 9_300,
+    });
+    const euroSide = sent.transfer!.transactionId;
+
+    expect(await edit(euroSide, { amount: 9_500, memo: 'top-up' })).toMatchObject({
+      amount: 9_500,
+      amountBase: 40_000,
+      memo: 'top-up',
+      transfer: { amount: -40_000 },
+    });
+    expect(await get(sent.id)).toMatchObject({ amount: -40_000, amountBase: -40_000, memo: 'top-up' });
+    expect(await edit(euroSide, { transferAmount: -42_000 })).toMatchObject({ amount: 9_500, amountBase: 42_000 });
+    expect(await get(sent.id)).toMatchObject({ amount: -42_000, amountBase: -42_000 });
+  });
+
+  it('edits a transfer whose other account is closed, and records nothing for a no-op', async () => {
+    const { checking, savings } = await setUp();
+    const sent = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      payeeId: savings.transferPayeeId,
+      amount: -500,
+    });
+    await createTransaction(ctx.client, { accountId: savings.id, amount: -500 });
+    expect((await ctx.client.post(`/api/accounts/${savings.id}/close`)).status).toBe(200);
+
+    const entries = await undoCount();
+    expect(await edit(sent.id, { memo: '', amount: -500 })).toEqual(await get(sent.id));
+    expect(await undoCount()).toBe(entries);
+
+    expect(await edit(sent.id, { memo: 'last one', amount: -600 })).toMatchObject({ memo: 'last one', amount: -600 });
+    expect(await get(sent.transfer!.transactionId)).toMatchObject({ memo: 'last one', amount: 600 });
+  });
+
   it('turns a transaction into a transfer, retargets it and turns it back as the payee changes', async () => {
     const { checking, savings, groceries } = await setUp();
     const wallet = await createAccount(ctx.client, { name: 'Wallet', type: 'cash' });
@@ -198,17 +246,21 @@ describe('PATCH /api/transactions/:id', () => {
     const first = toSavings.transfer!.transactionId;
     expect(await get(first)).toMatchObject({ accountId: savings.id, amount: 100 });
 
+    const beforeRetarget = await snapshot(t.db);
     const toWallet = await edit(txn.id, { payeeId: wallet.transferPayeeId });
     const second = toWallet.transfer!.transactionId;
     expect(second).not.toBe(first);
     expect((await rowOf(first)).deletedAt).toEqual(ctx.clock.now());
     expect(await get(second)).toMatchObject({ accountId: wallet.id, amount: 100, transfer: { transactionId: txn.id } });
+    await expectRoundTrip(beforeRetarget);
 
+    const beforeEnd = await snapshot(t.db);
     const plain = await edit(txn.id, { payeeName: 'Biedronka', categoryId: groceries.id });
     expect(plain).toMatchObject({ payeeName: 'Biedronka', categoryId: groceries.id, transfer: null });
     expect(await rowOf(txn.id)).toMatchObject({ transferAccountId: null, transferTxnId: null });
     expect((await rowOf(second)).deletedAt).toEqual(ctx.clock.now());
     expect((await ledgerLines(t.db, eq(ledgerLine.accountId, wallet.id))).map((l) => l.txnId)).not.toContain(second);
+    await expectRoundTrip(beforeEnd);
   });
 
   it('drops the other side when the tracking side of a loan payment gets a regular payee', async () => {
@@ -371,6 +423,43 @@ describe('reconciled transactions', () => {
     expect(await json(await patch(split.id, { date: '2026-11-19' }))).toEqual(confirmNeeded);
     expect(await json(await patch(lineSide, { cleared: 'cleared' }))).toEqual(confirmNeeded);
     expect((await patch(lineSide, { cleared: 'cleared', confirmReconciled: true })).status).toBe(200);
+  });
+
+  it('asks to confirm replacing or removing the lines of a reconciled split', async () => {
+    const { checking, groceries, household } = await setUp();
+    const split = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      amount: -300,
+      lines: [
+        { amount: -100, categoryId: groceries.id },
+        { amount: -200, categoryId: household.id },
+      ],
+    });
+    await reconcile(split.id);
+
+    const lines = [
+      { amount: -150, categoryId: groceries.id },
+      { amount: -150, categoryId: household.id },
+    ];
+    expect(await json(await patch(split.id, { lines }))).toEqual(confirmNeeded);
+    expect(await json(await patch(split.id, { lines: null, categoryId: groceries.id }))).toEqual(confirmNeeded);
+    expect(await edit(split.id, { lines, confirmReconciled: true })).toMatchObject({ cleared: 'reconciled' });
+  });
+
+  it('asks to confirm moving a transfer whose other side is reconciled', async () => {
+    const { checking, savings } = await setUp();
+    const wallet = await createAccount(ctx.client, { name: 'Wallet', type: 'cash' });
+    const sent = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      payeeId: savings.transferPayeeId,
+      amount: -100,
+    });
+    await reconcile(sent.transfer!.transactionId);
+
+    expect(await json(await patch(sent.id, { accountId: wallet.id }))).toEqual(confirmNeeded);
+    expect(await edit(sent.id, { accountId: wallet.id, confirmReconciled: true })).toMatchObject({
+      accountId: wallet.id,
+    });
   });
 });
 

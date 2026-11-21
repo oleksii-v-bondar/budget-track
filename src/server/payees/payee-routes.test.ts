@@ -198,6 +198,21 @@ describe('POST /api/payees/:id/merge', () => {
     expect(await snapshot(t.db)).toEqual(after);
   });
 
+  it('keeps the target’s own default category', async () => {
+    const food = await createGroup(ctx.client, 'Food');
+    const groceries = await createCategory(ctx.client, food.id, 'Groceries');
+    const household = await createCategory(ctx.client, food.id, 'Household');
+    const typo = await createPayee(ctx.client, 'Biedronak');
+    const shop = await createPayee(ctx.client, 'Biedronka');
+    await t.db.update(payee).set({ lastCategoryId: groceries.id }).where(eq(payee.id, typo.id));
+    await t.db.update(payee).set({ lastCategoryId: household.id }).where(eq(payee.id, shop.id));
+
+    expect(await json(await merge(typo.id, shop.id))).toMatchObject({
+      status: 200,
+      body: { id: shop.id, lastCategoryId: household.id },
+    });
+  });
+
   it('refuses merges into itself, a deleted payee, or a transfer or system payee, and of app payees', async () => {
     const checking = await createAccount(ctx.client, { name: 'mBank' });
     const shop = await createPayee(ctx.client, 'Biedronka');

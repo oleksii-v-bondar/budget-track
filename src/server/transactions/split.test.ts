@@ -155,6 +155,7 @@ describe('splits', () => {
 
   it('turns a transfer line into a counterpart transaction in the target account', async () => {
     const { checking, savings, groceries } = await setUp();
+    const before = await snapshot(t.db);
     const split = await createTransaction(ctx.client, {
       accountId: checking.id,
       amount: -50_000,
@@ -199,6 +200,12 @@ describe('splits', () => {
       [checking.id, null, -20_000, true, 'cash'],
       [savings.id, null, 20_000, true, 'cash'],
     ]);
+    const after = await snapshot(t.db);
+
+    await ctx.client.post('/api/undo');
+    expect(await snapshot(t.db)).toEqual(before);
+    await ctx.client.post('/api/redo');
+    expect(await snapshot(t.db)).toEqual(after);
   });
 
   it('puts the category of a budget↔tracking transfer line on the budget side', async () => {

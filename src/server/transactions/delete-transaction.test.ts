@@ -129,6 +129,20 @@ describe('DELETE /api/transactions/:id', () => {
       body: { code: 'confirm_reconciled', message: 'This changes a reconciled transaction. Confirm to go ahead.' },
     });
     expect((await remove(sent.id, { confirmReconciled: true })).status).toBe(200);
+
+    const reconciledLine = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      amount: -300,
+      lines: [{ amount: -100 }, { amount: -200, payeeId: savings.transferPayeeId }],
+    });
+    const lineSide = reconciledLine.lines[1]!.transfer!.transactionId;
+    await t.db.update(transaction).set({ cleared: 'reconciled' }).where(eq(transaction.id, lineSide));
+    expect((await json(await remove(reconciledLine.id))).body).toMatchObject({ code: 'confirm_reconciled' });
+    expect(await json(await remove(reconciledLine.id, { confirmReconciled: true }))).toEqual({
+      status: 200,
+      body: { id: reconciledLine.id },
+    });
+    expect(await deletedAt(transaction, lineSide)).toEqual(ctx.clock.now());
     for (const id of [sent.id, crypto.randomUUID()]) {
       expect(await json(await remove(id))).toEqual({
         status: 404,

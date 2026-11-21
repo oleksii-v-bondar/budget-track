@@ -252,6 +252,41 @@ describe('transfers', () => {
     expect(await get(received.transfer!.transactionId)).toMatchObject({ amountBase: -43_000, fxRate: '4.300000' });
   });
 
+  it('mirrors a transfer between two accounts in the same foreign currency, booked at its rate', async () => {
+    const euro = await createAccount(ctx.client, { name: 'Revolut', currency: 'EUR', fxRate: '4.25' });
+    const pocket = await createAccount(ctx.client, {
+      name: 'Pocket',
+      type: 'savings',
+      currency: 'EUR',
+      fxRate: '4.25',
+    });
+    const toPocket = { accountId: euro.id, payeeId: pocket.transferPayeeId, amount: -1_000 };
+    const before = await snapshot(t.db);
+
+    expect(await code(toPocket)).toBe('fx_rate_required');
+    expect(await code({ ...toPocket, fxRate: '4.3', transferAmount: 1_000 })).toBe('transfer_amount_not_allowed');
+    const sent = await createTransaction(ctx.client, { ...toPocket, fxRate: '4.3' });
+    expect(sent).toMatchObject({
+      amount: -1_000,
+      amountBase: -4_300,
+      fxRate: '4.300000',
+      transfer: { accountId: pocket.id, amount: 1_000, currency: 'EUR', effectiveRate: '4.300000' },
+    });
+    expect(await get(sent.transfer!.transactionId)).toMatchObject({
+      currency: 'EUR',
+      amount: 1_000,
+      amountBase: 4_300,
+      fxRate: null,
+      transfer: { transactionId: sent.id },
+    });
+    const after = await snapshot(t.db);
+
+    await ctx.client.post('/api/undo');
+    expect(await snapshot(t.db)).toEqual(before);
+    await ctx.client.post('/api/redo');
+    expect(await snapshot(t.db)).toEqual(after);
+  });
+
   it('schedules a future transfer, except one between currencies', async () => {
     const checking = await createAccount(ctx.client, { name: 'mBank' });
     const savings = await createAccount(ctx.client, { name: 'Savings', type: 'savings' });

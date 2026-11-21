@@ -170,24 +170,16 @@ These items were found in the P1 final review and deferred. Fold them into the P
   - A future-dated same-currency foreign transfer entered from the receiving side loses its `fxRate` on the schedule
     (`insertSchedule` stores the main row's rate). Use `draft.fxRate`; the P2d2 prototype reportedly does.
   - PATCH clears a memo only with `''` (`memo: null` is a 400); decide whether to accept `null`.
-- P2c final fix pass, tests (minors from the task reviews):
-  - Payees: a merge where the target keeps its own `lastCategoryId`; an inline `payeeName` rolled back when the create
-    is refused.
-  - Transfers: EUR↔EUR, a successful tracking↔tracking transfer, and an undo round trip of a transfer between
-    currencies.
-  - Splits: an undo round trip of a split with a transfer line; a transfer line to a closed account; the 100-line cap;
-    the category of a future-dated budget↔tracking transfer line.
-  - Edits: an undo round trip of retargeting and of ending a transfer (`syncPlan`); edits of rows in a closed account;
-    edits of a foreign side and of a foreign↔foreign transfer; no-op transfer and split edits record no undo entry.
-  - Reconciled rows (409 `confirm_reconciled`): replacing reconciled split lines or removing them (`lines: null`),
-    moving a transaction whose other side is reconciled, and deleting a split whose line counterpart is reconciled.
-    Also a move and `lines` in one request.
-  - Account deletion: the transfer-payee in-use check is tested only for `scheduled_subtransaction`; cover all four
-    tables (`it.each`).
+- P2c final fix pass, tests (minors from the task reviews; the ones still open after the fix pass):
+  - Transfers: a successful tracking↔tracking transfer, and an undo round trip of a transfer between currencies.
+  - Splits: a transfer line to a closed account; the 100-line cap; the category of a future-dated budget↔tracking
+    transfer line.
+  - Edits: edits of a foreign↔foreign transfer; a no-op split edit records no undo entry.
+  - Reconciled rows: a move and `lines` in one request.
 
 ### Resolved in the P2c final fix pass
-- Amount caps (spec §4.4, §13): every amount that becomes a ledger row (`amount`, `transferAmount` and `lines[].amount`
-  of transactions, on create and edit, and an account's `startingBalance`) uses `boundedMoneySchema`
+- Amount caps (spec §4.4, §13): every amount that becomes a ledger row (`amount`, `transferAmount` and
+  `lines[].amount` of transactions, on create and edit, and an account's `startingBalance`) uses `boundedMoneySchema`
   (|amount| ≤ `MAX_AMOUNT` = 1e13, 100 bn zł; 400 "Amount is too large."). Computed PLN amounts (`toBase`, the
   sending side of a transfer, split line bases, foreign starting balances) must stay within `MAX_BASE_AMOUNT` = 1e14
   (rates up to 10), otherwise 422 `amount_too_large` with the field (`amount`, `transferAmount`, `lines.<n>.amount`,
@@ -200,3 +192,10 @@ These items were found in the P1 final review and deferred. Fold them into the P
   before `categoryId`).
 - Bulk edits skip rows that an earlier row of the same command soft-deleted (`updateTransaction` returns
   `deletedIds`), e.g. `setPayee` on both sides of a transfer no longer answers 404 for the side the first row ended.
+- Tests added for the review gaps: a payee merge keeps the target's own `lastCategoryId`; a refused create (closed or
+  unknown account) leaves no inline payee behind; undo/redo round trips of a split with a transfer line, of
+  retargeting and of ending a transfer, and of an EUR↔EUR transfer; editing a transfer whose other account is closed,
+  editing from the foreign side of a PLN↔EUR transfer, and a no-op transfer edit (no undo entry); `confirm_reconciled`
+  for replacing or removing a reconciled split's lines, moving a transfer whose other side is reconciled and deleting
+  a split whose line counterpart is reconciled; `account_in_use` for each of the four tables that can use the
+  transfer payee (`it.each`).

@@ -9,6 +9,7 @@ import {
   payee,
   scheduledSubtransaction,
   scheduledTransaction,
+  subtransaction,
   target,
   transaction,
 } from '../db/schema';
@@ -466,7 +467,7 @@ describe('DELETE /api/accounts/:id', () => {
     expect(await snapshot(t.db)).toEqual(after);
   });
 
-  it('clears payees that remember a linked category, and refuses while rows use the transfer payee', async () => {
+  it('clears payees that remember a linked category', async () => {
     const loan = await createAccount(ctx.client, {
       name: 'Car',
       type: 'auto_loan',
@@ -482,24 +483,41 @@ describe('DELETE /api/accounts/:id', () => {
     expect((await t.db.select().from(payee).where(eq(payee.id, bank!.id)))[0]!.lastCategoryId).toBeNull();
     await ctx.client.post('/api/undo');
     expect(await snapshot(t.db)).toEqual(before);
+  });
 
+  const monthly = { amount: -1, frequency: 'monthly', anchorDate: '2026-12-01', nextDate: '2026-12-01' } as const;
+  const newSchedule = (accountId: string, values: Partial<typeof scheduledTransaction.$inferInsert>) =>
+    t.db
+      .insert(scheduledTransaction)
+      .values({ accountId, ...monthly, ...values })
+      .returning();
+  const transferPayeeUses: [string, (accountId: string, payeeId: string) => Promise<unknown>][] = [
+    [
+      'transaction',
+      (accountId, payeeId) => insertTransaction(t.db, { accountId, date: '2026-11-20', amount: -1, payeeId }),
+    ],
+    [
+      'subtransaction',
+      async (accountId, payeeId) => {
+        const split = await insertTransaction(t.db, { accountId, date: '2026-11-20', amount: -1, isSplit: true });
+        await t.db.insert(subtransaction).values({ txnId: split.id, amount: -1, amountBase: -1, payeeId });
+      },
+    ],
+    ['scheduled_transaction', (accountId, payeeId) => newSchedule(accountId, { payeeId })],
+    [
+      'scheduled_subtransaction',
+      async (accountId, payeeId) => {
+        const [schedule] = await newSchedule(accountId, { isSplit: true });
+        await t.db.insert(scheduledSubtransaction).values({ scheduledId: schedule!.id, amount: -1, payeeId });
+      },
+    ],
+  ];
+
+  // Rows naming the transfer payee without its account (the API never writes them) still block the delete.
+  it.each(transferPayeeUses)('refuses while a %s row uses the transfer payee', async (_, insert) => {
     const savings = await createAccount(ctx.client, { name: 'Savings', type: 'savings' });
     const checking = await createAccount(ctx.client, { name: 'mBank' });
-    const [schedule] = await t.db
-      .insert(scheduledTransaction)
-      .values({
-        accountId: checking.id,
-        amount: -1,
-        isSplit: true,
-        frequency: 'monthly',
-        anchorDate: '2026-12-01',
-        nextDate: '2026-12-01',
-      })
-      .returning();
-    // A line naming the transfer payee without its account (the API never writes one) still blocks the delete.
-    await t.db
-      .insert(scheduledSubtransaction)
-      .values({ scheduledId: schedule!.id, amount: -1, payeeId: savings.transferPayeeId });
+    await insert(checking.id, savings.transferPayeeId);
     expect((await json(await ctx.client.send('DELETE', `/api/accounts/${savings.id}`))).body).toMatchObject({
       code: 'account_in_use',
     });
