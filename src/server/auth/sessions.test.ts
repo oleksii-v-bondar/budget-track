@@ -107,10 +107,13 @@ describe('requireSession', () => {
     expect(cookie).toContain('SameSite=Strict');
   });
 
-  it('turns a client away once its session has expired', async () => {
+  it('turns a client away once its session has expired, and clears its cookie', async () => {
     const client = protectedApp();
     await client.post('/login');
     clock.advance(31 * DAY);
-    expect((await client.get('/private')).status).toBe(401);
+    const res = await client.get('/private');
+    expect(res.status).toBe(401);
+    expect(res.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=; Max-Age=0`);
+    expect(client.cookie(SESSION_COOKIE)).toBeUndefined();
   });
 });

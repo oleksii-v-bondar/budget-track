@@ -18,6 +18,18 @@ describe('auth request schemas', () => {
     expect(setupRequestSchema.safeParse({ ...ok, setupToken: 'x'.repeat(257) }).success).toBe(false);
   });
 
+  it('explain too long or empty inputs in words', () => {
+    const messages = (result: { error?: { issues: { message: string }[] } }) => result.error?.issues.map((i) => i.message);
+    expect(messages(setupTotpRequestSchema.safeParse({ setupToken: 'x'.repeat(257) }))).toEqual([
+      'That setup token is too long.',
+    ]);
+    expect(messages(loginRequestSchema.safeParse({ password: 'x'.repeat(257), recoveryCode: 'y'.repeat(65) }))).toEqual([
+      'Use at most 256 characters.',
+      'That recovery code is too long.',
+    ]);
+    expect(messages(loginRequestSchema.safeParse({ password: 'p', recoveryCode: '' }))).toEqual(['Enter a recovery code.']);
+  });
+
   it('require exactly one second factor at login', () => {
     expect(loginRequestSchema.safeParse({ password: 'p', totpCode: '123456' }).success).toBe(true);
     expect(loginRequestSchema.safeParse({ password: 'p', recoveryCode: 'AAAA-BBBB-CCCC' }).success).toBe(true);

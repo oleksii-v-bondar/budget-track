@@ -75,23 +75,30 @@ export function clearSessionCookie(c: Context, secure: boolean): void {
   deleteCookie(c, SESSION_COOKIE, { httpOnly: true, secure, sameSite: 'Strict', path: '/' });
 }
 
-/** The session behind the request's cookie, if any (sliding its expiry). */
-export async function currentSession(c: Context, deps: { db: Executor; clock: Clock }): Promise<SessionInfo | null> {
-  const token = getCookie(c, SESSION_COOKIE);
-  return token ? findSession(deps.db, token, deps.clock.now()) : null;
-}
-
-/** 401 unless the request carries a live session; refreshes the cookie so its lifetime slides too. */
-export function requireSession(deps: {
+interface SessionDeps {
   db: Executor;
   clock: Clock;
   config: { cookieSecure: boolean };
-}): MiddlewareHandler<AuthedEnv> {
+}
+
+/**
+ * The live session behind the request's cookie, or null. Slides the session's expiry and refreshes the cookie so its
+ * lifetime slides too; a cookie for an unknown or expired session is cleared.
+ */
+export async function refreshSession(c: Context, deps: SessionDeps): Promise<SessionInfo | null> {
+  const token = getCookie(c, SESSION_COOKIE);
+  if (!token) return null;
+  const found = await findSession(deps.db, token, deps.clock.now());
+  if (found) setSessionCookie(c, token, deps.config.cookieSecure);
+  else clearSessionCookie(c, deps.config.cookieSecure);
+  return found;
+}
+
+/** 401 unless the request carries a live session (see refreshSession). */
+export function requireSession(deps: SessionDeps): MiddlewareHandler<AuthedEnv> {
   return async (c, next) => {
-    const token = getCookie(c, SESSION_COOKIE);
-    const found = token ? await findSession(deps.db, token, deps.clock.now()) : null;
-    if (!token || !found) throw new AppError(401, 'unauthorized', 'Please sign in.');
-    setSessionCookie(c, token, deps.config.cookieSecure);
+    const found = await refreshSession(c, deps);
+    if (!found) throw new AppError(401, 'unauthorized', 'Please sign in.');
     c.set('session', found);
     await next();
   };

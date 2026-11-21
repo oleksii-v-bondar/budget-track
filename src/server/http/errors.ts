@@ -5,13 +5,17 @@ import { z } from 'zod';
 import type { ApiErrorBody } from '../../shared/http';
 import type { AppEnv } from './env';
 
-/** An error whose message is safe to show to the user; mapped to `status` with body `{ code, message, ... }`. */
+/**
+ * An error whose message is safe to show to the user; mapped to `status` with body `{ code, message, ... }` and the
+ * given response headers (e.g. `Retry-After`).
+ */
 export class AppError extends Error {
   constructor(
     readonly status: ContentfulStatusCode,
     readonly code: string,
     message: string,
     readonly extra: Omit<ApiErrorBody, 'code' | 'message'> = {},
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
     this.name = 'AppError';
@@ -49,7 +53,7 @@ export class ValidationError extends AppError {
 
 export function errorHandler(err: Error, c: Context<AppEnv>): Response {
   if (err instanceof AppError) {
-    return c.json<ApiErrorBody>({ code: err.code, message: err.message, ...err.extra }, err.status);
+    return c.json<ApiErrorBody>({ code: err.code, message: err.message, ...err.extra }, err.status, err.headers);
   }
   if (err instanceof HTTPException) {
     const code = err.status === 400 ? 'bad_request' : `http_${err.status}`;

@@ -20,7 +20,7 @@ import { hashPassword } from './passwords';
 import { recordLoginAttempt, withLoginLock } from './rate-limit';
 import { generateRecoveryCodes, hashRecoveryCodes } from './recovery-codes';
 import { encryptSecret } from './secret-box';
-import { createSession, currentSession, setSessionCookie } from './sessions';
+import { createSession, refreshSession, setSessionCookie } from './sessions';
 import { newTotpSecret, totpUri, verifyTotp } from './totp';
 
 export async function isSetupComplete(db: Executor): Promise<boolean> {
@@ -52,7 +52,8 @@ export function setupRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()
     .get('/status', async (c) => {
       const setupRequired = !(await isSetupComplete(deps.db));
-      const authenticated = !setupRequired && (await currentSession(c, deps)) !== null;
+      // Also keeps the cookie's lifetime sliding while the app only polls its status, and clears a stale cookie.
+      const authenticated = (await refreshSession(c, deps)) !== null && !setupRequired;
       return c.json<AuthStatus>({ setupRequired, authenticated });
     })
     .post('/setup/totp', validate('json', setupTotpRequestSchema), async (c) => {

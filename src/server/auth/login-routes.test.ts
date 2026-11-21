@@ -124,10 +124,14 @@ describe('POST /api/auth/login', () => {
   it('limits each IP to 5 attempts per minute', async () => {
     const attacker = new TestClient(ctx.app, '198.51.100.66');
     for (let i = 0; i < 5; i++) expect((await login(attacker, { password: 'guess', totpCode: '000000' })).status).toBe(401);
-    expect(await login(attacker, await withCode())).toEqual({
-      status: 429,
-      body: { code: 'rate_limited', message: 'Too many sign-in attempts. Wait a minute and try again.' },
+    const limited = await attacker.post('/api/auth/login', await withCode());
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({
+      code: 'rate_limited',
+      message: 'Too many sign-in attempts. Wait a minute and try again.',
     });
+    // withCode() moved the clock 30 s on, so the oldest of the five attempts is a minute old in 30 s.
+    expect(limited.headers.get('retry-after')).toBe('30');
     expect((await login(new TestClient(ctx.app, '198.51.100.67'), await withCode())).status).toBe(200);
     ctx.clock.advance(MINUTE + 1);
     expect((await login(attacker, await withCode())).status).toBe(200);
@@ -149,10 +153,10 @@ describe('POST /api/auth/login', () => {
       expect(res.status).toBe(401);
     }
     const owner = new TestClient(ctx.app);
-    expect(await login(owner, await withCode())).toEqual({
-      status: 429,
-      body: { code: 'locked', message: 'Too many failed sign-ins. Try again in 15 minutes.' },
-    });
+    const locked = await owner.post('/api/auth/login', await withCode());
+    expect(locked.status).toBe(429);
+    expect(await locked.json()).toEqual({ code: 'locked', message: 'Too many failed sign-ins. Try again in 15 minutes.' });
+    expect(locked.headers.get('retry-after')).toBe(String(15 * 60 - 30));
     ctx.clock.advance(15 * MINUTE);
     expect((await login(owner, await withCode())).status).toBe(200);
   });

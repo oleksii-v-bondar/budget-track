@@ -53,6 +53,18 @@ describe('GET /api/auth/status', () => {
       body: { setupRequired: true, authenticated: false },
     });
   });
+
+  it("refreshes a signed-in client's cookie and clears a stale one", async () => {
+    await setUpBudget(ctx);
+    ctx.clock.advance(20 * 24 * 60 * 60 * 1000);
+    const live = await ctx.client.get('/api/auth/status');
+    expect(await live.json()).toEqual({ setupRequired: false, authenticated: true });
+    expect(live.headers.get('set-cookie')).toMatch(new RegExp(`^${SESSION_COOKIE}=[\\w-]{43}; Max-Age=2592000;`));
+
+    const stale = await ctx.client.get('/api/auth/status', { cookie: `${SESSION_COOKIE}=no-such-session` });
+    expect(await stale.json()).toEqual({ setupRequired: false, authenticated: false });
+    expect(stale.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=; Max-Age=0`);
+  });
 });
 
 describe('POST /api/auth/setup/totp', () => {
