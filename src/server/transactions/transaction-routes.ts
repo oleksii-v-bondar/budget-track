@@ -17,6 +17,7 @@ import { runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
 import { bulkLabel, bulkUpdate } from './bulk';
+import { createDefaultRates, editDefaultRates } from './default-rates';
 import {
   createTransaction,
   deleteLabel,
@@ -44,7 +45,10 @@ export function transactionRoutes(deps: AppDeps) {
     })
     .post('/', validate('json', createTransactionRequestSchema), async (c) => {
       const body = c.req.valid('json');
-      const saved = await runCommand(deps, savedLabel, (rec) => createTransaction(rec, body, today()));
+      const now = today();
+      // Spec §9: NBP rates are quoted before the command, outside its transaction.
+      const defaults = await createDefaultRates(deps, body, now);
+      const saved = await runCommand(deps, savedLabel, (rec) => createTransaction(rec, body, now, defaults));
       if (saved.kind === 'scheduled') {
         return c.json<CreateTransactionResponse>({ kind: 'scheduled', scheduledId: saved.id, date: saved.date }, 201);
       }
@@ -64,7 +68,8 @@ export function transactionRoutes(deps: AppDeps) {
       const { id } = c.req.valid('param');
       const body = c.req.valid('json');
       const context = { today: today(), now: deps.clock.now() };
-      await runCommand(deps, editLabel, (rec) => updateTransaction(rec, id, body, context));
+      const defaults = await editDefaultRates(deps, id, body, context.today);
+      await runCommand(deps, editLabel, (rec) => updateTransaction(rec, id, body, { ...context, defaults }));
       return c.json<TransactionDto>(await getTransaction(deps.db, id));
     })
     .delete('/:id', validate('param', idParamSchema), validate('json', deleteTransactionRequestSchema), async (c) => {

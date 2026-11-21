@@ -74,6 +74,7 @@ describe('POST /api/transactions', () => {
         amount: -12_345,
         amountBase: -12_345,
         fxRate: null,
+        fxRateManual: false,
         effectiveRate: null,
         cleared: 'uncleared',
         approved: true,

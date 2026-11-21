@@ -2,11 +2,12 @@ import { eq } from 'drizzle-orm';
 import type { CreateTransactionRequest, UpdateTransactionRequest } from '../../shared/api/transactions';
 import type { IsoDate } from '../../engine';
 import type { ChangeRecorder } from '../commands/recorder';
+import type { Executor } from '../db/client';
 import { payee, subtransaction, transaction } from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
 import { findOrCreatePayee } from '../payees/payee-commands';
 import { accountsOf, type Aggregate, draftOf, loadAggregate, storedRates } from './aggregate';
-import { type Draft, type DraftLine, type Plan, planTransaction, type RowPlan } from './plan';
+import { type Draft, type DraftLine, type Plan, type PlanContext, planTransaction, type RowPlan } from './plan';
 import { findAccount } from './rules';
 import { insertPlan, insertSchedule, rememberCategory, softDelete, syncPlan } from './write';
 
@@ -25,18 +26,17 @@ export function savedLabel(saved: SavedTransaction): string {
   return saved.payeeName === null ? verb : `${verb} "${saved.payeeName}"`;
 }
 
-/**
- * Spec §10 "Creating and editing": manual transactions are approved; a new payee name creates the payee; a date
- * after today becomes a one-time scheduled transaction (spec §5.6).
- */
-export async function createTransaction(
-  rec: ChangeRecorder,
+/** Resolves a payee name the user typed: the command finds or creates the payee, a dry run only looks it up. */
+export type PayeeByName = (name: string) => Promise<string | null>;
+
+/** The new transaction as a draft (manual transactions are approved). */
+export async function createDraft(
   input: CreateTransactionRequest,
   today: IsoDate,
-): Promise<SavedTransaction> {
-  const payeeId =
-    input.payeeName === undefined ? (input.payeeId ?? null) : await findOrCreatePayee(rec, input.payeeName);
-  const draft: Draft = {
+  payeeByName: PayeeByName,
+): Promise<Draft> {
+  const payeeId = input.payeeName === undefined ? (input.payeeId ?? null) : await payeeByName(input.payeeName);
+  return {
     accountId: input.accountId,
     date: input.date ?? today,
     payeeId,
@@ -50,9 +50,25 @@ export async function createTransaction(
     flag: input.flag,
     lines: input.lines?.map((line) => ({ ...line, memo: line.memo || null })) ?? null,
   };
-  const plan = await planTransaction(rec.tx, draft);
+}
+
+/**
+ * Spec §10 "Creating and editing": a new payee name creates the payee; a date after today becomes a one-time
+ * scheduled transaction (spec §5.6). A foreign amount without `fxRate` is booked at `defaults`, the NBP rates the
+ * caller quoted for its date (spec §9); a schedule stores the rate sent, or none (the NBP rate of the day it is
+ * entered applies then).
+ */
+export async function createTransaction(
+  rec: ChangeRecorder,
+  input: CreateTransactionRequest,
+  today: IsoDate,
+  defaults = new Map<string, string>(),
+): Promise<SavedTransaction> {
+  const draft = await createDraft(input, today, (name) => findOrCreatePayee(rec, name));
+  const future = draft.date > today;
+  const plan = await planTransaction(rec.tx, draft, future ? { unknownRates: new Set() } : { defaults });
   const payeeName = plan.payee?.name ?? null;
-  if (draft.date > today) {
+  if (future) {
     if (plan.transfer && plan.transfer.currency !== plan.account.currency) {
       // A schedule has no column for the other side's amount.
       throw new DomainError(
@@ -69,6 +85,8 @@ export async function createTransaction(
 export interface EditContext {
   today: IsoDate;
   now: Date;
+  /** Spec §9: NBP rates for the edited date by currency, quoted before the command (none for bulk edits). */
+  defaults?: Map<string, string>;
 }
 
 /** The payee's name for undo labels. */
@@ -163,7 +181,7 @@ const sameLines = (a: DraftLine[] | null, b: DraftLine[] | null) =>
     ));
 
 /** The saved draft with the request's changes applied. */
-async function applyPatch(rec: ChangeRecorder, agg: Aggregate, patch: UpdateTransactionRequest): Promise<Draft> {
+async function applyPatch(agg: Aggregate, patch: UpdateTransactionRequest, payeeByName: PayeeByName): Promise<Draft> {
   const current = draftOf(agg);
   const lines =
     patch.lines === undefined
@@ -171,7 +189,7 @@ async function applyPatch(rec: ChangeRecorder, agg: Aggregate, patch: UpdateTran
       : (patch.lines?.map((line) => ({ ...line, memo: line.memo || null })) ?? null);
   const payeeId =
     patch.payeeName !== undefined
-      ? await findOrCreatePayee(rec, patch.payeeName)
+      ? await payeeByName(patch.payeeName)
       : patch.payeeId !== undefined
         ? patch.payeeId
         : current.payeeId;
@@ -237,10 +255,28 @@ async function assertSameCurrency(rec: ChangeRecorder, agg: Aggregate, draft: Dr
   }
 }
 
+/** The edited transaction as a draft, with what the saved one already has for planning it. */
+export async function editDraft(
+  db: Executor,
+  agg: Aggregate,
+  patch: UpdateTransactionRequest,
+  payeeByName: PayeeByName,
+): Promise<{ draft: Draft; context: PlanContext }> {
+  const draft = await applyPatch(agg, patch, payeeByName);
+  const existing = {
+    payeeId: agg.main.payeeId,
+    rates: await storedRates(db, agg, draft.date === agg.main.date),
+    counterpart: agg.counterpart && { accountId: agg.counterpart.accountId, amount: agg.counterpart.amount },
+    accountIds: accountsOf(agg),
+  };
+  return { draft, context: { existing } };
+}
+
 /**
  * PATCH /api/transactions/:id (spec §10 "Creating and editing", "Transfers"): the edited transaction is planned again
- * with every rule of a new one, then its rows are brought in line. `deletedIds` lists the transactions the edit
- * soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts).
+ * with every rule of a new one, then its rows are brought in line. Spec §9: a new date replaces an NBP rate with that
+ * day's (from `context.defaults`); a manual rate stays until a new one is sent. `deletedIds` lists the transactions
+ * the edit soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts).
  */
 export async function updateTransaction(
   rec: ChangeRecorder,
@@ -253,7 +289,8 @@ export async function updateTransaction(
     await updateLineCounterpart(rec, { ...agg, owner: agg.owner }, patch);
     return { payeeName: await payeeNameOf(rec, agg.main.payeeId), deletedIds: [] };
   }
-  const draft = await applyPatch(rec, agg, patch);
+  const prepared = await editDraft(rec.tx, agg, patch, (name) => findOrCreatePayee(rec, name));
+  const draft = prepared.draft;
   if (patch.date !== undefined && patch.date > context.today) {
     throw new DomainError(
       'date_in_future',
@@ -263,14 +300,7 @@ export async function updateTransaction(
   }
   assertStartingBalanceKept(agg, draft);
   await assertSameCurrency(rec, agg, draft);
-  const plan = await planTransaction(rec.tx, draft, {
-    existing: {
-      payeeId: agg.main.payeeId,
-      rates: await storedRates(rec.tx, agg),
-      counterpart: agg.counterpart && { accountId: agg.counterpart.accountId, amount: agg.counterpart.amount },
-      accountIds: accountsOf(agg),
-    },
-  });
+  const plan = await planTransaction(rec.tx, draft, { ...prepared.context, defaults: context.defaults });
   const replaceLines = !sameLines(draftOf(agg).lines, draft.lines);
   assertConfirmed(editTouchesReconciled(agg, plan, replaceLines), patch.confirmReconciled);
   const deletedIds = await syncPlan(rec, agg, plan, context.now, replaceLines);

@@ -16,11 +16,13 @@ import {
   onBudget,
   type PayeeInfo,
   placeTransferCategory,
+  type Rate,
   rateFor,
   type Rates,
   requireAccount,
   requirePayee,
   TRACKING_NO_CATEGORY,
+  UNKNOWN_RATE,
 } from './rules';
 
 /** A transaction as the user describes it, before the rules of spec §5.5 and §9 turn it into rows. */
@@ -95,16 +97,24 @@ export interface Plan {
 export interface PlanContext {
   existing?: {
     payeeId: string | null;
-    /** Stored rates by currency, used when the request sends none. */
-    rates: Map<string, string>;
+    /** Stored rates by currency that still apply, used when the request sends none (see `storedRates`). */
+    rates: Map<string, Rate>;
     /** A plain transfer's other side: its amount stays unless `transferAmount` is sent. */
     counterpart: { accountId: string; amount: Money } | null;
     /** Accounts that already hold the transaction's rows (they may be closed). */
     accountIds: Set<string>;
   };
+  /** Spec §9: NBP rates for the draft's date by currency, quoted before the command (see `default-rates.ts`). */
+  defaults?: Map<string, string>;
+  /** Collects currencies that have no rate instead of refusing them (see `Rates.unknown`). */
+  unknownRates?: Set<string>;
 }
 
-const rateColumns = (rate: string | null) => ({ fxRate: rate, fxRateManual: rate !== null });
+/** PLN rows, rows whose base comes from the other side of a transfer, and rates nobody has yet store none. */
+const rateColumns = (rate: Rate | null) =>
+  rate === null || rate === UNKNOWN_RATE
+    ? { fxRate: null, fxRateManual: false }
+    : { fxRate: rate.rate, fxRateManual: rate.manual };
 
 /**
  * Spec §9: both sides of a transfer net to zero in PLN. Same-currency transfers mirror the amount; transfers between
@@ -147,7 +157,11 @@ function transferSides(main: AccountInfo, other: AccountInfo, draft: Draft, rate
   const from = mainSends ? here : there;
   const to = mainSends ? there : here;
   const rate = from.currency !== BASE_CURRENCY && to.currency !== BASE_CURRENCY ? rateFor(rates, from.currency) : null;
-  const { fromBase, toBase } = transferBases(BASE_CURRENCY, { ...from, rate }, { ...to, rate: null });
+  const { fromBase, toBase } = transferBases(
+    BASE_CURRENCY,
+    { ...from, rate: rate?.rate ?? null },
+    { ...to, rate: null },
+  );
   assertBaseAmount(fromBase, mainSends || main.currency === other.currency ? 'amount' : 'transferAmount');
   return mainSends
     ? { mainBase: fromBase, mainRate: rate, otherAmount, otherBase: toBase, otherRate: null }
@@ -161,14 +175,14 @@ async function planLines(
   draft: Draft & { lines: DraftLine[] },
   rates: Rates,
   open: (target: AccountInfo, field: string) => void,
-): Promise<{ amountBase: Money; fxRate: string | null; lines: LinePlan[] }> {
+): Promise<{ amountBase: Money; rate: Rate | null; lines: LinePlan[] }> {
   const total = draft.lines.reduce((sum, line) => sum + BigInt(line.amount), 0n);
   if (total !== BigInt(draft.amount)) {
     throw new DomainError('split_sum', 'The lines must add up to the transaction amount.', 'lines');
   }
-  const { amountBase, fxRate } = bookedBase(main.currency, draft.amount, rates);
+  const { amountBase, rate } = bookedBase(main.currency, draft.amount, rates);
   const amounts = draft.lines.map((line) => line.amount);
-  const bases = fxRate === null ? amounts : splitLineBases(amountBase, amounts, fxRate);
+  const bases = rate === null ? amounts : splitLineBases(amountBase, amounts, rate.rate);
 
   const lines: LinePlan[] = [];
   for (const [index, line] of draft.lines.entries()) {
@@ -219,7 +233,7 @@ async function planLines(
       },
     });
   }
-  return { amountBase, fxRate, lines };
+  return { amountBase, rate, lines };
 }
 
 /** Validates a draft against spec §5.5 and §9 and computes the rows to write. */
@@ -232,7 +246,13 @@ export async function planTransaction(db: Executor, draft: Draft, context: PlanC
   open(main, 'accountId');
   const payee = draft.payeeId === null ? null : await requirePayee(db, draft.payeeId, 'payeeId');
   if (payee && draft.payeeId !== existing?.payeeId) assertNotSystemPayee(payee, 'payeeId');
-  const rates: Rates = { input: draft.fxRate, stored: existing?.rates ?? new Map(), used: false };
+  const rates: Rates = {
+    input: draft.fxRate,
+    stored: existing?.rates ?? new Map(),
+    defaults: context.defaults ?? new Map(),
+    unknown: context.unknownRates ?? null,
+    used: false,
+  };
   const row = {
     accountId: draft.accountId,
     date: draft.date,
@@ -262,7 +282,7 @@ export async function planTransaction(db: Executor, draft: Draft, context: PlanC
         ...status,
         categoryId: null,
         amountBase: split.amountBase,
-        ...rateColumns(split.fxRate),
+        ...rateColumns(split.rate),
         transferAccountId: null,
         isSplit: true,
       },
@@ -318,7 +338,7 @@ export async function planTransaction(db: Executor, draft: Draft, context: PlanC
     if (!onBudget(main)) throw categoryNotAllowed(TRACKING_NO_CATEGORY, 'categoryId');
     await assertUsableCategory(db, draft.categoryId, 'categoryId');
   }
-  const { amountBase, fxRate } = bookedBase(main.currency, draft.amount, rates);
+  const { amountBase, rate } = bookedBase(main.currency, draft.amount, rates);
   assertRateUsed(rates);
   return {
     main: {
@@ -326,7 +346,7 @@ export async function planTransaction(db: Executor, draft: Draft, context: PlanC
       ...status,
       categoryId: draft.categoryId,
       amountBase,
-      ...rateColumns(fxRate),
+      ...rateColumns(rate),
       transferAccountId: null,
       isSplit: false,
     },

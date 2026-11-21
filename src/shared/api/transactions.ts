@@ -62,8 +62,10 @@ export const createTransactionRequestSchema = z
     /** Transfers between currencies: the other account's native amount (opposite sign). */
     transferAmount: boundedMoneySchema.optional(),
     /**
-     * Rate to PLN; required for foreign-currency accounts until the NBP lookup exists (P2d). For a transfer between
-     * two foreign-currency accounts it is the rate of the sending account's currency (spec §9).
+     * Rate to PLN, stored as manual. Without it a foreign amount is booked at the NBP rate of `date` (spec §9), and
+     * the answer is 422 `fx_rate_required` when NBP has none; a future date stores no rate (the schedule's occurrence
+     * gets the NBP rate of its day). For a transfer between two foreign-currency accounts it is the rate of the sending
+     * account's currency.
      */
     fxRate: fxRateSchema.optional(),
     cleared: userClearedSchema.default('uncleared'),
@@ -104,6 +106,7 @@ export const updateTransactionRequestSchema = z
     memo: memoSchema.optional(),
     amount: boundedMoneySchema.optional(),
     transferAmount: boundedMoneySchema.optional(),
+    /** A new manual rate. Without it the stored rate stays; a new date replaces an NBP rate with that day's. */
     fxRate: fxRateSchema.optional(),
     cleared: userClearedSchema.optional(),
     approved: z.boolean().optional(),
@@ -281,8 +284,10 @@ export interface TransactionDto {
   amount: number;
   /** PLN (spec §9). */
   amountBase: number;
-  /** The rate the user entered; null for PLN accounts and for amounts derived from the other side of a transfer. */
+  /** The rate the base amount was booked at; null for PLN accounts and for bases derived from the other side. */
   fxRate: string | null;
+  /** True when the user entered `fxRate`, false for an NBP rate (and when there is none). */
+  fxRateManual: boolean;
   /** |amountBase| / |amount| for foreign-currency accounts (null for PLN accounts and zero amounts). */
   effectiveRate: string | null;
   cleared: ClearedStatus;

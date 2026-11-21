@@ -139,23 +139,46 @@ export function assertNotSelf(here: AccountInfo, there: AccountInfo, field: stri
   if (here.id === there.id) throw new DomainError('transfer_to_self', 'A transfer needs two different accounts.', field);
 }
 
-/** Picks the rate a foreign amount is booked at: the one sent with the request, else the one already stored. */
+/** A rate to PLN, and whether the user entered it (spec §9: `fx_rate_manual`) or it is NBP's. */
+export interface Rate {
+  rate: string;
+  manual: boolean;
+}
+
+/** Stands in for a rate nobody has yet (see `Rates.unknown`); plans book it as no rate at all. */
+export const UNKNOWN_RATE: Rate = { rate: '1', manual: false };
+
+/** Picks the rate a foreign amount is booked at: the one sent, else one already stored, else NBP's default. */
 export interface Rates {
   /** The `fxRate` of the request. */
   input: string | null;
-  /** Rates of the saved transaction by currency (edits keep them). */
-  stored: Map<string, string>;
+  /** Rates of the saved transaction by currency that still apply (see `storedRates`). */
+  stored: Map<string, Rate>;
+  /** NBP rates for the draft's date by currency, quoted before the command ran (see `default-rates.ts`). */
+  defaults: Map<string, string>;
+  /**
+   * When set, a currency that has no rate is collected here and booked at `UNKNOWN_RATE` instead of refused: a dry
+   * run learns which rates to quote, and a schedule leaves its rate to the day it is entered (P2d2).
+   */
+  unknown: Set<string> | null;
   /** Set once `input` has been used, so an unneeded rate can be refused. */
   used: boolean;
 }
 
-export function rateFor(rates: Rates, currency: string): string {
-  const rate = rates.input ?? rates.stored.get(currency);
-  if (rate === undefined) {
-    throw new DomainError('fx_rate_required', `Enter the exchange rate of ${currency} to ${BASE_CURRENCY}.`, 'fxRate');
+export function rateFor(rates: Rates, currency: string): Rate {
+  if (rates.input !== null) {
+    rates.used = true;
+    return { rate: rates.input, manual: true };
   }
-  if (rates.input !== null) rates.used = true;
-  return rate;
+  const stored = rates.stored.get(currency);
+  if (stored) return stored;
+  const nbp = rates.defaults.get(currency);
+  if (nbp !== undefined) return { rate: nbp, manual: false };
+  if (rates.unknown) {
+    rates.unknown.add(currency);
+    return UNKNOWN_RATE;
+  }
+  throw new DomainError('fx_rate_required', `Enter the exchange rate of ${currency} to ${BASE_CURRENCY}.`, 'fxRate');
 }
 
 /** Throws when the request sent a rate that nothing used. */
@@ -178,12 +201,8 @@ export function toBase(amount: Money, rate: string, field: string): Money {
 }
 
 /** Native amount → PLN (spec §9): PLN amounts are their own base; foreign ones need a rate. */
-export function bookedBase(
-  currency: string,
-  amount: Money,
-  rates: Rates,
-): { amountBase: Money; fxRate: string | null } {
-  if (currency === BASE_CURRENCY) return { amountBase: amount, fxRate: null };
+export function bookedBase(currency: string, amount: Money, rates: Rates): { amountBase: Money; rate: Rate | null } {
+  if (currency === BASE_CURRENCY) return { amountBase: amount, rate: null };
   const rate = rateFor(rates, currency);
-  return { amountBase: toBase(amount, rate, 'amount'), fxRate: rate };
+  return { amountBase: toBase(amount, rate.rate, 'amount'), rate };
 }

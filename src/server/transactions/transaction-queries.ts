@@ -96,6 +96,7 @@ export async function loadTransactions(db: Executor, where?: SQL, limit?: number
       amount: txn.amount,
       amountBase: txn.amountBase,
       fxRate: txn.fxRate,
+      fxRateManual: txn.fxRateManual,
       effectiveRate: rateOf(currency, txn.amount, txn.amountBase),
       cleared: txn.cleared,
       approved: txn.approved,

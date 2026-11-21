@@ -3,6 +3,7 @@ import type { Executor } from '../db/client';
 import { account, subtransaction, transaction } from '../db/schema';
 import { AppError } from '../http/errors';
 import type { Draft } from './plan';
+import type { Rate } from './rules';
 
 type TxnRow = typeof transaction.$inferSelect;
 type LineRow = typeof subtransaction.$inferSelect;
@@ -85,13 +86,16 @@ export function draftOf(agg: Aggregate): Draft {
   };
 }
 
-/** Rates already stored on the transaction's rows, by currency (spec §9: edits keep them unless a new one is sent). */
-export async function storedRates(db: Executor, agg: Aggregate): Promise<Map<string, string>> {
-  const rates = new Map<string, string>();
+/**
+ * Rates already stored on the transaction's rows, by currency (spec §9): edits keep them unless a new one is sent. A
+ * manual rate always stays; an NBP rate only while the date does, so a new date books that day's NBP rate.
+ */
+export async function storedRates(db: Executor, agg: Aggregate, sameDate: boolean): Promise<Map<string, Rate>> {
+  const rates = new Map<string, Rate>();
   for (const r of [agg.main, agg.counterpart]) {
-    if (!r?.fxRate) continue;
+    if (!r?.fxRate || (!r.fxRateManual && !sameDate)) continue;
     const [owner] = await db.select({ currency: account.currency }).from(account).where(eq(account.id, r.accountId));
-    rates.set(owner!.currency, r.fxRate);
+    rates.set(owner!.currency, { rate: r.fxRate, manual: r.fxRateManual });
   }
   return rates;
 }
