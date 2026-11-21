@@ -295,3 +295,40 @@ These items were found in the P1 final review and deferred. Fold them into the P
   - `monthSchema` refuses year 0000 (400), which Postgres dates lack (DELETE of an interest override was a 500).
   - An account's `minPayment` and `escrowAmount` are capped at 0 … 1e13 (`boundedMoneySchema`), and "≈ X zł" is null
     for a working balance outside the safe integer range instead of a 500.
+
+## Resolved in P3a
+- TOTP replay protection: `app_user.totp_last_step` (migration 0004) stores the time step of the newest accepted
+  code, and only codes from a later step are accepted. The codes that confirm setup and a new authenticator are used
+  up too (spec §12).
+- `GET /api/auth/status` slides the session and refreshes its cookie; a cookie for an unknown or expired session is
+  cleared by `/status` and by every 401. A 429 carries `Retry-After`. The auth schemas' `.max()` limits have friendly
+  messages.
+- Login-lock waiters no longer hold pool connections: sign-ins queue in the process (`withLoginLock`) before taking
+  the advisory lock, which waits at most 5 s (`lock_timeout`, then 503 `busy` with `Retry-After: 1`).
+- Setup-token attempts are rate-limited: a wrong token is recorded as a failed sign-in attempt.
+- Global lockout DoS: documented in spec §12 as accepted while the app isn't exposed to the internet, with the fix to
+  make before that (carried over below).
+- The TOTP QR code is inline SVG (the CSP blocks `data:` images); the web app has its own tsconfig with the DOM lib;
+  the server serves the built app with an SPA fallback for non-/api paths; spec §12 documents that `TRUST_PROXY`
+  trusts exactly one reverse proxy.
+- From the P2b1 final review: ESLint forbids `rec.tx.insert/update/delete` in `src/server` (write through the
+  recorder). Undo/redo don't need to return table names: the web app invalidates every budget-data query after any
+  command, undo or redo (one user, a few queries on screen).
+
+## From P3a
+- Before internet exposure: replace the global lockout with per-device counting (a long-lived device cookie set at
+  sign-in; count failures since the last success or lockout; lock only unknown devices), spec §12.
+- Later: a successful setup isn't recorded as a successful sign-in, so wrong setup tokens in the 15 minutes before it
+  still count toward the lockout of the first sign-ins.
+- P3b/P3c: the web app refetches after every command and reads no mutation response yet; build mutation responses
+  inside the command (`rec.tx`, P2b1 final review) when a screen starts using one.
+- P3c: the P2c items for the transaction sheet and register stay open (a payee change to a transfer payee needs
+  `categoryId: null`; rows of one date are ordered by id; unknown ids are 422 with a field, and 404 vs 422 for the
+  older endpoints), as does "a zod abort skips `superRefine`" for client-side form checks.
+- P3b/P3c: spec §14's component tests for the category picker (P3b) and the split editor (P3c), and the rest of the
+  Playwright smoke flow (account, category, assign, transaction, reconcile, undo).
+- Later: the web bundle is one 471 kB script (148 kB gzipped); split it by route (lazy routes) if start-up time
+  matters on slow phones.
+- P2d2: add `'totpLastStep'` to the export's omit list in `src/server/export/export.ts` (P2d2 runs after P3a, so
+  its plan doesn't know the column); until P2d2 lands, Settings' "Download JSON export" link (`/api/export`) is a
+  404.

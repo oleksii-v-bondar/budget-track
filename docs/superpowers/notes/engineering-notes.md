@@ -68,10 +68,19 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   `logger.error({ err }, 'msg')`.
 
 ### Auth
-- `withLoginLock(db, fn)` in `src/server/auth/rate-limit.ts` serialises sign-in and re-auth with
-  `pg_advisory_xact_lock(727274001)`. Any new advisory lock needs a different key; list keys in this file:
+- `withLoginLock(db, clock, ip, fn)` in `src/server/auth/rate-limit.ts` serialises sign-in, re-auth and setup-token
+  checks: calls queue in the process first (so waiting ones hold no pooled connection), then take
+  `pg_advisory_xact_lock(727274001)` with a 5 s `lock_timeout` (503 `busy` after that; `isLockTimeout(err)` matches
+  SQLSTATE 55P03). Any new advisory lock needs a different key; list keys in this file:
   - `727274001`: login and re-authentication.
   - `727274002`: user commands and undo/redo (`COMMAND_LOCK_KEY` in `src/server/commands/run-command.ts`).
+- Each authenticator code works once: `verifyTotp` returns the code's time step (or null), `verifySecondFactor`
+  refuses a step at or before `app_user.totp_last_step`, and a passed check stores `spentFactor(user, result)` (the
+  recovery codes left and the newest step). Server tests that sign in or re-authenticate more than once take each code
+  with `freshTotpCode(secret, clock)` (`src/server/test/totp.ts`), which moves the fake clock on one 30 s step.
+- `AppError(status, code, message, extra, headers)` sends response headers too (`Retry-After` on 429 and 503).
+- `refreshSession(c, deps)` (`src/server/auth/sessions.ts`) is the one way to read the session cookie: it slides the
+  session, refreshes the cookie and clears a stale one; `requireSession` builds on it.
 
 ### Transactions (P2c)
 - Every transaction write is planned first: build a `Draft` (what the user describes) and call
@@ -155,6 +164,61 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - "Today" for the budget is `todayIn(config.timeZone, clock.now())`; lines dated later are left out.
 - zod 4 discriminated unions nest (`kind` → `cadence` / `debtMode`), and refined objects can be options.
   `z.flattenError` reports an unknown discriminator under its key, e.g. `fieldErrors.cadence`.
+
+### Web app (P3a)
+P3b and P3c build their screens on these conventions.
+- **Layout.** `src/web/`: `main.tsx` (entry), `app.tsx` (query client, toasts, router), `router.tsx` (route tree and
+  guards), `shell/` (app shell, bottom nav, Undo/Redo, offline banner, placeholder screens), `lib/` (API client,
+  query cache, commands, form errors, `useOnline`, formatting, the keypad's calculator), `ui/` (the component kit),
+  `auth/`, `settings/`, `test/` (test helpers). `index.html` and `public/` (generated icons) are Vite's root.
+- **Boundaries** (ESLint; `src/server/lint-boundaries.test.ts` pins them): `src/web` imports only types from
+  `src/server` (`import type`), and no Node modules or globals; `src/server` and `src/shared` never import `src/web`;
+  `src/shared` never imports `src/server`. The web app may use the pure engine (`roundDiv`). The root tsconfig covers
+  everything but `src/web`, which has its own (`src/web/tsconfig.json`: DOM lib, JSX); `npm run typecheck` runs both.
+- **API.** Call the server only through `api` (`hc<App>`, `src/web/lib/api.ts`), wrapped in `unwrap(...)`: it returns
+  the typed 2xx body and throws `ApiError` (`status`, `code`, `message`, `fieldErrors` by dotted path, `formErrors`,
+  `retryAfter`; status 0 / `network` without a response, `http_<status>` for a non-JSON error page). `api` sends the
+  CSRF header on every request. The server's `App` type has only the chained `/api` routes: keep chaining routers,
+  and keep `app.get('*', serveWeb(…))` outside the chain.
+- **Query cache** (`src/web/lib/query.ts`). Keys are `[area, ...params]` (`['budget', '2026-11']`, `['accounts']`);
+  the `auth` area holds only the auth status, which the route guards read (`authStatusQuery`, never stale; setup,
+  sign-in and sign-out set it). Reads are fresh for 30 s and retry twice after network and 5xx errors.
+- **Commands.** No optimistic updates: run every undoable command through `useCommand(fn)`
+  (`src/web/lib/commands.ts`). It waits for the server, invalidates every non-auth query (`invalidateData`), reads
+  `GET /api/undo` and shows a toast with the command's undo label and Undo; a network or 5xx failure gets a Retry
+  toast, other errors stay on the mutation for the form. `useUndoRedo()` backs the header and the toasts. Auth and
+  settings calls are plain `useMutation`s (not undoable). A 401 `unauthorized` from any query or mutation forgets the
+  cached data and opens `/login?redirect=…` (`app.tsx`).
+- **Forms.** `formErrorsOf(mutation.error, ['name', 'lines.0.amount'])` gives `{ fields, form }`: pass
+  `fields[path]` to the field's `error` and `form` to `<FormError>` above the submit button (it adds "You can try
+  again in …" from `Retry-After`). Check input early with the shared zod schema and `zodFormErrors`. Forms are
+  `noValidate`; `Button` is `type="button"` unless it is the submit button.
+- **Offline.** Every control that sends a request is disabled while offline: `<Button mutating>`, or `useOnline()`.
+- **Display and input.** Amounts: `formatMoney(minor, currency?)` / `formatAmount` (no-break space groups, decimal
+  comma, `zł` for PLN, the code otherwise); dates `formatDate` / `parseDate` (dd.MM.yyyy ↔ ISO); months
+  `formatMonth` / `formatMonthShort` (`'2026-11'`). Amount entry: `AmountKeypad` (`evaluateAmount`: + − × ÷ exactly,
+  result rounded half away from zero).
+- **Kit** (`src/web/ui`): `Button` (`variant`, `mutating`, `busy`, `block`), `TextField`, `Checkbox`,
+  `SegmentedControl`, `FormError`, `Pill` (spec §6 tones), `Sheet` (bottom sheet; its children unmount on close, so
+  forms in it start empty), `ToastProvider` / `useToast`, icons and `cx`. Tailwind v4; theme tokens (`brand`,
+  `brand-dark`, `brand-light`) in `styles.css`.
+- **CSP.** No inline scripts or `<style>` elements, no `eval` (zod runs `jitless`: `zod-jitless.ts` is imported
+  first), no `data:`/`blob:` images (draw inline SVG, like the QR code), no other origins. React's `style` prop is
+  fine. `npm run test:e2e` fails on any violation.
+- **Screens.** Add a route under `appLayout` in `router.tsx` with `staticData: { title }` (the header shows it),
+  replacing a `PlaceholderScreen`. Screens reached through More are listed in `MORE_PATHS` (`shell/bottom-nav.tsx`).
+- **Tests.** The Vitest `web` project (jsdom) runs `src/web/**/*.test.{ts,tsx}`. Fake the server with
+  `fakeApi({ 'GET /api/x': { body }, 'POST /api/y': (req) => json(body, 422) })` (it records `requests`), then
+  render the whole app with `renderApp(path)` (memory history; spread `SIGNED_IN` into the routes) or a component
+  with `renderWithProviders(ui)`; drive it with `userEvent.setup()`. Fake offline with
+  `vi.spyOn(navigator, 'onLine', 'get')`. `src/web/test/setup.ts` restores mocks and stubbed globals after each test.
+- **End to end.** `npm run test:e2e` builds, then `e2e/global-setup.ts` starts Postgres (Testcontainers, Ryuk off)
+  and `dist/server/main.js` on a free port, and Playwright runs chromium at 390×844 (install it once with
+  `npx playwright install chromium`). Each sign-in after the first needs a code from a later 30 s step.
+- **Serving and assets.** `serveWeb(webDir)` (`src/server/http/web.ts`) serves the build; `testConfig` points
+  `webDir` at `src/server/test/web-fixture`. The icons are generated by `npm run icons` (`scripts/generate-icons.ts`)
+  and committed. `npm run dev:web` runs Vite on port 5173 and proxies `/api` and `/healthz` to `npm run dev` on port
+  3080 (`PORT=3080` in `.env`; `API_PROXY_TARGET` overrides).
 
 ### Engine
 - `src/engine` is pure: no I/O, no Node modules, no `Date.now()` / `new Date()` / `Math.random()`. ESLint enforces this.
