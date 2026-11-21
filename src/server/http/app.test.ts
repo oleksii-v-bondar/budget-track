@@ -92,6 +92,9 @@ describe('route guard', () => {
         'POST /api/accounts/:id/revalue',
         'GET /api/accounts/:id/reconcile',
         'POST /api/accounts/:id/reconcile',
+        'GET /api/accounts/:id/loan',
+        'PUT /api/accounts/:id/interest-overrides/:month',
+        'DELETE /api/accounts/:id/interest-overrides/:month',
       ]),
     );
 

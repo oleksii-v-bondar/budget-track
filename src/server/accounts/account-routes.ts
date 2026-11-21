@@ -12,11 +12,13 @@ import {
   updateAccountRequestSchema,
 } from '../../shared/api/accounts';
 import { idParamSchema, type IdResponse, type ReorderResponse, reorderRequestSchema } from '../../shared/api/common';
+import { interestOverrideRequestSchema, type LoanDto, loanMonthParamSchema } from '../../shared/api/loans';
 import { type AuthedEnv, requireSession } from '../auth/sessions';
 import { todayIn } from '../clock';
 import { type Named, runCommand } from '../commands/run-command';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
+import { deleteInterestOverride, getLoan, setInterestOverride } from '../loans/loan-commands';
 import { getTransaction } from '../transactions/transaction-queries';
 import { createAccount, deleteAccount, reorderAccounts, setAccountClosed, updateAccount } from './account-commands';
 import { getAccount, readAccount, readAccounts } from './account-queries';
@@ -117,6 +119,33 @@ export function accountRoutes(deps: AppDeps) {
         adjustment: result.adjustmentId === null ? null : await getTransaction(deps.db, result.adjustmentId),
         reconciledCount: result.reconciledCount,
       });
+    })
+    .get('/:id/loan', validate('param', idParamSchema), async (c) =>
+      c.json<LoanDto>(await getLoan(deps.db, c.req.valid('param').id)),
+    )
+    .put(
+      '/:id/interest-overrides/:month',
+      validate('param', loanMonthParamSchema),
+      validate('json', interestOverrideRequestSchema),
+      async (c) => {
+        const { id, month } = c.req.valid('param');
+        const { amount } = c.req.valid('json');
+        await runCommand(
+          deps,
+          (r: Named) => `Set the interest of "${r.name}" for ${month}`,
+          (rec) => setInterestOverride(rec, id, month, amount, today()),
+        );
+        return c.json<LoanDto>(await getLoan(deps.db, id));
+      },
+    )
+    .delete('/:id/interest-overrides/:month', validate('param', loanMonthParamSchema), async (c) => {
+      const { id, month } = c.req.valid('param');
+      await runCommand(
+        deps,
+        (r: Named) => `Reset the interest of "${r.name}" for ${month}`,
+        (rec) => deleteInterestOverride(rec, id, month),
+      );
+      return c.json<LoanDto>(await getLoan(deps.db, id));
     })
     .delete('/:id', validate('param', idParamSchema), async (c) => {
       const { id } = c.req.valid('param');
