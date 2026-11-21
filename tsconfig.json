@@ -19,6 +19,10 @@
   "include": [
     "src",
     "vitest.config.ts",
+    "vite.config.ts",
     "drizzle.config.ts"
+  ],
+  "exclude": [
+    "src/web"
   ]
 }
