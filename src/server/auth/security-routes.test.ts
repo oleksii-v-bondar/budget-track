@@ -5,7 +5,7 @@ import { createTestApp, type TestApp } from '../test/app';
 import { type SetupResult, setUpBudget, TEST_PASSWORD } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { TestClient } from '../test/http-client';
-import { totpCode } from '../test/totp';
+import { freshTotpCode, totpCode } from '../test/totp';
 import { verifyPassword } from './passwords';
 import { decryptSecret } from './secret-box';
 import { SESSION_COOKIE } from './sessions';
@@ -31,11 +31,12 @@ async function call(client: TestClient, path: string, body?: unknown) {
 
 async function signIn(ip: string, password = TEST_PASSWORD, secret = setup.totpSecret) {
   const client = new TestClient(ctx.app, ip);
-  const res = await client.post('/api/auth/login', { password, totpCode: await totpCode(secret, ctx.clock.now()) });
+  const res = await client.post('/api/auth/login', { password, totpCode: await freshTotpCode(secret, ctx.clock) });
   return { client, status: res.status };
 }
 
-const code = () => totpCode(setup.totpSecret, ctx.clock.now());
+/** An unused code from the current authenticator (the clock moves on one 30 s step). */
+const code = () => freshTotpCode(setup.totpSecret, ctx.clock);
 
 async function storedUser() {
   const [user] = await t.db.select().from(appUser);
@@ -111,19 +112,36 @@ describe('POST /api/auth/password', () => {
     expect(await isSignedIn(ctx.client)).toBe(true);
   });
 
+  it('refuses an authenticator code that was already used', async () => {
+    const totpCode = await code();
+    expect((await call(ctx.client, '/api/auth/recovery-codes', { currentPassword: TEST_PASSWORD, totpCode })).status).toBe(200);
+    const res = await call(ctx.client, '/api/auth/password', {
+      currentPassword: TEST_PASSWORD,
+      newPassword: NEW_PASSWORD,
+      totpCode,
+    });
+    expect(res).toEqual({
+      status: 422,
+      body: { code: 'invalid_credentials', message: 'Your current password or code is wrong.' },
+    });
+    expect(await verifyPassword((await storedUser()).passwordHash, TEST_PASSWORD)).toBe(true);
+  });
+
   it('limits re-authentication to 5 attempts per minute per IP', async () => {
+    // One code for every attempt, so the clock stays inside the minute (a failed attempt doesn't use the code up).
+    const totpCode = await code();
     for (let i = 0; i < 5; i++) {
       const res = await call(ctx.client, '/api/auth/password', {
         currentPassword: 'guess',
         newPassword: NEW_PASSWORD,
-        totpCode: await code(),
+        totpCode,
       });
       expect(res.status).toBe(422);
     }
     const res = await call(ctx.client, '/api/auth/password', {
       currentPassword: TEST_PASSWORD,
       newPassword: NEW_PASSWORD,
-      totpCode: await code(),
+      totpCode,
     });
     expect(res).toEqual({
       status: 429,
@@ -156,6 +174,23 @@ describe('authenticator rotation', () => {
     expect(decryptSecret(user!.totpSecretEnc, ctx.config.encryptionKey)).toBe(newSecret);
     expect((await signIn('198.51.100.3', TEST_PASSWORD, newSecret)).status).toBe(200);
     expect((await signIn('198.51.100.4', TEST_PASSWORD, setup.totpSecret)).status).toBe(401);
+  });
+
+  it("uses up the new authenticator's confirmation code", async () => {
+    const secret = await newSecret();
+    const confirmation = await totpCode(secret, ctx.clock.now());
+    const res = await call(ctx.client, '/api/auth/totp', {
+      currentPassword: TEST_PASSWORD,
+      recoveryCode: setup.recoveryCodes[4],
+      totpSecret: secret,
+      totpCode: confirmation,
+    });
+    expect(res.status).toBe(200);
+    const login = await new TestClient(ctx.app, '198.51.100.9').post('/api/auth/login', {
+      password: TEST_PASSWORD,
+      totpCode: confirmation,
+    });
+    expect(login.status).toBe(401);
   });
 
   it('keeps the old secret if the confirmation code is wrong', async () => {

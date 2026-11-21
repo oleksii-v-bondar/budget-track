@@ -5,7 +5,7 @@ import { createTestApp, type TestApp } from '../test/app';
 import { type SetupResult, setUpBudget, TEST_PASSWORD } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { TestClient } from '../test/http-client';
-import { totpCode } from '../test/totp';
+import { freshTotpCode, totpCode } from '../test/totp';
 import { RECOVERY_CODE_COUNT } from './recovery-codes';
 import { SESSION_COOKIE } from './sessions';
 
@@ -34,8 +34,9 @@ async function login(client: TestClient, body: Record<string, unknown>) {
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
+/** The password with a code from the next TOTP step (the clock moves on 30 s, so each call gives an unused code). */
 async function withCode(password = TEST_PASSWORD) {
-  return { password, totpCode: await totpCode(setup.totpSecret, ctx.clock.now()) };
+  return { password, totpCode: await freshTotpCode(setup.totpSecret, ctx.clock) };
 }
 
 describe('POST /api/auth/login', () => {
@@ -54,6 +55,24 @@ describe('POST /api/auth/login', () => {
       expect(res).toEqual({ status: 401, body: { code: 'invalid_credentials', message: 'Wrong password or code.' } });
     }
     expect(client.cookie(SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('accepts each authenticator code once', async () => {
+    const body = await withCode();
+    expect((await login(new TestClient(ctx.app), body)).status).toBe(200);
+    expect(await login(new TestClient(ctx.app, '198.51.100.20'), body)).toEqual({
+      status: 401,
+      body: { code: 'invalid_credentials', message: 'Wrong password or code.' },
+    });
+    // A code from the step before the one just used is still inside the ±1 step window, but older.
+    const older = await totpCode(setup.totpSecret, new Date(ctx.clock.now().getTime() - 30_000));
+    expect((await login(new TestClient(ctx.app, '198.51.100.21'), { password: TEST_PASSWORD, totpCode: older })).status).toBe(401);
+    expect((await login(new TestClient(ctx.app, '198.51.100.22'), await withCode())).status).toBe(200);
+  });
+
+  it('refuses the authenticator code that confirmed setup', async () => {
+    const setupCode = await totpCode(setup.totpSecret, ctx.clock.now());
+    expect((await login(new TestClient(ctx.app), { password: TEST_PASSWORD, totpCode: setupCode })).status).toBe(401);
   });
 
   it('accepts each recovery code once', async () => {

@@ -8,7 +8,7 @@ import { AppError } from '../http/errors';
 import { validate } from '../http/validate';
 import { verifyPassword } from './passwords';
 import { recordLoginAttempt, withLoginLock } from './rate-limit';
-import { verifySecondFactor } from './second-factor';
+import { spentFactor, verifySecondFactor } from './second-factor';
 import { clearSessionCookie, createSession, deleteSession, requireSession, setSessionCookie } from './sessions';
 import { findUser } from './user';
 
@@ -30,12 +30,7 @@ export function loginRoutes(deps: AppDeps) {
         await recordLoginAttempt(tx, ip, ok, now);
         if (!ok) return { ok: false };
 
-        if (body.recoveryCode !== undefined) {
-          await tx
-            .update(appUser)
-            .set({ recoveryCodeHashes: factor.remainingRecoveryHashes })
-            .where(eq(appUser.id, user.id));
-        }
+        await tx.update(appUser).set(spentFactor(user, factor)).where(eq(appUser.id, user.id));
         const { token } = await createSession(tx, now, c.req.header('user-agent'));
         return { ok: true, token, remaining: factor.remainingRecoveryHashes.length };
       });

@@ -61,6 +61,20 @@ describe('POST /api/auth/setup/totp', () => {
     expect(res).toEqual({ status: 403, body: { code: 'invalid_setup_token', message: 'That setup token is not correct.' } });
   });
 
+  it('limits setup-token guesses like sign-ins: 5 per minute per IP', async () => {
+    for (let i = 0; i < 5; i++) {
+      expect((await ctx.client.post('/api/auth/setup/totp', { setupToken: `guess ${i}` })).status).toBe(403);
+    }
+    const limited = await ctx.client.post('/api/auth/setup/totp', { setupToken: TEST_SETUP_TOKEN });
+    expect(await json(limited)).toEqual({
+      status: 429,
+      body: { code: 'rate_limited', message: 'Too many sign-in attempts. Wait a minute and try again.' },
+    });
+    expect((await new TestClient(ctx.app, '198.51.100.30').post('/api/auth/setup/totp', { setupToken: TEST_SETUP_TOKEN })).status).toBe(200);
+    ctx.clock.advance(60_001);
+    expect((await ctx.client.post('/api/auth/setup/totp', { setupToken: TEST_SETUP_TOKEN })).status).toBe(200);
+  });
+
   it('returns a new authenticator secret and its otpauth URI', async () => {
     const res = await json(await ctx.client.post('/api/auth/setup/totp', { setupToken: TEST_SETUP_TOKEN }));
     expect(res.status).toBe(200);

@@ -76,6 +76,8 @@ export const appUser = pgTable(
     passwordHash: text('password_hash').notNull(),
     totpSecretEnc: text('totp_secret_enc').notNull(),
     recoveryCodeHashes: text('recovery_code_hashes').array().notNull().default(sql`'{}'::text[]`),
+    /** RFC 6238 time step of the newest authenticator code accepted; codes from it or earlier steps are replays. */
+    totpLastStep: bigint('totp_last_step', { mode: 'number' }),
     baseCurrency: text('base_currency').notNull().default('PLN'),
     budgetStartMonth: day('budget_start_month').notNull(),
     ...timestamps,

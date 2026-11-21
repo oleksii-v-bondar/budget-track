@@ -17,6 +17,7 @@ import type { AppEnv } from '../http/env';
 import { AppError, DomainError } from '../http/errors';
 import { validate } from '../http/validate';
 import { hashPassword } from './passwords';
+import { recordLoginAttempt, withLoginLock } from './rate-limit';
 import { generateRecoveryCodes, hashRecoveryCodes } from './recovery-codes';
 import { encryptSecret } from './secret-box';
 import { createSession, currentSession, setSessionCookie } from './sessions';
@@ -37,11 +38,15 @@ const alreadySetUp = () => new AppError(409, 'already_setup', 'This budget is al
 
 /** Spec §12 first-run setup: only while no user exists, and only with SETUP_TOKEN from the environment. */
 export function setupRoutes(deps: AppDeps) {
-  async function assertSetupAllowed(setupToken: string): Promise<void> {
+  async function assertSetupAllowed(ip: string, setupToken: string): Promise<void> {
     if (await isSetupComplete(deps.db)) throw alreadySetUp();
-    if (!tokensMatch(setupToken, deps.config.setupToken)) {
-      throw new AppError(403, 'invalid_setup_token', 'That setup token is not correct.');
-    }
+    // A wrong token counts as a failed sign-in, so the sign-in rate limit and lockout (spec §12) also stop guessing.
+    const matches = await withLoginLock(deps.db, deps.clock, ip, async (tx, now) => {
+      const ok = tokensMatch(setupToken, deps.config.setupToken);
+      if (!ok) await recordLoginAttempt(tx, ip, false, now);
+      return ok;
+    });
+    if (!matches) throw new AppError(403, 'invalid_setup_token', 'That setup token is not correct.');
   }
 
   return new Hono<AppEnv>()
@@ -51,15 +56,16 @@ export function setupRoutes(deps: AppDeps) {
       return c.json<AuthStatus>({ setupRequired, authenticated });
     })
     .post('/setup/totp', validate('json', setupTotpRequestSchema), async (c) => {
-      await assertSetupAllowed(c.req.valid('json').setupToken);
+      await assertSetupAllowed(deps.clientIp(c), c.req.valid('json').setupToken);
       const secret = newTotpSecret();
       return c.json<TotpSecretResponse>({ secret, uri: totpUri(secret) });
     })
     .post('/setup', validate('json', setupRequestSchema), async (c) => {
       const body = c.req.valid('json');
-      await assertSetupAllowed(body.setupToken);
+      await assertSetupAllowed(deps.clientIp(c), body.setupToken);
       const now = deps.clock.now();
-      if (!(await verifyTotp(body.totpSecret, body.totpCode, now))) {
+      const totpStep = await verifyTotp(body.totpSecret, body.totpCode, now);
+      if (totpStep === null) {
         throw new DomainError(
           'invalid_totp_code',
           "That code didn't match. Check that your phone's clock is correct and try again.",
@@ -78,6 +84,8 @@ export function setupRoutes(deps: AppDeps) {
             passwordHash,
             totpSecretEnc: encryptSecret(body.totpSecret, deps.config.encryptionKey),
             recoveryCodeHashes,
+            // The confirmation code can't be used again to sign in.
+            totpLastStep: totpStep,
             budgetStartMonth: `${monthIn(deps.config.timeZone, now)}-01`,
           });
           await seedBudget(tx);
