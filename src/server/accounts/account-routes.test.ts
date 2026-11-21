@@ -182,6 +182,30 @@ describe('POST /api/accounts', () => {
     });
   });
 
+  it('caps the minimum payment and escrow at 1e13, on create and edit', async () => {
+    const max = 10_000_000_000_000;
+    const tooLarge = ['Amount is too large.'];
+    const mortgage = { name: 'Mortgage', type: 'mortgage', startingBalance: 0 } as const;
+    const created = await json(
+      await ctx.client.post('/api/accounts', { ...mortgage, minPayment: max + 1, escrowAmount: max + 1 }),
+    );
+    expect(created).toMatchObject({
+      status: 400,
+      body: { fieldErrors: { minPayment: tooLarge, escrowAmount: tooLarge } },
+    });
+
+    const loan = await createAccount(ctx.client, { ...mortgage, minPayment: max, escrowAmount: max });
+    const patch = async (body: object) => json(await ctx.client.send('PATCH', `/api/accounts/${loan.id}`, body));
+    expect(await patch({ minPayment: max + 1, escrowAmount: max + 1 })).toMatchObject({
+      status: 400,
+      body: { fieldErrors: { minPayment: tooLarge, escrowAmount: tooLarge } },
+    });
+    expect(await patch({ minPayment: -1 })).toMatchObject({
+      status: 400,
+      body: { fieldErrors: { minPayment: ['Enter 0 or more.'] } },
+    });
+  });
+
   it("defaults the starting date to today in the budget's time zone and refuses future dates", async () => {
     // 23:30 UTC on 20 November is already 21 November in Warsaw.
     ctx.clock.advance(13.5 * 60 * 60 * 1000);

@@ -27,7 +27,7 @@ export interface LoanBalances {
   accountId: string;
   /** Months with transactions, in order; interest and escrow are charged only in months with a payment. */
   months: LoanMonthRow[];
-  /** Months with an uncleared payment: their interest and escrow are uncleared too (see `loanBalances`). */
+  /** Months with payments, none of them cleared yet: their interest and escrow are uncleared (see `loanBalances`). */
   unclearedMonths: Set<Month>;
 }
 
@@ -42,9 +42,9 @@ export interface LoanBalances {
  * an adjustment inflow would charge the month's interest and escrow, and the cleared balance would miss the statement
  * it was just reconciled to.
  *
- * A month's interest and escrow are cleared iff every payment in that month is (cleared or reconciled); while any of
- * them is uncleared, they are uncleared too. So entering an uncleared payment never moves the cleared balance, and a
- * statement that doesn't show the payment yet still matches it in reconcile.
+ * A month's interest and escrow are cleared once any payment in that month is (cleared or reconciled), and uncleared
+ * while all of them are. So entering an uncleared payment never moves the cleared balance, even in a month whose
+ * charges are already cleared, and a statement that doesn't show the payment yet still matches it in reconcile.
  *
  * A loan's first month has no interest, even with a payment in it: spec §8 rolls the balance forward from 0 at the
  * start of that month (its starting balance is one of the month's transactions). Users who were charged interest that
@@ -59,7 +59,7 @@ export async function loanBalances(db: Executor, accountIds: string[]): Promise<
   const ids = loans.map((loan) => loan.id);
   const month = sql<Month>`to_char(${transaction.date}, 'YYYY-MM')`;
   const payment = sql`${transaction.amount} > 0 and ${payee.systemKind} is null`;
-  const uncleared = sql`${transaction.cleared} = 'uncleared'`;
+  const isCleared = sql`${transaction.cleared} <> 'uncleared'`;
   const rows = await db
     .select({
       accountId: transaction.accountId,
@@ -68,7 +68,8 @@ export async function loanBalances(db: Executor, accountIds: string[]): Promise<
       payments: sql<number>`coalesce(sum(${transaction.amount}) filter (where ${payment}), 0)::bigint`,
       paymentsBase: sql<number>`coalesce(sum(${transaction.amountBase}) filter (where ${payment}), 0)::bigint`,
       firstPayment: sql<IsoDate | null>`to_char(min(${transaction.date}) filter (where ${payment}), 'YYYY-MM-DD')`,
-      unclearedPayment: sql<boolean>`coalesce(bool_or(${uncleared}) filter (where ${payment}), false)`,
+      // Null without a payment, so a month without charges counts as cleared.
+      unclearedCharges: sql<boolean>`coalesce(not (bool_or(${isCleared}) filter (where ${payment})), false)`,
     })
     .from(transaction)
     .leftJoin(payee, eq(payee.id, transaction.payeeId))
@@ -89,7 +90,7 @@ export async function loanBalances(db: Executor, accountIds: string[]): Promise<
     );
     result.set(loan.id, {
       accountId: loan.id,
-      unclearedMonths: new Set(own.filter((r) => r.unclearedPayment).map((r) => r.month)),
+      unclearedMonths: new Set(own.filter((r) => r.unclearedCharges).map((r) => r.month)),
       months: months.map((m, i) => {
         const { payments, paymentsBase, firstPayment } = own[i]!;
         // Charged with the payments, so in PLN at their rate: paymentsBase / payments.
@@ -115,8 +116,8 @@ export interface Charges {
 
 /**
  * The interest and escrow a loan was charged in months before `before` (every month when omitted), as the negative
- * native and PLN amounts they add to its balance: in total, and split into the months whose payments are all cleared
- * and the others (see `loanBalances`). Zero for accounts that aren't loans.
+ * native and PLN amounts they add to its balance: in total, and split into the months with a cleared payment and the
+ * others (see `loanBalances`). Zero for accounts that aren't loans.
  */
 export function loanCharges(
   loan: LoanBalances | undefined,

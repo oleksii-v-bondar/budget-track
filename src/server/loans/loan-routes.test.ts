@@ -88,7 +88,7 @@ describe('GET /api/accounts/:id/loan', () => {
     expect(accounts.find((a) => a.id === loan.id)!.balance.working).toBe(-9_970_000);
   });
 
-  it("clears a month's interest and escrow rows once all its payments are cleared", async () => {
+  it("clears a month's interest and escrow rows with its first cleared payment", async () => {
     await ctx.client.send('PATCH', `/api/accounts/${loan.id}`, { escrowAmount: 20_000 });
     expect(await november()).toMatchObject({ interest: 50_000, escrow: 20_000, chargesCleared: false });
     const { accounts } = (await json<AccountListResponse>(await ctx.client.get('/api/accounts'))).body;
@@ -99,6 +99,16 @@ describe('GET /api/accounts/:id/loan', () => {
     });
 
     await ctx.client.send('PATCH', `/api/transactions/${payment}`, { cleared: 'cleared' });
+    expect(await november()).toMatchObject({ interest: 50_000, escrow: 20_000, chargesCleared: true });
+
+    // Another, uncleared payment that month leaves them cleared.
+    await createTransaction(ctx.client, {
+      accountId: checking.id,
+      date: '2026-11-15',
+      payeeId: loan.transferPayeeId,
+      categoryId: loan.pairedCategoryId,
+      amount: -100_000,
+    });
     expect(await november()).toMatchObject({ interest: 50_000, escrow: 20_000, chargesCleared: true });
   });
 

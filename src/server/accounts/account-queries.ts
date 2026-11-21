@@ -41,16 +41,17 @@ async function sumsByAccount(db: Executor, accountIds: string[]): Promise<Map<st
   return new Map(rows.map(({ accountId, ...sums }) => [accountId, sums]));
 }
 
-/** The working balance in PLN at the latest rate ("≈ X zł"); null when it can't be stored exactly. */
+/** The working balance in PLN at the latest rate ("≈ X zł"); null when it can't be computed or stored exactly. */
 function atRate(working: number, quote: FxQuote | null): number | null {
-  const base = quote && convertToBase(working, quote.rate);
-  return base !== null && Number.isSafeInteger(base) ? base : null;
+  if (!quote || !Number.isSafeInteger(working)) return null;
+  const base = convertToBase(working, quote.rate);
+  return Number.isSafeInteger(base) ? base : null;
 }
 
 /**
  * Accounts in display order (spec §11 Accounts), with their balances; a loan's include the interest and escrow it was
- * charged (spec §8), cleared once that month's payments are (see `loanBalances`). `rates` holds the latest NBP rate by
- * currency for "≈ X zł" (see `readAccounts`); without one, a foreign account's `latestRate` is null.
+ * charged (spec §8), cleared with that month's first cleared payment (see `loanBalances`). `rates` holds the latest
+ * NBP rate by currency for "≈ X zł" (see `readAccounts`); without one, a foreign account's `latestRate` is null.
  */
 export async function listAccounts(
   db: Executor,

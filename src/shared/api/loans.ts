@@ -38,8 +38,8 @@ export interface LoanMonthDto {
    */
   chargedOn: string | null;
   /**
-   * The "Interest charge" and "Escrow" rows are cleared: every payment of the month is cleared or reconciled. While
-   * any of them is uncleared, so are the charges (they count in the uncleared balance). True in a month without a
+   * The "Interest charge" and "Escrow" rows are cleared: a payment of the month is cleared or reconciled. While all
+   * of them are uncleared, so are the charges (they count in the uncleared balance). True in a month without a
    * payment, which has no charges.
    */
   chargesCleared: boolean;

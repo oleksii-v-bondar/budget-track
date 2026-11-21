@@ -127,6 +127,26 @@ describe('nbpRates', () => {
     expect(await cache()).toEqual([]);
   });
 
+  it('returns null when the answer is for another currency', async () => {
+    answer = () => table('USD', '2026-11-18', 3.9);
+    expect(await rates().quote('EUR', '2026-11-18')).toBeNull();
+    expect(requests).toHaveLength(1);
+    expect(await cache()).toEqual([]);
+  });
+
+  it('returns null when the answer is for another day than the one asked for', async () => {
+    answer = () => table('EUR', '2026-11-17', 4.25);
+    expect(await rates().quote('EUR', '2026-11-18')).toBeNull();
+    expect(requests).toHaveLength(1);
+    expect(await cache()).toEqual([]);
+  });
+
+  it('returns null for a mid that rounds to 0 at 6 decimals', async () => {
+    answer = () => table('EUR', '2026-11-18', 0.0000004);
+    expect(await rates().quote('EUR', '2026-11-18')).toBeNull();
+    expect(await cache()).toEqual([]);
+  });
+
   it('returns null without a request for PLN and malformed codes, and when NBP is unreachable', async () => {
     const fx = rates();
     expect(await fx.quote('PLN', '2026-11-18')).toBeNull();

@@ -223,9 +223,9 @@ These items were found in the P1 final review and deferred. Fold them into the P
   `amount_too_large` with that field.
 - A loan's balances include the synthetic interest and escrow everywhere (`loanBalances` / `loanCharges` in
   `src/server/loans/loan-balances.ts`), so debt targets' `balanceAtMonthStart` counts them.
-  - The charges follow their payments' cleared status: a month's interest and escrow are cleared once every payment
-    of the month is, so entering an uncleared payment never moves the cleared balance. The loan schedule reports it
-    per month as `chargesCleared`.
+  - The charges follow their payments' cleared status: a month's interest and escrow are cleared once any payment of
+    the month is, so entering an uncleared payment never moves the cleared balance. The loan schedule reports it per
+    month as `chargesCleared`.
   - Reconciliation adjustments, FX revaluations and the starting balance (rows with a system payee) never count as
     loan payments, so they never charge interest or escrow.
   - A loan's first month has no interest, even with a payment in it (its start balance is 0); the user can add an

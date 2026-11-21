@@ -4,7 +4,7 @@ import type { AccountDto, AccountListResponse, RevalueResponse } from '../../sha
 import type { BudgetMonthDto } from '../../shared/api/budget';
 import type { TransactionDto } from '../../shared/api/transactions';
 import { systemCategoryId, systemPayeeId } from '../db/lookups';
-import { ledgerLine } from '../db/schema';
+import { ledgerLine, transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
@@ -59,6 +59,34 @@ describe('"≈ X zł" on accounts', () => {
       { currency: 'EUR', date: '2026-11-20' },
       { currency: 'USD', date: '2026-11-20' },
     ]);
+  });
+
+  it('shows no "≈ X zł" for a balance beyond the safe integer range', async () => {
+    const loan = await createAccount(ctx.client, {
+      name: 'Euro mortgage',
+      type: 'mortgage',
+      currency: 'EUR',
+      startingBalance: -1,
+      startingDate: '2026-10-01',
+      fxRate: '1',
+      escrowAmount: 10_000_000_000_000,
+    });
+    // As if booked by ~900 rows at the cap: the sum still fits, the escrow charged with a payment pushes it past 2^53.
+    const huge = -(Number.MAX_SAFE_INTEGER - 1);
+    await t.db.update(transaction).set({ amount: huge, amountBase: huge }).where(eq(transaction.accountId, loan.id));
+    await createTransaction(ctx.client, {
+      accountId: loan.id,
+      date: '2026-11-05',
+      payeeName: 'Bank',
+      amount: 1,
+      fxRate: '1',
+    });
+
+    const res = await ctx.client.get('/api/accounts');
+    expect(res.status).toBe(200);
+    const [shown] = ((await res.json()) as AccountListResponse).accounts;
+    expect(shown).toMatchObject({ latestRate: { rate: '4.400000' }, balanceAtLatestRate: null });
+    expect(Number.isSafeInteger(shown!.balance.working)).toBe(false);
   });
 });
 

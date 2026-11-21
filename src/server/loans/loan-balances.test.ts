@@ -130,14 +130,14 @@ describe('loanBalances', () => {
     expect(await reconcile(-9_970_000)).toMatchObject({ clearedBalance: -9_970_000, adjustment: null });
   });
 
-  it("keeps a month's interest and escrow uncleared while any of its payments is", async () => {
+  it("clears a month's interest and escrow with its first cleared payment", async () => {
     const loan = await mortgage({}, false);
     const payments = [await pay(loan), await pay(loan)];
     await clear(payments[0]!);
-    // The other payment is still uncleared, so November's 700 zł of interest and escrow are too.
+    // November's 700 zł of interest and escrow are cleared with the first payment; the other one is still uncleared.
     expect((await accountNamed('Mortgage')).balance).toEqual({
-      cleared: -9_900_000,
-      uncleared: 30_000,
+      cleared: -9_970_000,
+      uncleared: 100_000,
       working: -9_870_000,
     });
 
@@ -145,6 +145,25 @@ describe('loanBalances', () => {
     expect((await accountNamed('Mortgage')).balance).toEqual({
       cleared: -9_870_000,
       uncleared: 0,
+      working: -9_870_000,
+    });
+  });
+
+  it("still matches the statement after another, uncleared payment in a month whose first one is cleared", async () => {
+    const loan = await mortgage({}, false);
+    await clear(await pay(loan));
+    const reconcile = async () => {
+      const res = await ctx.client.post(`/api/accounts/${loan.id}/reconcile`, { statementBalance: -9_970_000 });
+      expect(res.status).toBe(200);
+      return json<ReconcileResponse>(res);
+    };
+    expect(await reconcile()).toMatchObject({ clearedBalance: -9_970_000, adjustment: null });
+
+    await pay(loan);
+    expect(await reconcile()).toMatchObject({ clearedBalance: -9_970_000, adjustment: null });
+    expect((await accountNamed('Mortgage')).balance).toEqual({
+      cleared: -9_970_000,
+      uncleared: 100_000,
       working: -9_870_000,
     });
   });

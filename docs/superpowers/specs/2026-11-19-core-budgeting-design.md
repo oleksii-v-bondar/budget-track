@@ -346,9 +346,10 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
 - The register shows synthetic read-only "Interest charge" / "Escrow" rows per month. Editing the interest row writes
   a `loan_interest_override`.
 - The loan's displayed balances (accounts list, register header, reconcile, close, debt targets, loan panel) include
-  the interest and escrow charged. A month's charges are cleared once every payment in that month is cleared, and
-  uncleared while any of them is uncleared. The loan engine runs in the loan's currency; a foreign loan's charges are
-  converted to PLN at the rate its payments that month were booked at.
+  the interest and escrow charged. A month's charges are cleared once any payment in that month is cleared, and
+  uncleared while all of them are uncleared, so an uncleared payment never moves the cleared balance. The loan engine
+  runs in the loan's currency; a foreign loan's charges are converted to PLN at the rate its payments that month were
+  booked at.
 - `GET /api/accounts/:id/loan` returns the months with their interest, escrow and principal. A month's synthetic rows
   are dated on its first payment (`chargedOn`) and cleared as above (`chargesCleared`, true in a month without a
   payment); the register interleaves them by date, and its cursor paging over transactions is unchanged.
@@ -461,7 +462,7 @@ All strategies except Underfunded may push RTA negative. Each auto-assign run is
   `createAdjustment` and, for a foreign adjustment, an optional `fxRate` (else today's NBP rate). A difference without
   `createAdjustment` is 422 `reconcile_mismatch` with the `difference`; an adjustment whose PLN amount is above the
   §4.4 cap is 422 `amount_too_large` on `statementBalance`. Closed accounts are refused. It is one undoable command; a
-  loan's cleared balance includes the interest and escrow of months whose payments are all cleared (§8).
+  loan's cleared balance includes the interest and escrow of months with a cleared payment (§8).
 
 **Scheduled transactions**
 - A croner job runs daily at 00:05 Europe/Warsaw and also once at server start (catch-up). For each schedule with

@@ -123,9 +123,10 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   - A payment is `amount > 0` with no system payee (`payee.system_kind is null`): the starting balance,
     reconciliation adjustments and FX revaluations count in a month's total but never as payments, so they never
     charge interest or escrow.
-  - A month's charges follow its payments' cleared status: `LoanBalances.unclearedMonths` lists months with an
-    uncleared payment, `loanCharges` returns the total plus its `cleared` and `uncleared` parts, and `listAccounts`
-    adds each part to its bucket. The working balance, close, Revalue and debt targets use the total.
+  - A month's charges follow its payments' cleared status: they are cleared with the month's first cleared payment.
+    `LoanBalances.unclearedMonths` lists months whose payments are all uncleared, `loanCharges` returns the total plus
+    its `cleared` and `uncleared` parts, and `listAccounts` adds each part to its bucket, so an uncleared payment
+    never moves the cleared balance. The working balance, close, Revalue and debt targets use the total.
     `GET /api/accounts/:id/loan` reports the same rule per month as `chargesCleared`.
   - The loan panel's "paid this month" is the current month's `chargedOn` from `loanBalances`, so it uses the same
     payment definition.

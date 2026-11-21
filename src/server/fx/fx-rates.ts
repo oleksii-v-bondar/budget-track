@@ -30,6 +30,7 @@ export const MAX_FALLBACK_DAYS = 7;
 export const NBP_TIMEOUT_MS = 5_000;
 
 const nbpResponseSchema = z.object({
+  code: z.string(),
   rates: z
     .array(z.object({ effectiveDate: z.iso.date(), mid: z.number().positive().lt(1e8) }))
     .min(1),
@@ -73,9 +74,13 @@ export function nbpRates(options: NbpRatesOptions): FxRates {
         continue;
       }
       if (!res.ok) throw new Error(`NBP answered ${res.status}`);
-      const [entry] = nbpResponseSchema.parse(await res.json()).rates;
-      if (entry!.effectiveDate > date) throw new Error(`NBP sent a rate for ${entry!.effectiveDate}`);
-      return { rate: entry!.mid.toFixed(6), effectiveDate: entry!.effectiveDate };
+      const { code, rates } = nbpResponseSchema.parse(await res.json());
+      const rate = rates[0]!.mid.toFixed(6);
+      // Only the table asked for will do: this currency, this day, and a rate numeric(14,6) can hold.
+      if (code !== currency || rates[0]!.effectiveDate !== day || Number(rate) === 0) {
+        throw new Error(`NBP sent ${code} at ${rate} for ${rates[0]!.effectiveDate}`);
+      }
+      return { rate, effectiveDate: day };
     }
     return null;
   }

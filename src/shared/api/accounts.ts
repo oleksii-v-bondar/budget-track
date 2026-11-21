@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ACCOUNT_TYPES, type AccountClass, type AccountType, accountClassOf, isLoanType } from '../accounts';
-import { boundedMoneySchema, isoDateSchema, nameSchema, nonNegativeMoneySchema, noteSchema } from './common';
+import { boundedMoneySchema, isoDateSchema, nameSchema, noteSchema } from './common';
 import type { FxRateDto } from './fx';
 import type { TransactionDto } from './transactions';
 
@@ -20,6 +20,9 @@ export const fxRateSchema = z
 
 /** APR in percent, numeric(7,4). */
 export const interestRateSchema = z.string().regex(/^\d{1,3}(\.\d{1,4})?$/, 'Enter the APR in percent, e.g. 6.5.');
+
+/** Minimum payments and escrow: 0 … MAX_AMOUNT, so the loan math and debt targets built on them stay exact. */
+const cappedMoneySchema = boundedMoneySchema.min(0, 'Enter 0 or more.');
 
 /** Starting balances can't be dated before 1970 (checked only once the format is valid). */
 const startingDateSchema = isoDateSchema.refine((date) => date >= '1970-01-01', {
@@ -50,8 +53,8 @@ export const createAccountRequestSchema = z
     fxRate: fxRateSchema.optional(),
     note: noteSchema.optional(),
     interestRate: interestRateSchema.optional(),
-    minPayment: nonNegativeMoneySchema.optional(),
-    escrowAmount: nonNegativeMoneySchema.optional(),
+    minPayment: cappedMoneySchema.optional(),
+    escrowAmount: cappedMoneySchema.optional(),
     /** Loans only: a Debt Payments category linked to the loan, with a minimum-payment target (spec §8). */
     createPairedCategory: z.boolean().default(false),
   })
@@ -84,8 +87,8 @@ export const updateAccountRequestSchema = z.object({
   /** Only within the account's class, and loans only to other loan types. */
   type: z.enum(ACCOUNT_TYPES).optional(),
   interestRate: interestRateSchema.nullable().optional(),
-  minPayment: nonNegativeMoneySchema.nullable().optional(),
-  escrowAmount: nonNegativeMoneySchema.nullable().optional(),
+  minPayment: cappedMoneySchema.nullable().optional(),
+  escrowAmount: cappedMoneySchema.nullable().optional(),
 });
 
 export type UpdateAccountRequest = z.infer<typeof updateAccountRequestSchema>;
@@ -170,8 +173,8 @@ export interface ReconcileStatusDto {
   accountId: string;
   currency: string;
   /**
-   * Cleared and reconciled transactions (for loans with the interest and escrow of months whose payments are all
-   * cleared), in the account's currency.
+   * Cleared and reconciled transactions (for loans with the interest and escrow of months with a cleared payment), in
+   * the account's currency.
    */
   clearedBalance: number;
   lastReconciledAt: string | null;
