@@ -16,6 +16,8 @@ installable phone web app (Budget · Accounts · ＋ · Settings):
   and revalue for foreign accounts.
 - **Transactions**: outflow/inflow with a keypad, payee autocomplete (new payees and transfers), category, date, memo,
   flag, cleared, FX rate and splits. A date after today saves it as a one-time scheduled transaction.
+- **Bank connections** (optional): Revolut, PKO BP and other banks through Mastercard Open Banking; imported
+  transactions wait for approval in the register.
 - Undo and redo of every change; sign-in with a username and password.
 
 ## Requirements
@@ -35,6 +37,32 @@ Then open http://localhost:3000 and sign in with `APP_USERNAME` and `APP_PASSWOR
 port 3000 is already taken.
 
 The port is bound to 127.0.0.1 only. For remote access, put an HTTPS reverse proxy (e.g. Caddy) in front.
+
+## Bank connections (Mastercard Open Banking / Aiia)
+
+Optional. Budget Track imports booked transactions through the Aiia Data API.
+
+1. Create an app in the Aiia (Mastercard Open Banking) console and register its redirect URL: the value of
+   `AIIA_REDIRECT_URI`, this server's `/api/bank/callback` as your browser reaches it (e.g.
+   `http://localhost:3000/api/bank/callback` with Docker). Production apps may need a public HTTPS URL: serve the app
+   through your HTTPS reverse proxy and register e.g. `https://budget.example.com/api/bank/callback`.
+2. Set `AIIA_CLIENT_ID`, `AIIA_CLIENT_SECRET` and `AIIA_REDIRECT_URI` in `.env` (`AIIA_BASE_URL` defaults to
+   production, `https://api.aiia.eu`; the sandbox is `https://api-sandbox.aiia.eu`), then restart the app. Without the
+   client id and secret, Settings doesn't show bank connections.
+3. **Connect**: Settings → Bank connections → Connect bank, then connect every bank (e.g. Revolut and PKO BP) in that
+   one Aiia session. Connecting again replaces the connection and keeps the links of accounts it still covers.
+4. **Link** each bank account to a Budget Track account in the same currency.
+5. **Sync**: Sync now, and the server syncs every 6 hours by itself. The first sync of an account goes back 90 days,
+   but never before its starting balance; later ones re-read the last 5 days and skip what was imported before. Only
+   booked transactions are imported (pending ones once they are booked); the bank's text becomes the payee, with the
+   payee's last category. A sync is one Undo.
+6. **Approve** in the register: imported transactions are cleared and unapproved (a blue dot; Accounts and the
+   register header show "N to approve"). Open one, fix its payee or category and tap Approve, or select several and
+   use Approve.
+
+The access and refresh tokens are stored in plain text in the database: this is a single-user, self-hosted app, so
+protect the database and its backups. Aiia's refresh token lasts 14 days: when the app hasn't synced for that long,
+Settings asks you to Reconnect.
 
 ## Develop
 
@@ -87,3 +115,7 @@ docker rm -f $(docker ps -aq --filter label=org.testcontainers=true)
 | `MIGRATIONS_DIR` | no | `drizzle` | Folder with SQL migrations |
 | `NBP_BASE_URL` | no | `https://api.nbp.pl` | NBP exchange-rate API for foreign-currency accounts (outbound HTTPS) |
 | `WEB_DIR` | no | `dist/web` | Folder with the built web app (`npm run build:web`); without it only the API is served |
+| `AIIA_CLIENT_ID` | no | | Aiia (Mastercard Open Banking) client id; bank connections are off without it |
+| `AIIA_CLIENT_SECRET` | no | | Aiia client secret; bank connections are off without it |
+| `AIIA_BASE_URL` | no | `https://api.aiia.eu` | Aiia Data API (sandbox: `https://api-sandbox.aiia.eu`) |
+| `AIIA_REDIRECT_URI` | no | `http://localhost:3080/api/bank/callback` | This server's `/api/bank/callback`, registered in the Aiia console |

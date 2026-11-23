@@ -141,6 +141,16 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   - A loan's first month has no interest (its start balance is 0); users add an interest override for it.
   - A foreign loan's charges are converted at Σ payment base / Σ payment amount of the month, with no NBP call.
 
+### Bank sync (Mastercard Open Banking / Aiia)
+- `src/server/bank/`: `aiia.ts` is the HTTP client (15 s timeout, permissive zod schemas that log only the keys of an
+  unexpected answer), `bank-sync.ts` connects, links, syncs and runs the 6-hourly auto-sync (started in `main.ts` when
+  `config.aiia` is set), `bank-routes.ts` is `/api/bank`. Tests run against a `node:http` stub of Aiia on port 0.
+- A sync quotes NBP rates first, then imports through `createTransaction` in one `runCommand` ("Bank sync") and marks
+  the rows `approved = false` with `import_id = <aiia account id>:<transaction id>`; `last_synced_at` is written after
+  the command (not recorded for undo). `bank_connection` / `bank_account` aren't recorded tables.
+- The session cookie is SameSite=Lax so the bank's redirect back to `/api/bank/callback` carries it; the callback
+  checks the state cookie `/api/bank/connect` set.
+
 ### Budget read model
 - `loadBudgetInput(db, { throughMonth, today })` (`src/server/budget/budget-input.ts`) is the only place that turns
   the ledger into `computeBudget` input; it starts at `firstEditableMonth()`, the lower bound `assertBudgetMonth()`
