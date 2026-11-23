@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { totpCode } from '../test/totp';
-import { spentFactor, verifySecondFactor } from './second-factor';
+import { assertFactorSent, spentFactor, verifySecondFactor } from './second-factor';
 import { encryptSecret } from './secret-box';
 import { verifyTotp } from './totp';
 
@@ -32,5 +32,26 @@ describe('verifySecondFactor', () => {
       recoveryCodeHashes: ['x'],
       totpLastStep: 7,
     });
+  });
+});
+
+describe('without an authenticator', () => {
+  const owner = { totpSecretEnc: null, recoveryCodeHashes: [], totpLastStep: null };
+
+  it('needs no second factor and ignores any code sent', async () => {
+    for (const factor of [{}, { totpCode: '000000' }, { recoveryCode: 'AAAA-AAAA-AAAA' }]) {
+      expect(await verifySecondFactor(owner, factor, now, key)).toEqual({ ok: true, remainingRecoveryHashes: [] });
+      expect(() => assertFactorSent(owner, factor)).not.toThrow();
+    }
+  });
+});
+
+describe('assertFactorSent', () => {
+  it('refuses a check without a code while an authenticator is on', () => {
+    expect(() => assertFactorSent(user, { totpCode: '123456' })).not.toThrow();
+    expect(() => assertFactorSent(user, { recoveryCode: 'AAAA-AAAA-AAAA' })).not.toThrow();
+    expect(() => assertFactorSent(user, {})).toThrow(
+      expect.objectContaining({ status: 422, code: 'code_required' }) as Error,
+    );
   });
 });

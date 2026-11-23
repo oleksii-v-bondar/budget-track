@@ -27,14 +27,14 @@ export function LoginScreen() {
   const toast = useToast();
   const login = useMutation({
     mutationFn: authApi.login,
-    onSuccess: ({ recoveryCodesRemaining }) => {
+    onSuccess: ({ authenticatorEnabled, recoveryCodesRemaining }) => {
       if (recoveryCodesRemaining <= LOW_RECOVERY_CODES) {
         toast.show({
           message: `Only ${recoveryCodesRemaining} recovery codes left. Make new ones in Settings.`,
           duration: 10_000,
         });
       }
-      return enterApp(redirect);
+      return enterApp({ href: redirect, authenticatorEnabled });
     },
   });
   const errors = formErrorsOf(login.error, ['password', 'totpCode', 'recoveryCode']);

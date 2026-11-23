@@ -1,12 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
-import {
-  type AuthStatus,
-  type RecoveryCodesResponse,
-  setupRequestSchema,
-  setupTotpRequestSchema,
-  type TotpSecretResponse,
-} from '../../shared/auth';
+import { type AuthStatus, setupRequestSchema } from '../../shared/auth';
 import { monthIn } from '../clock';
 import type { Executor } from '../db/client';
 import { isUniqueViolation } from '../db/errors';
@@ -14,14 +8,13 @@ import { seedBudget } from '../db/seed';
 import { appUser } from '../db/schema';
 import type { AppDeps } from '../http/app';
 import type { AppEnv } from '../http/env';
-import { AppError, DomainError } from '../http/errors';
+import { AppError } from '../http/errors';
 import { validate } from '../http/validate';
 import { hashPassword } from './passwords';
 import { recordLoginAttempt, withLoginLock } from './rate-limit';
-import { generateRecoveryCodes, hashRecoveryCodes } from './recovery-codes';
-import { encryptSecret } from './secret-box';
+import { hasAuthenticator } from './second-factor';
 import { createSession, refreshSession, setSessionCookie } from './sessions';
-import { newTotpSecret, totpUri, verifyTotp } from './totp';
+import { findUser } from './user';
 
 export async function isSetupComplete(db: Executor): Promise<boolean> {
   const rows = await db.select({ id: appUser.id }).from(appUser).limit(1);
@@ -36,7 +29,10 @@ function tokensMatch(given: string, expected: string): boolean {
 
 const alreadySetUp = () => new AppError(409, 'already_setup', 'This budget is already set up. Sign in instead.');
 
-/** Spec §12 first-run setup: only while no user exists, and only with SETUP_TOKEN from the environment. */
+/**
+ * Spec §12 first-run setup: only while no user exists, and only with SETUP_TOKEN from the environment. It sets the
+ * password; the authenticator app stays off until the owner turns it on in Settings.
+ */
 export function setupRoutes(deps: AppDeps) {
   async function assertSetupAllowed(ip: string, setupToken: string): Promise<void> {
     if (await isSetupComplete(deps.db)) throw alreadySetUp();
@@ -51,42 +47,26 @@ export function setupRoutes(deps: AppDeps) {
 
   return new Hono<AppEnv>()
     .get('/status', async (c) => {
-      const setupRequired = !(await isSetupComplete(deps.db));
+      const user = await findUser(deps.db);
+      const setupRequired = user === null;
       // Also keeps the cookie's lifetime sliding while the app only polls its status, and clears a stale cookie.
       const authenticated = (await refreshSession(c, deps)) !== null && !setupRequired;
-      return c.json<AuthStatus>({ setupRequired, authenticated });
-    })
-    .post('/setup/totp', validate('json', setupTotpRequestSchema), async (c) => {
-      await assertSetupAllowed(deps.clientIp(c), c.req.valid('json').setupToken);
-      const secret = newTotpSecret();
-      return c.json<TotpSecretResponse>({ secret, uri: totpUri(secret) });
+      // Public, so the sign-in page knows whether to ask for a code (a single-user app: this reveals little).
+      const authenticatorEnabled = user !== null && hasAuthenticator(user);
+      return c.json<AuthStatus>({ setupRequired, authenticated, authenticatorEnabled });
     })
     .post('/setup', validate('json', setupRequestSchema), async (c) => {
       const body = c.req.valid('json');
       await assertSetupAllowed(deps.clientIp(c), body.setupToken);
       const now = deps.clock.now();
-      const totpStep = await verifyTotp(body.totpSecret, body.totpCode, now);
-      if (totpStep === null) {
-        throw new DomainError(
-          'invalid_totp_code',
-          "That code didn't match. Check that your phone's clock is correct and try again.",
-        );
-      }
-      const recoveryCodes = generateRecoveryCodes();
-      const [passwordHash, recoveryCodeHashes] = await Promise.all([
-        hashPassword(body.password),
-        hashRecoveryCodes(recoveryCodes),
-      ]);
+      const passwordHash = await hashPassword(body.password);
       let token: string;
       try {
-        // The session is created in the same transaction so a failure can't leave an owner who never saw the codes.
+        // One transaction: a failure (even creating the session) leaves nothing behind, so setup can run again.
         token = await deps.db.transaction(async (tx) => {
+          // No authenticator: totp_secret_enc, the recovery codes and totp_last_step keep their defaults.
           await tx.insert(appUser).values({
             passwordHash,
-            totpSecretEnc: encryptSecret(body.totpSecret, deps.config.encryptionKey),
-            recoveryCodeHashes,
-            // The confirmation code can't be used again to sign in.
-            totpLastStep: totpStep,
             budgetStartMonth: `${monthIn(deps.config.timeZone, now)}-01`,
           });
           await seedBudget(tx);
@@ -100,6 +80,6 @@ export function setupRoutes(deps: AppDeps) {
         throw error;
       }
       setSessionCookie(c, token, deps.config.cookieSecure);
-      return c.json<RecoveryCodesResponse>({ recoveryCodes }, 201);
+      return c.json({ ok: true as const }, 201);
     });
 }

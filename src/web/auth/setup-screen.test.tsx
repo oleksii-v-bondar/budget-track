@@ -4,108 +4,86 @@ import { describe, expect, it } from 'vitest';
 import { fakeApi, json } from '../test/fake-api';
 import { renderApp } from '../test/render';
 
-const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
-const CODES = Array.from({ length: 10 }, (_, i) => `AAAA-BBBB-CC${String(i).padStart(2, '0')}`);
 const PASSWORD = 'correct horse battery staple';
 const ALREADY_SETUP = { code: 'already_setup', message: 'This budget is already set up. Sign in instead.' };
+const SETUP_REQUIRED = {
+  'GET /api/auth/status': { body: { setupRequired: true, authenticated: false, authenticatorEnabled: false } },
+  'GET /api/undo': { body: { undo: null, redo: null } },
+};
 
-function setupServer() {
-  return fakeApi({
-    'GET /api/auth/status': { body: { setupRequired: true, authenticated: false } },
-    'GET /api/undo': { body: { undo: null, redo: null } },
-    'POST /api/auth/setup/totp': ({ body }) =>
-      (body as { setupToken: string }).setupToken === 'the-token'
-        ? { body: { secret: SECRET, uri: `otpauth://totp/Budget%20Track:owner?secret=${SECRET}` } }
-        : json({ code: 'invalid_setup_token', message: 'That setup token is not correct.' }, 403),
-    'POST /api/auth/setup': ({ body }) =>
-      (body as { totpCode: string }).totpCode === '123456'
-        ? { status: 201, body: { recoveryCodes: CODES } }
-        : json({ code: 'invalid_totp_code', message: "That code didn't match." }, 422),
-  });
+async function enterPassword(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(await screen.findByLabelText('Password'), PASSWORD);
+  await user.type(screen.getByLabelText('Repeat the password'), PASSWORD);
+  await user.click(screen.getByRole('button', { name: 'Finish setup' }));
 }
 
 describe('setup wizard', () => {
-  it('walks through token, password, authenticator and recovery codes into the app', async () => {
+  it('asks for the setup token and a password, then signs in and opens the budget', async () => {
     const user = userEvent.setup();
-    const { requests } = setupServer();
+    const { requests } = fakeApi({ ...SETUP_REQUIRED, 'POST /api/auth/setup': { status: 201, body: { ok: true } } });
     const { history } = renderApp('/setup');
 
-    await user.type(await screen.findByLabelText('Setup token'), 'wrong');
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('That setup token is not correct.');
-    await user.clear(screen.getByLabelText('Setup token'));
+    await user.click(await screen.findByRole('button', { name: 'Continue' }));
+    expect(screen.getByLabelText('Setup token')).toHaveAccessibleDescription('Enter the setup token.');
     await user.type(screen.getByLabelText('Setup token'), 'the-token');
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(await screen.findByRole('heading', { name: 'Choose a password' })).toBeInTheDocument();
     await user.type(screen.getByLabelText('Password'), 'too short');
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.click(screen.getByRole('button', { name: 'Finish setup' }));
     expect(screen.getByLabelText('Password')).toHaveAccessibleDescription('Use at least 12 characters.');
     await user.clear(screen.getByLabelText('Password'));
     await user.type(screen.getByLabelText('Password'), PASSWORD);
     await user.type(screen.getByLabelText('Repeat the password'), `${PASSWORD}!`);
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.click(screen.getByRole('button', { name: 'Finish setup' }));
     expect(screen.getByLabelText('Repeat the password')).toHaveAccessibleDescription("The passwords don't match.");
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([]);
+
     await user.type(screen.getByLabelText('Repeat the password'), '{Backspace}');
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
-
-    expect(await screen.findByRole('heading', { name: 'Add an authenticator' })).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'QR code for your authenticator app' })).toBeInTheDocument();
-    expect(screen.getByTestId('totp-secret')).toHaveTextContent('JBSW Y3DP');
-    await user.type(screen.getByLabelText('Code from the app'), '000000');
     await user.click(screen.getByRole('button', { name: 'Finish setup' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent("That code didn't match.");
-    await user.clear(screen.getByLabelText('Code from the app'));
-    await user.type(screen.getByLabelText('Code from the app'), '123456');
-    await user.click(screen.getByRole('button', { name: 'Finish setup' }));
-
-    expect(await screen.findByRole('heading', { name: 'Save your recovery codes' })).toBeInTheDocument();
-    expect(screen.getAllByRole('listitem')).toHaveLength(10);
-    const enter = screen.getByRole('button', { name: 'Continue to the budget' });
-    expect(enter).toBeDisabled();
-    await user.click(screen.getByLabelText("I've saved my recovery codes"));
-    await user.click(enter);
     await waitFor(() => expect(history.location.pathname).toBe('/budget'));
+    expect(screen.queryByRole('img', { name: 'QR code for your authenticator app' })).toBeNull();
+    expect(requests.filter((r) => r.method === 'POST').map(({ path, body }) => ({ path, body }))).toEqual([
+      { path: '/api/auth/setup', body: { setupToken: 'the-token', password: PASSWORD } },
+    ]);
+  });
 
-    const posts = requests.filter((r) => r.method === 'POST');
-    expect(posts.at(-1)).toMatchObject({
-      path: '/api/auth/setup',
-      body: { setupToken: 'the-token', password: PASSWORD, totpSecret: SECRET, totpCode: '123456' },
+  it('goes back to the setup token when the server refuses it, keeping the password', async () => {
+    const user = userEvent.setup();
+    const { requests } = fakeApi({
+      ...SETUP_REQUIRED,
+      'POST /api/auth/setup': ({ body }) =>
+        (body as { setupToken: string }).setupToken === 'the-token'
+          ? { status: 201, body: { ok: true } }
+          : json({ code: 'invalid_setup_token', message: 'That setup token is not correct.' }, 403),
     });
+    const { history } = renderApp('/setup');
+    await user.type(await screen.findByLabelText('Setup token'), 'wrong');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await enterPassword(user);
+
+    expect(await screen.findByRole('heading', { name: 'Set up your budget' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('That setup token is not correct.');
+    await user.clear(screen.getByLabelText('Setup token'));
+    await user.type(screen.getByLabelText('Setup token'), 'the-token');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByLabelText('Password')).toHaveValue(PASSWORD);
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(history.location.pathname).toBe('/budget'));
+    expect(requests.filter((r) => r.method === 'POST')).toHaveLength(2);
   });
 
   it('points to sign-in when the budget is already set up', async () => {
     const user = userEvent.setup();
-    fakeApi({
-      'GET /api/auth/status': { body: { setupRequired: true, authenticated: false } },
-      'POST /api/auth/setup/totp': () => json(ALREADY_SETUP, 409),
-    });
+    fakeApi({ ...SETUP_REQUIRED, 'POST /api/auth/setup': () => json(ALREADY_SETUP, 409) });
     const { history } = renderApp('/setup');
     await user.type(await screen.findByLabelText('Setup token'), 'the-token');
     await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await enterPassword(user);
     expect(await screen.findByRole('alert')).toHaveTextContent('This budget is already set up.');
     await user.click(screen.getByRole('link', { name: 'Go to sign in' }));
     await waitFor(() => expect(history.location.pathname).toBe('/login'));
     expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
-  });
-
-  it('points to sign-in when the budget was set up while finishing the wizard', async () => {
-    const user = userEvent.setup();
-    fakeApi({
-      'GET /api/auth/status': { body: { setupRequired: true, authenticated: false } },
-      'POST /api/auth/setup/totp': { body: { secret: SECRET, uri: `otpauth://totp/Budget%20Track:owner?secret=${SECRET}` } },
-      'POST /api/auth/setup': () => json(ALREADY_SETUP, 409),
-    });
-    const { history } = renderApp('/setup');
-    await user.type(await screen.findByLabelText('Setup token'), 'the-token');
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
-    await user.type(await screen.findByLabelText('Password'), PASSWORD);
-    await user.type(screen.getByLabelText('Repeat the password'), PASSWORD);
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
-    await user.type(await screen.findByLabelText('Code from the app'), '123456');
-    await user.click(screen.getByRole('button', { name: 'Finish setup' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('This budget is already set up.');
-    await user.click(screen.getByRole('link', { name: 'Go to sign in' }));
-    await waitFor(() => expect(history.location.pathname).toBe('/login'));
   });
 });

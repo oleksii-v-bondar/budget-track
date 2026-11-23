@@ -4,16 +4,16 @@ import { type FormEvent, useState } from 'react';
 import { PASSWORD_MIN_LENGTH, setupRequestSchema } from '../../shared/auth';
 import { ApiError } from '../lib/api';
 import { type FormErrors, formErrorsOf, NO_ERRORS, zodFormErrors } from '../lib/form-errors';
-import { queryKeys } from '../lib/query';
+import { setAuthStatus } from '../lib/query';
 import { Button } from '../ui/button';
-import { Checkbox, FormError, TextField } from '../ui/field';
+import { FormError, TextField } from '../ui/field';
 import { authApi, useEnterApp } from './auth-api';
-import { RecoveryCodes } from './recovery-codes';
-import { TotpQrCode, TotpSecret } from './totp-qr';
 
-type Step = 'token' | 'password' | 'authenticator' | 'codes';
+type Step = 'token' | 'password';
 
 const isAlreadySetUp = (error: unknown) => error instanceof ApiError && error.code === 'already_setup';
+const isTokenRefused = (error: unknown) =>
+  error instanceof ApiError && (error.code === 'invalid_setup_token' || 'setupToken' in error.fieldErrors);
 
 function SignInLink() {
   return (
@@ -26,54 +26,58 @@ function SignInLink() {
 const STEP_TITLES: Record<Step, string> = {
   token: 'Set up your budget',
   password: 'Choose a password',
-  authenticator: 'Add an authenticator',
-  codes: 'Save your recovery codes',
 };
 
 /**
- * First-run setup (spec §12): the setup token, a password, an authenticator app (QR code and a code from it), then the
- * ten recovery codes, shown once. Setup signs the owner in, so the last step continues into the app.
+ * First-run setup (spec §12): the setup token, then a password. Setup signs the owner in and continues into the app;
+ * the authenticator app is off until it is turned on in Settings. The server checks the token only at the end, so a
+ * refused token brings back its step.
  */
 export function SetupScreen() {
   const [step, setStep] = useState<Step>('token');
   const [setupToken, setSetupToken] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [tokenErrors, setTokenErrors] = useState<FormErrors>(NO_ERRORS);
   const [passwordErrors, setPasswordErrors] = useState<FormErrors>(NO_ERRORS);
-  const [totpCode, setTotpCode] = useState('');
-  const [saved, setSaved] = useState(false);
   const enterApp = useEnterApp();
   const queryClient = useQueryClient();
-  // The cached status (never stale) still says setup is required, so the sign-in route's guard would send the owner
-  // back here.
-  const onError = (error: unknown) => {
-    if (!isAlreadySetUp(error)) return;
-    queryClient.setQueryData(queryKeys.authStatus, { setupRequired: false, authenticated: false });
-  };
 
-  const secret = useMutation({ mutationFn: authApi.setupSecret, onSuccess: () => setStep('password'), onError });
-  const setup = useMutation({ mutationFn: authApi.setup, onSuccess: () => setStep('codes'), onError });
-  const tokenErrors = formErrorsOf(secret.error, ['setupToken']);
-  const setupErrors = formErrorsOf(setup.error, ['totpCode']);
+  const setup = useMutation({
+    mutationFn: authApi.setup,
+    onSuccess: () => enterApp({ authenticatorEnabled: false }),
+    onError: (error) => {
+      if (isTokenRefused(error)) {
+        setTokenErrors(formErrorsOf(error, ['setupToken']));
+        setStep('token');
+      }
+      // The cached status (never stale) still says setup is required, so the sign-in route's guard would send the
+      // owner back here.
+      if (isAlreadySetUp(error)) setAuthStatus(queryClient, { setupRequired: false, authenticated: false });
+    },
+  });
+  const setupErrors = formErrorsOf(setup.error, ['password']);
 
   const submitToken = (event: FormEvent) => {
     event.preventDefault();
-    secret.mutate(setupToken);
+    const checked = setupRequestSchema.pick({ setupToken: true }).safeParse({ setupToken });
+    if (!checked.success) setTokenErrors(zodFormErrors(checked.error, ['setupToken']));
+    else {
+      setTokenErrors(NO_ERRORS);
+      setup.reset();
+      setStep('password');
+    }
   };
   const submitPassword = (event: FormEvent) => {
     event.preventDefault();
-    // The server checks the password only at the end; the shared schema finds a weak one now.
+    // The shared schema finds a weak password before anything is sent.
     const checked = setupRequestSchema.pick({ password: true }).safeParse({ password });
     if (!checked.success) setPasswordErrors(zodFormErrors(checked.error, ['password']));
     else if (confirm !== password) setPasswordErrors({ fields: { confirm: "The passwords don't match." }, form: null });
     else {
       setPasswordErrors(NO_ERRORS);
-      setStep('authenticator');
+      setup.mutate({ setupToken, password });
     }
-  };
-  const submitCode = (event: FormEvent) => {
-    event.preventDefault();
-    if (secret.data) setup.mutate({ setupToken, password, totpSecret: secret.data.secret, totpCode });
   };
 
   return (
@@ -92,8 +96,7 @@ export function SetupScreen() {
             error={tokenErrors.fields.setupToken}
           />
           <FormError message={tokenErrors.form} />
-          {isAlreadySetUp(secret.error) && <SignInLink />}
-          <Button type="submit" mutating busy={secret.isPending} block>
+          <Button type="submit" block>
             Continue
           </Button>
         </form>
@@ -108,7 +111,7 @@ export function SetupScreen() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             hint={`At least ${PASSWORD_MIN_LENGTH} characters. A few random words work well.`}
-            error={passwordErrors.fields.password}
+            error={passwordErrors.fields.password ?? setupErrors.fields.password}
           />
           <TextField
             label="Repeat the password"
@@ -118,53 +121,15 @@ export function SetupScreen() {
             onChange={(e) => setConfirm(e.target.value)}
             error={passwordErrors.fields.confirm}
           />
-          <FormError message={passwordErrors.form} />
-          <Button type="submit" block>
-            Continue
-          </Button>
-        </form>
-      )}
-
-      {step === 'authenticator' && secret.data && (
-        <form onSubmit={submitCode} className="flex flex-col gap-4" noValidate>
-          <p className="text-gray-600">
-            Scan this code with an authenticator app (such as Google Authenticator or 1Password), then enter the 6-digit
-            code it shows.
-          </p>
-          <TotpQrCode uri={secret.data.uri} />
-          <TotpSecret secret={secret.data.secret} />
-          <TextField
-            label="Code from the app"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            maxLength={6}
-            value={totpCode}
-            onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
-            error={setupErrors.fields.totpCode}
-          />
-          <FormError message={setupErrors.form} />
+          <FormError message={passwordErrors.form ?? setupErrors.form} />
           {isAlreadySetUp(setup.error) && <SignInLink />}
           <Button type="submit" mutating busy={setup.isPending} block>
             Finish setup
           </Button>
-          <Button variant="ghost" onClick={() => setStep('password')}>
+          <Button variant="ghost" onClick={() => setStep('token')}>
             Back
           </Button>
         </form>
-      )}
-
-      {step === 'codes' && setup.data && (
-        <div className="flex flex-col gap-4">
-          <p className="text-gray-600">
-            If you lose your phone, sign in with one of these codes instead of an authenticator code. Each works once,
-            and they won't be shown again.
-          </p>
-          <RecoveryCodes codes={setup.data.recoveryCodes} />
-          <Checkbox label="I've saved my recovery codes" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
-          <Button block disabled={!saved} onClick={() => enterApp()}>
-            Continue to the budget
-          </Button>
-        </div>
       )}
     </section>
   );

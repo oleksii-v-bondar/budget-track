@@ -86,6 +86,13 @@ describe('constraints', () => {
     await expect(t.db.insert(appUser).values(row)).rejects.toThrow();
   });
 
+  it('allows an owner without an authenticator (a NULL totp_secret_enc)', async () => {
+    await t.db.delete(appUser);
+    await t.db.insert(appUser).values({ passwordHash: 'x', budgetStartMonth: '2026-11-01' });
+    const [user] = await t.db.select().from(appUser);
+    expect(user!.totpSecretEnc).toBeNull();
+  });
+
   it('keeps budget_start_month on the first day of a month', async () => {
     const query = t.db
       .insert(appUser)

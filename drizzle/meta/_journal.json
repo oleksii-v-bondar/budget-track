@@ -36,6 +36,13 @@
       "when": 1795270656988,
       "tag": "0004_totp_last_step",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795275376835,
+      "tag": "0005_optional_totp",
+      "breakpoints": true
     }
   ]
 }

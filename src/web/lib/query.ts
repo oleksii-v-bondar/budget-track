@@ -1,4 +1,5 @@
 import { MutationCache, QueryCache, QueryClient, queryOptions } from '@tanstack/react-query';
+import type { AuthStatus } from '../../shared/auth';
 import { api, isTransient, isUnauthorized, unwrap } from './api';
 
 /**
@@ -10,13 +11,28 @@ export const queryKeys = {
   undo: ['undo'],
 } as const;
 
-/** GET /api/auth/status: whether setup is needed and whether this browser is signed in. Route guards read it. */
+/**
+ * GET /api/auth/status: whether setup is needed, whether this browser is signed in, and whether sign-in asks for an
+ * authenticator code. Route guards, the sign-in form and Settings read it.
+ */
 export const authStatusQuery = queryOptions({
   queryKey: queryKeys.authStatus,
   queryFn: () => unwrap(api.api.auth.status.$get()),
-  // Changed only by setting the data after setup, sign-in and sign-out, or a 401 (see createQueryClient).
+  // Changed only by setting the data (setAuthStatus) after setup, sign-in, sign-out, a 401 (see createQueryClient) and
+  // turning the authenticator on or off.
   staleTime: Infinity,
 });
+
+/** Updates the cached auth status; what `change` leaves out keeps its cached value. */
+export function setAuthStatus(queryClient: QueryClient, change: Partial<AuthStatus>): void {
+  queryClient.setQueryData(authStatusQuery.queryKey, (old) => ({
+    setupRequired: false,
+    authenticated: false,
+    authenticatorEnabled: false,
+    ...old,
+    ...change,
+  }));
+}
 
 /**
  * The app's QueryClient. Spec §2: mutations wait for the server (no optimistic updates) and then refresh what they
@@ -42,8 +58,11 @@ export function invalidateData(queryClient: QueryClient): Promise<void> {
   return queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });
 }
 
-/** After signing out (or a 401): forgets every budget-data query and records that nobody is signed in. */
+/**
+ * After signing out (or a 401): forgets every budget-data query and records that nobody is signed in. Whether sign-in
+ * asks for a code stays as cached; the sign-in form learns otherwise from a 422 `code_required`.
+ */
 export function forgetSession(queryClient: QueryClient): void {
   queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });
-  queryClient.setQueryData(queryKeys.authStatus, { setupRequired: false, authenticated: false });
+  setAuthStatus(queryClient, { setupRequired: false, authenticated: false });
 }

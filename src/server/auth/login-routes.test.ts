@@ -2,7 +2,7 @@ import * as argon2 from '@node-rs/argon2';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appUser, session } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
-import { type SetupResult, setUpBudget, TEST_PASSWORD } from '../test/auth';
+import { type Authenticator, enableAuthenticator, setUpBudget, TEST_PASSWORD } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { TestClient } from '../test/http-client';
 import { freshTotpCode, totpCode } from '../test/totp';
@@ -17,11 +17,10 @@ vi.mock('@node-rs/argon2', async (importOriginal) => {
 
 let t: TestDatabase;
 let ctx: TestApp;
-let setup: SetupResult;
 beforeEach(async () => {
   t = await createTestDatabase();
   ctx = createTestApp(t.db);
-  setup = await setUpBudget(ctx);
+  await setUpBudget(ctx);
 });
 afterEach(async () => {
   await t.drop();
@@ -34,17 +33,90 @@ async function login(client: TestClient, body: Record<string, unknown>) {
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-/** The password with a code from the next TOTP step (the clock moves on 30 s, so each call gives an unused code). */
-async function withCode(password = TEST_PASSWORD) {
-  return { password, totpCode: await freshTotpCode(setup.totpSecret, ctx.clock) };
-}
+const WRONG_PASSWORD = { status: 401, body: { code: 'invalid_credentials', message: 'Wrong password.' } };
 
-describe('POST /api/auth/login', () => {
+describe('POST /api/auth/login without an authenticator (the default)', () => {
+  it('signs in with the password only', async () => {
+    const client = new TestClient(ctx.app);
+    expect(await login(client, { password: TEST_PASSWORD })).toEqual({
+      status: 200,
+      body: { authenticatorEnabled: false, recoveryCodesRemaining: 0 },
+    });
+    expect(client.cookie(SESSION_COOKIE)).toBeDefined();
+    expect(await (await client.get('/api/auth/status')).json()).toEqual({
+      setupRequired: false,
+      authenticated: true,
+      authenticatorEnabled: false,
+    });
+  });
+
+  it('ignores a code or a recovery code sent with the password', async () => {
+    for (const [i, factor] of [{ totpCode: '000000' }, { recoveryCode: 'AAAA-AAAA-AAAA' }].entries()) {
+      const client = new TestClient(ctx.app, `198.51.100.${30 + i}`);
+      expect((await login(client, { password: TEST_PASSWORD, ...factor })).status).toBe(200);
+    }
+  });
+
+  it('rejects a wrong password', async () => {
+    const client = new TestClient(ctx.app);
+    expect(await login(client, { password: 'not my password' })).toEqual(WRONG_PASSWORD);
+    expect(client.cookie(SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('checks the password with the same work whether or not it is right', async () => {
+    for (const password of ['wrong password', TEST_PASSWORD]) {
+      vi.mocked(argon2.verify).mockClear();
+      await login(new TestClient(ctx.app), { password });
+      expect(argon2.verify).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('keeps the rate limit and the lockout', async () => {
+    const attacker = new TestClient(ctx.app, '198.51.100.66');
+    for (let i = 0; i < 5; i++) expect((await login(attacker, { password: 'guess' })).status).toBe(401);
+    expect((await login(attacker, { password: TEST_PASSWORD })).body.code).toBe('rate_limited');
+    for (let i = 0; i < 5; i++) {
+      expect((await login(new TestClient(ctx.app, `198.51.100.${i}`), { password: 'guess' })).status).toBe(401);
+    }
+    expect((await login(new TestClient(ctx.app), { password: TEST_PASSWORD })).body.code).toBe('locked');
+  });
+});
+
+describe('POST /api/auth/login with an authenticator', () => {
+  let setup: Authenticator;
+  beforeEach(async () => {
+    setup = await enableAuthenticator(ctx);
+  });
+
+  /** The password with a code from the next TOTP step (the clock moves on 30 s, so each call gives an unused code). */
+  async function withCode(password = TEST_PASSWORD) {
+    return { password, totpCode: await freshTotpCode(setup.totpSecret, ctx.clock) };
+  }
+
   it('signs in with password and authenticator code', async () => {
     const client = new TestClient(ctx.app);
-    expect(await login(client, await withCode())).toEqual({ status: 200, body: { recoveryCodesRemaining: 10 } });
+    expect(await login(client, await withCode())).toEqual({
+      status: 200,
+      body: { authenticatorEnabled: true, recoveryCodesRemaining: 10 },
+    });
     expect(client.cookie(SESSION_COOKIE)).toBeDefined();
-    expect(await (await client.get('/api/auth/status')).json()).toEqual({ setupRequired: false, authenticated: true });
+    expect(await (await client.get('/api/auth/status')).json()).toEqual({
+      setupRequired: false,
+      authenticated: true,
+      authenticatorEnabled: true,
+    });
+  });
+
+  it('asks for a code when only the password is sent, without counting an attempt', async () => {
+    const client = new TestClient(ctx.app, '198.51.100.70');
+    for (let i = 0; i < 6; i++) {
+      expect(await login(client, { password: TEST_PASSWORD })).toEqual({
+        status: 422,
+        body: { code: 'code_required', message: 'Enter a code from your authenticator app or a recovery code.' },
+      });
+    }
+    expect(client.cookie(SESSION_COOKIE)).toBeUndefined();
+    expect((await login(client, await withCode())).status).toBe(200);
   });
 
   it('rejects a wrong password or code with the same message', async () => {
@@ -70,9 +142,9 @@ describe('POST /api/auth/login', () => {
     expect((await login(new TestClient(ctx.app, '198.51.100.22'), await withCode())).status).toBe(200);
   });
 
-  it('refuses the authenticator code that confirmed setup', async () => {
-    const setupCode = await totpCode(setup.totpSecret, ctx.clock.now());
-    expect((await login(new TestClient(ctx.app), { password: TEST_PASSWORD, totpCode: setupCode })).status).toBe(401);
+  it('refuses the authenticator code that turned the authenticator on', async () => {
+    const confirmation = await totpCode(setup.totpSecret, ctx.clock.now());
+    expect((await login(new TestClient(ctx.app), { password: TEST_PASSWORD, totpCode: confirmation })).status).toBe(401);
   });
 
   it('accepts each recovery code once', async () => {
@@ -80,7 +152,7 @@ describe('POST /api/auth/login', () => {
     const code = setup.recoveryCodes[3]!;
     expect(await login(client, { password: TEST_PASSWORD, recoveryCode: code })).toEqual({
       status: 200,
-      body: { recoveryCodesRemaining: 9 },
+      body: { authenticatorEnabled: true, recoveryCodesRemaining: 9 },
     });
     const [user] = await t.db.select().from(appUser);
     expect(user!.recoveryCodeHashes).toHaveLength(9);
@@ -102,9 +174,10 @@ describe('POST /api/auth/login', () => {
       { password: TEST_PASSWORD, recoveryCode: unknown, status: 401 },
       { password: TEST_PASSWORD, recoveryCode: valid, status: 200 },
     ];
-    for (const { status, ...body } of attempts) {
+    // Each from its own address: setup and turning the authenticator on already used two of this minute's attempts.
+    for (const [i, { status, ...body }] of attempts.entries()) {
       vi.mocked(argon2.verify).mockClear();
-      expect((await login(new TestClient(ctx.app), body)).status).toBe(status);
+      expect((await login(new TestClient(ctx.app, `198.51.100.${50 + i}`), body)).status).toBe(status);
       expect(argon2.verify).toHaveBeenCalledTimes(1 + RECOVERY_CODE_COUNT);
     }
   });
@@ -160,12 +233,14 @@ describe('POST /api/auth/login', () => {
     ctx.clock.advance(15 * MINUTE);
     expect((await login(owner, await withCode())).status).toBe(200);
   });
+});
 
-  it('refuses sign-in before setup', async () => {
+describe('POST /api/auth/login before setup', () => {
+  it('is refused', async () => {
     const fresh = await createTestDatabase();
     try {
       const other = createTestApp(fresh.db);
-      expect(await login(other.client, { password: TEST_PASSWORD, totpCode: '123456' })).toEqual({
+      expect(await login(other.client, { password: TEST_PASSWORD })).toEqual({
         status: 409,
         body: { code: 'setup_required', message: 'Finish setting up the budget first.' },
       });
@@ -178,14 +253,14 @@ describe('POST /api/auth/login', () => {
 describe('POST /api/auth/logout', () => {
   it('ends the current session only', async () => {
     const phone = new TestClient(ctx.app);
-    await login(phone, await withCode());
+    await login(phone, { password: TEST_PASSWORD });
     expect(await t.db.select().from(session)).toHaveLength(2); // setup's session + phone
 
     const res = await phone.post('/api/auth/logout');
     expect(res.status).toBe(200);
     expect(phone.cookie(SESSION_COOKIE)).toBeUndefined();
-    expect(await (await phone.get('/api/auth/status')).json()).toEqual({ setupRequired: false, authenticated: false });
-    expect(await (await ctx.client.get('/api/auth/status')).json()).toEqual({ setupRequired: false, authenticated: true });
+    expect(await (await phone.get('/api/auth/status')).json()).toMatchObject({ authenticated: false });
+    expect(await (await ctx.client.get('/api/auth/status')).json()).toMatchObject({ authenticated: true });
   });
 
   it('requires a session', async () => {
