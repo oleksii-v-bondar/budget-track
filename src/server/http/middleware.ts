@@ -16,7 +16,7 @@ export function csrfGuard(): MiddlewareHandler<AppEnv> {
   };
 }
 
-/** API responses can carry secrets (recovery codes, authenticator secrets), so no browser or proxy may cache them. */
+/** API responses carry the budget's data, so no browser or proxy may cache them. */
 export function noStore(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     await next();

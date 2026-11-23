@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, lte, ne } from 'drizzle-orm';
+import { and, eq, gt, lte } from 'drizzle-orm';
 import type { Context, MiddlewareHandler } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { Clock } from '../clock';
@@ -54,11 +54,6 @@ export async function findSession(db: Executor, token: string, now: Date): Promi
 
 export async function deleteSession(db: Executor, id: string): Promise<void> {
   await db.delete(session).where(eq(session.id, id));
-}
-
-/** Logs out everywhere, optionally keeping one session (the one changing the password). */
-export async function deleteAllSessions(db: Executor, options: { exceptId?: string } = {}): Promise<void> {
-  await db.delete(session).where(options.exceptId ? ne(session.id, options.exceptId) : undefined);
 }
 
 export function setSessionCookie(c: Context, token: string, secure: boolean): void {

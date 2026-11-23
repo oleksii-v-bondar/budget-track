@@ -2,7 +2,6 @@ import type { Config } from '../config';
 import type { Db } from '../db/client';
 import type { FxRates } from '../fx/fx-rates';
 import { createApp, type App } from '../http/app';
-import { clientIpResolver } from '../http/client-ip';
 import { createLogger } from '../logger';
 import { testConfig } from './config';
 import { FakeClock } from './fake-clock';
@@ -10,6 +9,7 @@ import { stubFx } from './fx';
 import { TestClient } from './http-client';
 
 export interface TestApp {
+  db: Db;
   app: App;
   client: TestClient;
   clock: FakeClock;
@@ -28,8 +28,7 @@ export function createTestApp(
     config,
     clock,
     logger: createLogger(config.logLevel),
-    clientIp: clientIpResolver(config.trustProxy),
     fx: options.fx ?? stubFx(),
   });
-  return { app, client: new TestClient(app), clock, config };
+  return { db, app, client: new TestClient(app), clock, config };
 }

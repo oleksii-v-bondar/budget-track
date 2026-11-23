@@ -1,11 +1,11 @@
 import { serve } from '@hono/node-server';
-import { systemClock } from './clock';
+import { monthIn, systemClock } from './clock';
 import { loadConfig } from './config';
 import { createDatabase } from './db/client';
 import { runMigrations } from './db/migrate';
+import { ensureBudget } from './db/seed';
 import { nbpRates } from './fx/fx-rates';
 import { createApp } from './http/app';
-import { clientIpResolver } from './http/client-ip';
 import { createLogger } from './logger';
 
 async function main(): Promise<void> {
@@ -15,13 +15,13 @@ async function main(): Promise<void> {
 
   await runMigrations(database.db, config.migrationsDir);
   logger.info('database migrations applied');
+  await ensureBudget(database.db, monthIn(config.timeZone, systemClock.now()));
 
   const app = createApp({
     db: database.db,
     config,
     clock: systemClock,
     logger,
-    clientIp: clientIpResolver(config.trustProxy),
     fx: nbpRates({
       db: database.db,
       logger,

@@ -43,6 +43,13 @@
       "when": 1795275376835,
       "tag": "0005_optional_totp",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795428643913,
+      "tag": "0006_simple_auth",
+      "breakpoints": true
     }
   ]
 }

@@ -1,30 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config';
 
-const KEY = Buffer.alloc(32, 7).toString('base64');
-
 const validEnv = {
   DATABASE_URL: 'postgres://budget:secret@localhost:5432/budget',
-  ENCRYPTION_KEY: KEY,
-  SETUP_TOKEN: 'a-long-setup-token-123',
+  APP_USERNAME: 'owner',
+  APP_PASSWORD: 'correct horse battery staple',
 };
 
 describe('loadConfig', () => {
   it('applies defaults for optional variables', () => {
-    const config = loadConfig(validEnv);
-    expect(config).toMatchObject({
+    expect(loadConfig(validEnv)).toEqual({
       databaseUrl: validEnv.DATABASE_URL,
-      setupToken: validEnv.SETUP_TOKEN,
+      appUsername: 'owner',
+      appPassword: 'correct horse battery staple',
       port: 3000,
       timeZone: 'Europe/Warsaw',
       cookieSecure: true,
-      trustProxy: false,
       logLevel: 'info',
       migrationsDir: 'drizzle',
       nbpBaseUrl: 'https://api.nbp.pl',
       webDir: 'dist/web',
     });
-    expect(config.encryptionKey).toEqual(Buffer.alloc(32, 7));
   });
 
   it('parses explicit values', () => {
@@ -33,7 +29,6 @@ describe('loadConfig', () => {
       PORT: '8080',
       TZ: 'UTC',
       COOKIE_SECURE: 'false',
-      TRUST_PROXY: 'true',
       LOG_LEVEL: 'silent',
       MIGRATIONS_DIR: '/app/drizzle',
       NBP_BASE_URL: 'http://localhost:8081/',
@@ -43,7 +38,6 @@ describe('loadConfig', () => {
       port: 8080,
       timeZone: 'UTC',
       cookieSecure: false,
-      trustProxy: true,
       logLevel: 'silent',
       migrationsDir: '/app/drizzle',
       nbpBaseUrl: 'http://localhost:8081',
@@ -52,22 +46,14 @@ describe('loadConfig', () => {
   });
 
   it('lists every invalid variable in one error', () => {
-    expect(() => loadConfig({})).toThrow(/DATABASE_URL[\s\S]*ENCRYPTION_KEY[\s\S]*SETUP_TOKEN/);
+    expect(() => loadConfig({})).toThrow(/DATABASE_URL[\s\S]*APP_USERNAME[\s\S]*APP_PASSWORD/);
   });
 
-  it('rejects keys that are not exactly 32 bytes of base64', () => {
-    const short = Buffer.alloc(16, 1).toString('base64');
-    expect(() => loadConfig({ ...validEnv, ENCRYPTION_KEY: short })).toThrow('ENCRYPTION_KEY');
-  });
-
-  it('rejects unknown time zones, short setup tokens and bad booleans', () => {
+  it('rejects an empty username or password, unknown time zones and bad booleans', () => {
+    expect(() => loadConfig({ ...validEnv, APP_USERNAME: '' })).toThrow('APP_USERNAME');
+    expect(() => loadConfig({ ...validEnv, APP_PASSWORD: '' })).toThrow('APP_PASSWORD');
     expect(() => loadConfig({ ...validEnv, TZ: 'Mars/Olympus' })).toThrow('TZ');
-    expect(() => loadConfig({ ...validEnv, SETUP_TOKEN: 'short' })).toThrow('SETUP_TOKEN');
     expect(() => loadConfig({ ...validEnv, COOKIE_SECURE: 'yes' })).toThrow('COOKIE_SECURE');
     expect(() => loadConfig({ ...validEnv, NBP_BASE_URL: 'ftp://api.nbp.pl' })).toThrow('NBP_BASE_URL');
-  });
-
-  it('rejects setup tokens longer than 256 characters', () => {
-    expect(() => loadConfig({ ...validEnv, SETUP_TOKEN: 'a'.repeat(257) })).toThrow('SETUP_TOKEN');
   });
 });

@@ -73,12 +73,6 @@ export const appUser = pgTable(
   'app_user',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    passwordHash: text('password_hash').notNull(),
-    /** The authenticator app's secret, encrypted; null while no authenticator is on (the default). */
-    totpSecretEnc: text('totp_secret_enc'),
-    recoveryCodeHashes: text('recovery_code_hashes').array().notNull().default(sql`'{}'::text[]`),
-    /** RFC 6238 time step of the newest authenticator code accepted; codes from it or earlier steps are replays. */
-    totpLastStep: bigint('totp_last_step', { mode: 'number' }),
     baseCurrency: text('base_currency').notNull().default('PLN'),
     budgetStartMonth: day('budget_start_month').notNull(),
     ...timestamps,
@@ -98,17 +92,6 @@ export const session = pgTable('session', {
   lastSeenAt: instant('last_seen_at').notNull(),
   userAgent: text('user_agent'),
 });
-
-export const loginAttempt = pgTable(
-  'login_attempt',
-  {
-    id: bigserial('id', { mode: 'number' }).primaryKey(),
-    at: instant('at').notNull(),
-    success: boolean('success').notNull(),
-    ip: text('ip').notNull(),
-  },
-  (t) => [index('login_attempt_ip_at').on(t.ip, t.at), index('login_attempt_at').on(t.at)],
-);
 
 // ---------------------------------------------------------------- accounts (spec §4.2)
 

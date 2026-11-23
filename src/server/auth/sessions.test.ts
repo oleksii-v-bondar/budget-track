@@ -10,7 +10,6 @@ import { FakeClock } from '../test/fake-clock';
 import { TestClient } from '../test/http-client';
 import {
   createSession,
-  deleteAllSessions,
   deleteSession,
   findSession,
   requireSession,
@@ -53,17 +52,12 @@ describe('session store', () => {
     expect(await findSession(t.db, 'unknown-token', clock.now())).toBeNull();
   });
 
-  it('deletes one session, or all but one', async () => {
+  it('deletes one session', async () => {
     const a = await createSession(t.db, clock.now(), undefined);
     const b = await createSession(t.db, clock.now(), undefined);
-    const c = await createSession(t.db, clock.now(), undefined);
     await deleteSession(t.db, a.session.id);
     expect(await findSession(t.db, a.token, clock.now())).toBeNull();
-    await deleteAllSessions(t.db, { exceptId: b.session.id });
     expect(await findSession(t.db, b.token, clock.now())).not.toBeNull();
-    expect(await findSession(t.db, c.token, clock.now())).toBeNull();
-    await deleteAllSessions(t.db);
-    expect(await t.db.select().from(session)).toEqual([]);
   });
 });
 

@@ -4,14 +4,11 @@ interface Fetcher {
   request(path: string, init?: RequestInit): Response | Promise<Response>;
 }
 
-/** Drives a Hono app like a browser: keeps cookies, sends the CSRF header, and identifies itself by IP. */
+/** Drives a Hono app like a browser: keeps cookies and sends the CSRF header. */
 export class TestClient {
   private readonly cookies = new Map<string, string>();
 
-  constructor(
-    private readonly app: Fetcher,
-    readonly ip = '203.0.113.7',
-  ) {}
+  constructor(private readonly app: Fetcher) {}
 
   get(path: string, headers: Record<string, string> = {}): Promise<Response> {
     return this.send('GET', path, undefined, headers);
@@ -26,7 +23,7 @@ export class TestClient {
   }
 
   async send(method: string, path: string, body?: unknown, extra: Record<string, string> = {}): Promise<Response> {
-    const headers = new Headers({ 'x-forwarded-for': this.ip });
+    const headers = new Headers();
     if (method !== 'GET' && method !== 'HEAD') headers.set(CSRF_HEADER, CSRF_HEADER_VALUE);
     if (body !== undefined) headers.set('content-type', 'application/json');
     if (this.cookies.size > 0) {

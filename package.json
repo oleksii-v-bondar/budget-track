@@ -60,7 +60,6 @@
   "dependencies": {
     "@hono/node-server": "^2.1.11",
     "@hono/zod-validator": "^0.9.1",
-    "@node-rs/argon2": "^2.2.2",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.19",
     "otplib": "^13.6.0",

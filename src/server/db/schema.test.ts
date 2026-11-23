@@ -35,7 +35,6 @@ describe('migrations', () => {
       'category_group',
       'fx_rate',
       'loan_interest_override',
-      'login_attempt',
       'month_note',
       'payee',
       'scheduled_subtransaction',
@@ -81,22 +80,13 @@ describe('int8 handling', () => {
 
 describe('constraints', () => {
   it('allows at most one app_user row', async () => {
-    const row = { passwordHash: 'x', totpSecretEnc: 'y', budgetStartMonth: '2026-11-01' };
+    const row = { budgetStartMonth: '2026-11-01' };
     await t.db.insert(appUser).values(row);
     await expect(t.db.insert(appUser).values(row)).rejects.toThrow();
   });
 
-  it('allows an owner without an authenticator (a NULL totp_secret_enc)', async () => {
-    await t.db.delete(appUser);
-    await t.db.insert(appUser).values({ passwordHash: 'x', budgetStartMonth: '2026-11-01' });
-    const [user] = await t.db.select().from(appUser);
-    expect(user!.totpSecretEnc).toBeNull();
-  });
-
   it('keeps budget_start_month on the first day of a month', async () => {
-    const query = t.db
-      .insert(appUser)
-      .values({ passwordHash: 'x', totpSecretEnc: 'y', budgetStartMonth: '2026-11-15' });
+    const query = t.db.insert(appUser).values({ budgetStartMonth: '2026-11-15' });
     // Check constraints run before the singleton index, so the name proves which rule rejected the row.
     expect(await rejectionText(query)).toContain('app_user_budget_start_first_of_month');
   });

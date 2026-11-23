@@ -50,7 +50,7 @@ describe('cross-cutting behaviour', () => {
 
   it('refuses request bodies over 64 KB', async () => {
     const { client } = createTestApp(t.db);
-    const res = await client.post('/api/auth/login', { password: 'x'.repeat(100 * 1024), totpCode: '123456' });
+    const res = await client.post('/api/auth/login', { username: 'owner', password: 'x'.repeat(100 * 1024) });
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({ code: 'payload_too_large', message: 'Request body is too large.' });
   });

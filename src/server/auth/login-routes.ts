@@ -1,51 +1,36 @@
-import { eq } from 'drizzle-orm';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
-import { type LoginResponse, loginRequestSchema } from '../../shared/auth';
-import { appUser } from '../db/schema';
+import { type AuthStatus, loginRequestSchema } from '../../shared/auth';
 import type { AppDeps } from '../http/app';
 import type { AppEnv } from '../http/env';
 import { AppError } from '../http/errors';
 import { validate } from '../http/validate';
-import { verifyPassword } from './passwords';
-import { recordLoginAttempt, withLoginLock } from './rate-limit';
-import { assertFactorSent, hasAuthenticator, spentFactor, verifySecondFactor } from './second-factor';
-import { clearSessionCookie, createSession, deleteSession, requireSession, setSessionCookie } from './sessions';
-import { findUser } from './user';
+import { clearSessionCookie, createSession, deleteSession, refreshSession, requireSession, setSessionCookie } from './sessions';
 
-type LoginOutcome = { ok: false; authenticator: boolean } | { ok: true; token: string; response: LoginResponse };
+/** Constant-time comparison (hashing first makes the lengths equal). */
+function matches(given: string, expected: string): boolean {
+  const digest = (value: string) => createHash('sha256').update(value).digest();
+  return timingSafeEqual(digest(given), digest(expected));
+}
 
+/** Sign-in with the username and password from the environment (APP_USERNAME, APP_PASSWORD). */
 export function loginRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()
+    .get('/status', async (c) => {
+      // Also keeps the cookie's lifetime sliding while the app only polls its status, and clears a stale cookie.
+      const authenticated = (await refreshSession(c, deps)) !== null;
+      return c.json<AuthStatus>({ authenticated });
+    })
     .post('/login', validate('json', loginRequestSchema), async (c) => {
-      const body = c.req.valid('json');
-      const ip = deps.clientIp(c);
-      const outcome = await withLoginLock(deps.db, deps.clock, ip, async (tx, now): Promise<LoginOutcome> => {
-        const user = await findUser(tx);
-        if (!user) throw new AppError(409, 'setup_required', 'Finish setting up the budget first.');
-        const authenticator = hasAuthenticator(user);
-        // Without an authenticator, sign-in takes the password only and ignores any code sent.
-        assertFactorSent(user, body);
+      const { username, password } = c.req.valid('json');
+      // Both are always compared, so the response time doesn't reveal whether the username was right.
+      const usernameOk = matches(username, deps.config.appUsername);
+      const passwordOk = matches(password, deps.config.appPassword);
+      if (!usernameOk || !passwordOk) throw new AppError(401, 'invalid_credentials', 'Wrong username or password.');
 
-        // The second factor is checked even after a wrong password, so the response time doesn't reveal the password.
-        const passwordOk = await verifyPassword(user.passwordHash, body.password);
-        const factor = await verifySecondFactor(user, body, now, deps.config.encryptionKey);
-        const ok = passwordOk && factor.ok;
-        await recordLoginAttempt(tx, ip, ok, now);
-        if (!ok) return { ok: false, authenticator };
-
-        await tx.update(appUser).set(spentFactor(user, factor)).where(eq(appUser.id, user.id));
-        const { token } = await createSession(tx, now, c.req.header('user-agent'));
-        const recoveryCodesRemaining = factor.remainingRecoveryHashes.length;
-        return { ok: true, token, response: { authenticatorEnabled: authenticator, recoveryCodesRemaining } };
-      });
-      // Thrown after commit so the failed attempt stays recorded.
-      if (!outcome.ok) {
-        const message = outcome.authenticator ? 'Wrong password or code.' : 'Wrong password.';
-        throw new AppError(401, 'invalid_credentials', message);
-      }
-
-      setSessionCookie(c, outcome.token, deps.config.cookieSecure);
-      return c.json<LoginResponse>(outcome.response);
+      const { token } = await createSession(deps.db, deps.clock.now(), c.req.header('user-agent'));
+      setSessionCookie(c, token, deps.config.cookieSecure);
+      return c.json({ ok: true as const });
     })
     .post('/logout', requireSession(deps), async (c) => {
       await deleteSession(deps.db, c.var.session.id);

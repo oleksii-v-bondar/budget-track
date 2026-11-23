@@ -6,8 +6,6 @@ import { secureHeaders } from 'hono/secure-headers';
 import type { ApiErrorBody } from '../../shared/http';
 import { accountRoutes } from '../accounts/account-routes';
 import { loginRoutes } from '../auth/login-routes';
-import { securityRoutes } from '../auth/security-routes';
-import { setupRoutes } from '../auth/setup-routes';
 import { budgetRoutes } from '../budget/budget-routes';
 import { categoryRoutes } from '../categories/category-routes';
 import { groupRoutes } from '../categories/group-routes';
@@ -20,7 +18,6 @@ import { fxRoutes } from '../fx/fx-routes';
 import type { Logger } from '../logger';
 import { payeeRoutes } from '../payees/payee-routes';
 import { transactionRoutes } from '../transactions/transaction-routes';
-import type { ClientIpResolver } from './client-ip';
 import type { AppEnv } from './env';
 import { AppError, errorHandler } from './errors';
 import { csrfGuard, noStore, requestLogger } from './middleware';
@@ -31,7 +28,6 @@ export interface AppDeps {
   config: Config;
   clock: Clock;
   logger: Logger;
-  clientIp: ClientIpResolver;
   /** NBP rates (spec §9). Quote before a command or read transaction starts, never inside one. */
   fx: FxRates;
 }
@@ -73,9 +69,7 @@ export function createApp(deps: AppDeps) {
         return c.json({ status: 'unavailable' as const }, 503);
       }
     })
-    .route('/api/auth', setupRoutes(deps))
     .route('/api/auth', loginRoutes(deps))
-    .route('/api/auth', securityRoutes(deps))
     // Every router below is mounted on its own prefix and starts with .use('*', requireSession(deps)), so each new
     // route is private by default (app.test.ts walks app.routes to keep it that way).
     .route('/api/undo', undoRoutes(deps))

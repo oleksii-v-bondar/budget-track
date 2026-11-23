@@ -16,8 +16,3 @@ export function isUniqueViolation(error: unknown): boolean {
 export function isIntegrityViolation(error: unknown): boolean {
   return hasSqlState(error, (code) => /^23[0-9A-Z]{3}$/.test(code));
 }
-
-/** True when a statement gave up waiting for a lock because `lock_timeout` passed (55P03). */
-export function isLockTimeout(error: unknown): boolean {
-  return hasSqlState(error, (code) => code === '55P03');
-}
