@@ -1,21 +1,38 @@
-import { useMutation } from '@tanstack/react-query';
-import { type ReactNode, useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { type ReactNode, useId, useState } from 'react';
 import { authApi, useLeaveApp } from '../auth/auth-api';
 import { errorMessage } from '../lib/commands';
 import { useOnline } from '../lib/online';
+import { authStatusQuery } from '../lib/query';
 import { Button } from '../ui/button';
 import { cx } from '../ui/cx';
 import { ChevronRightIcon } from '../ui/icons';
 import { Sheet } from '../ui/sheet';
 import { useToast } from '../ui/toast';
-import { ChangeAuthenticatorForm, ChangePasswordForm, NewRecoveryCodesForm } from './security-forms';
+import {
+  ChangePasswordForm,
+  NewRecoveryCodesForm,
+  ReplaceAuthenticatorForm,
+  TurnOffAuthenticatorForm,
+  TurnOnAuthenticatorForm,
+} from './security-forms';
 
-type Open = 'password' | 'authenticator' | 'recovery-codes' | 'sign-out-everywhere' | null;
+type Open =
+  | 'password'
+  | 'turn-on-authenticator'
+  | 'turn-off-authenticator'
+  | 'replace-authenticator'
+  | 'recovery-codes'
+  | 'sign-out-everywhere'
+  | null;
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
+  const id = useId();
   return (
-    <section className="mt-6">
-      <h2 className="px-4 pb-1 text-xs font-semibold tracking-wide text-gray-500 uppercase">{title}</h2>
+    <section className="mt-6" aria-labelledby={id}>
+      <h2 id={id} className="px-4 pb-1 text-xs font-semibold tracking-wide text-gray-500 uppercase">
+        {title}
+      </h2>
       <div className="divide-y divide-gray-200 border-y border-gray-200">{children}</div>
     </section>
   );
@@ -47,8 +64,12 @@ function Row({ children, onClick, danger, mutating }: RowProps) {
   );
 }
 
-/** Spec §11 Settings: password, authenticator, recovery codes, signing out, and the JSON export. */
+/**
+ * Spec §11 Settings: password, the authenticator app (off by default: turn it on or off, replace it, new recovery
+ * codes), signing out, and the JSON export.
+ */
 export function SettingsScreen() {
+  const authenticatorEnabled = useQuery(authStatusQuery).data?.authenticatorEnabled ?? false;
   const [open, setOpen] = useState<Open>(null);
   const close = () => setOpen(null);
   const toast = useToast();
@@ -65,8 +86,24 @@ export function SettingsScreen() {
     <div className="pb-6">
       <Section title="Security">
         <Row onClick={() => setOpen('password')}>Change password</Row>
-        <Row onClick={() => setOpen('authenticator')}>Change authenticator app</Row>
-        <Row onClick={() => setOpen('recovery-codes')}>New recovery codes</Row>
+      </Section>
+
+      <Section title="Authenticator app">
+        <p className="flex min-h-14 items-center justify-between px-4 text-base">
+          {authenticatorEnabled ? 'Sign-in asks for a code from the app' : 'Sign-in asks for the password only'}
+          <span className="font-semibold text-gray-500">{authenticatorEnabled ? 'On' : 'Off'}</span>
+        </p>
+        {authenticatorEnabled ? (
+          <>
+            <Row onClick={() => setOpen('replace-authenticator')}>Replace authenticator app</Row>
+            <Row onClick={() => setOpen('recovery-codes')}>New recovery codes</Row>
+            <Row danger onClick={() => setOpen('turn-off-authenticator')}>
+              Turn off
+            </Row>
+          </>
+        ) : (
+          <Row onClick={() => setOpen('turn-on-authenticator')}>Turn on</Row>
+        )}
       </Section>
 
       <Section title="Data">
@@ -87,10 +124,16 @@ export function SettingsScreen() {
       </Section>
 
       <Sheet open={open === 'password'} onClose={close} title="Change password">
-        <ChangePasswordForm onDone={close} />
+        <ChangePasswordForm onDone={close} authenticatorEnabled={authenticatorEnabled} />
       </Sheet>
-      <Sheet open={open === 'authenticator'} onClose={close} title="Change authenticator app">
-        <ChangeAuthenticatorForm onDone={close} />
+      <Sheet open={open === 'turn-on-authenticator'} onClose={close} title="Turn on authenticator app">
+        <TurnOnAuthenticatorForm onDone={close} />
+      </Sheet>
+      <Sheet open={open === 'turn-off-authenticator'} onClose={close} title="Turn off authenticator app">
+        <TurnOffAuthenticatorForm onDone={close} />
+      </Sheet>
+      <Sheet open={open === 'replace-authenticator'} onClose={close} title="Replace authenticator app">
+        <ReplaceAuthenticatorForm onDone={close} />
       </Sheet>
       <Sheet open={open === 'recovery-codes'} onClose={close} title="New recovery codes">
         <NewRecoveryCodesForm onDone={close} />

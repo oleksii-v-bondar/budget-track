@@ -6,7 +6,7 @@ import { renderApp, SIGNED_IN } from './test/render';
 import { safeRedirect } from './router';
 
 const status = (setupRequired: boolean, authenticated: boolean) => ({
-  'GET /api/auth/status': { body: { setupRequired, authenticated } },
+  'GET /api/auth/status': { body: { setupRequired, authenticated, authenticatorEnabled: false } },
 });
 
 describe('route guards', () => {
