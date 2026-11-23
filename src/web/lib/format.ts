@@ -67,6 +67,11 @@ export function formatMonth(month: string): string {
   return `${name} ${year}`;
 }
 
+/** This device's current month ('YYYY-MM'), in its own time zone (the owner's, Europe/Warsaw). */
+export function thisMonth(now: Date = new Date()): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
 /** "Nov 2026" for "2026-11". */
 export function formatMonthShort(month: string): string {
   const { year, name } = monthParts(month);

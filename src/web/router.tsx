@@ -6,13 +6,17 @@ import {
   Outlet,
   redirect,
   type RouterHistory,
+  useSearch,
 } from '@tanstack/react-router';
+import { useState } from 'react';
 import { LoginScreen } from './auth/login-screen';
+import { BudgetScreen } from './budget/budget-screen';
+import { thisMonth } from './lib/format';
 import { authStatusQuery } from './lib/query';
 import { SettingsScreen } from './settings/settings-screen';
 import { AppShell, AuthLayout } from './shell/app-shell';
 import { OfflineBanner } from './shell/offline-banner';
-import { ErrorScreen, MoreScreen, NotFoundScreen, PlaceholderScreen } from './shell/screens';
+import { ErrorScreen, NotFoundScreen, PlaceholderScreen } from './shell/screens';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -72,6 +76,22 @@ const appLayout = createRoute({
   component: AppShell,
 });
 
+/** `/budget?month=YYYY-MM`; without a (valid) month it shows this device's current month. */
+const budgetRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: 'budget',
+  staticData: { title: 'Budget' },
+  validateSearch: (search: Record<string, unknown>): { month?: string } =>
+    typeof search.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(search.month) ? { month: search.month } : {},
+  component: BudgetRoute,
+});
+
+function BudgetRoute() {
+  const { month } = useSearch({ strict: false });
+  const [today] = useState(thisMonth);
+  return <BudgetScreen month={month ?? today} />;
+}
+
 const appRoutes = [
   createRoute({
     getParentRoute: () => appLayout,
@@ -80,12 +100,7 @@ const appRoutes = [
       throw redirect({ to: '/budget' });
     },
   }),
-  createRoute({
-    getParentRoute: () => appLayout,
-    path: 'budget',
-    staticData: { title: 'Budget' },
-    component: () => <PlaceholderScreen name="Budget" />,
-  }),
+  budgetRoute,
   createRoute({
     getParentRoute: () => appLayout,
     path: 'accounts',
@@ -97,19 +112,6 @@ const appRoutes = [
     path: 'transactions/new',
     staticData: { title: 'New transaction' },
     component: () => <PlaceholderScreen name="New transaction" />,
-  }),
-  createRoute({ getParentRoute: () => appLayout, path: 'more', staticData: { title: 'More' }, component: MoreScreen }),
-  createRoute({
-    getParentRoute: () => appLayout,
-    path: 'scheduled',
-    staticData: { title: 'Scheduled' },
-    component: () => <PlaceholderScreen name="Scheduled" />,
-  }),
-  createRoute({
-    getParentRoute: () => appLayout,
-    path: 'payees',
-    staticData: { title: 'Payees' },
-    component: () => <PlaceholderScreen name="Payees" />,
   }),
   createRoute({
     getParentRoute: () => appLayout,

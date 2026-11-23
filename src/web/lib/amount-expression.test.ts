@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_AMOUNT } from '../../shared/api/common';
 import { amountToExpression, evaluateAmount, formatExpression } from './amount-expression';
 
 const value = (expression: string) => {
@@ -60,8 +61,14 @@ describe('evaluateAmount', () => {
     expect(value('1,234')).toBe('Use at most 2 decimal places.');
     expect(value('1,2,3')).toBe('Check the amount.');
     expect(value(',')).toBe('Check the amount.');
-    expect(value('99999999999999')).toBe('That amount is too large.');
-    expect(value('90071992547409,91')).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('refuses amounts beyond the server limit of 100 000 000 000,00 either way', () => {
+    expect(value('100000000000')).toBe(MAX_AMOUNT);
+    expect(value('−100000000000')).toBe(-MAX_AMOUNT);
+    expect(value('100000000000,01')).toBe('Amounts can be at most 100\u00a0000\u00a0000\u00a0000,00.');
+    expect(value('−50000000000×3')).toBe('Amounts can be at most 100\u00a0000\u00a0000\u00a0000,00.');
+    expect(value('99999999999999999999')).toBe('Amounts can be at most 100\u00a0000\u00a0000\u00a0000,00.');
   });
 });
 
@@ -72,7 +79,7 @@ describe('keypad helpers', () => {
     expect(amountToExpression(5)).toBe('0,05');
     expect(amountToExpression(-2550)).toBe('−25,50');
     expect(amountToExpression(0)).toBe('0');
-    for (const amount of [123456, 100000, 5, -2550, 0, Number.MAX_SAFE_INTEGER]) {
+    for (const amount of [123456, 100000, 5, -2550, 0, MAX_AMOUNT]) {
       expect(value(amountToExpression(amount))).toBe(amount);
     }
   });

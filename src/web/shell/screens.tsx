@@ -1,36 +1,14 @@
 import { type ErrorComponentProps, Link, useRouter } from '@tanstack/react-router';
 import { errorMessage } from '../lib/commands';
 import { Button } from '../ui/button';
-import { ChevronRightIcon } from '../ui/icons';
 
-/** Stands in for a screen a later phase builds (P3b: Budget; P3c: Accounts, transactions, Scheduled, Payees). */
+/** Stands in for a screen that isn't built yet. */
 export function PlaceholderScreen({ name }: { name: string }) {
   return (
     <div className="px-4 py-12 text-center text-gray-500">
       <p className="font-medium text-gray-700">{name}</p>
       <p>This screen isn't built yet.</p>
     </div>
-  );
-}
-
-/** Spec §11: More holds Scheduled, Payees and Settings. */
-export function MoreScreen() {
-  const items = [
-    { to: '/scheduled', label: 'Scheduled' },
-    { to: '/payees', label: 'Payees' },
-    { to: '/settings', label: 'Settings' },
-  ] as const;
-  return (
-    <ul className="divide-y divide-gray-200">
-      {items.map((item) => (
-        <li key={item.to}>
-          <Link to={item.to} className="flex min-h-14 items-center justify-between px-4 text-base hover:bg-gray-50">
-            {item.label}
-            <ChevronRightIcon className="text-gray-400" />
-          </Link>
-        </li>
-      ))}
-    </ul>
   );
 }
 

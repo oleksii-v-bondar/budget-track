@@ -52,6 +52,16 @@ describe('AmountKeypad', () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
+  it('refuses an amount above the server limit, with the limit in the message', async () => {
+    const { onDone, tap } = setup(0);
+    await tap('1', ...Array<string>(11).fill('0'));
+    expect(screen.getByTestId('keypad-result')).toHaveTextContent('= 100 000 000 000,00 zł');
+    await tap('0');
+    expect(screen.getByTestId('keypad-result')).toHaveTextContent('Amounts can be at most 100 000 000 000,00.');
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
   it('works with a hardware keyboard', async () => {
     const { onDone } = setup(0);
     await userEvent.click(screen.getByRole('button', { name: '1' }));

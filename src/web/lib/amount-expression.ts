@@ -1,4 +1,6 @@
 import { roundDiv } from '../../engine/money';
+import { MAX_AMOUNT } from '../../shared/api/common';
+import { formatAmount } from './format';
 
 /**
  * The amount keypad's calculator (spec §11 "Assign: calculator keypad that accepts + − × ÷ expressions"). Numbers are
@@ -9,6 +11,8 @@ import { roundDiv } from '../../engine/money';
 export type AmountResult = { ok: true; value: number } | { ok: false; error: string };
 
 export const OPERATORS = { add: '+', subtract: '−', multiply: '×', divide: '÷' } as const;
+
+const TOO_LARGE_MESSAGE = `Amounts can be at most ${formatAmount(MAX_AMOUNT)}.`;
 
 const ALIASES: Record<string, string> = { '-': '−', '*': '×', x: '×', '/': '÷', '.': ',' };
 
@@ -88,16 +92,14 @@ function evaluate(tokens: Token[]): Fraction {
   return value;
 }
 
-/** Evaluates a keypad expression to minor units; an empty expression is 0. */
+/** Evaluates a keypad expression to minor units; an empty expression is 0. Results beyond ±MAX_AMOUNT are refused. */
 export function evaluateAmount(expression: string): AmountResult {
   try {
     const tokens = tokenize(expression);
     if (tokens.length === 0) return { ok: true, value: 0 };
     const { n, d } = evaluate(tokens);
     const minor = roundDiv(n * 100n, d);
-    if (minor > BigInt(Number.MAX_SAFE_INTEGER) || minor < -BigInt(Number.MAX_SAFE_INTEGER)) {
-      return { ok: false, error: 'That amount is too large.' };
-    }
+    if (minor > BigInt(MAX_AMOUNT) || minor < -BigInt(MAX_AMOUNT)) return { ok: false, error: TOO_LARGE_MESSAGE };
     return { ok: true, value: Number(minor) };
   } catch (error) {
     if (error instanceof ExpressionError) return { ok: false, error: error.message };

@@ -53,10 +53,11 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
     return () => clearTimeout(timer);
   }, [id, duration, onDismiss]);
   return (
+    // Taps go through a toast to what is under it (a sheet's last rows), except on its button.
     <div
       role={tone === 'error' ? 'alert' : 'status'}
       className={cx(
-        'pointer-events-auto flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-white shadow-lg',
+        'flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-white shadow-lg',
         tone === 'error' ? 'bg-red-700' : 'bg-gray-900',
       )}
     >
@@ -64,7 +65,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       {toast.action && (
         <button
           type="button"
-          className="font-semibold text-green-300 uppercase"
+          className="pointer-events-auto font-semibold text-green-300 uppercase"
           onClick={() => {
             onDismiss(id);
             toast.action!.onClick();

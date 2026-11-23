@@ -1,35 +1,49 @@
-import { type InputHTMLAttributes, type ReactNode, useId } from 'react';
+import {
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+  useId,
+} from 'react';
 import { cx } from './cx';
 
-export interface TextFieldProps extends InputHTMLAttributes<HTMLInputElement> {
+/** What every labelled control takes besides its own attributes. */
+interface FieldProps {
   label: string;
-  /** Shown under the input in red, and announced with it. */
+  /** Shown under the control in red, and announced with it. */
   error?: string | null;
   hint?: ReactNode;
 }
 
-/** A labelled input with its hint or error underneath. */
-export function TextField({ label, error, hint, className, id, ...props }: TextFieldProps) {
+export type TextFieldProps = InputHTMLAttributes<HTMLInputElement> & FieldProps;
+export type SelectFieldProps = SelectHTMLAttributes<HTMLSelectElement> & FieldProps;
+export type TextAreaFieldProps = TextareaHTMLAttributes<HTMLTextAreaElement> & FieldProps;
+
+const controlClass = (error: string | null | undefined) =>
+  cx(
+    'min-h-11 rounded-xl border bg-white px-3 text-base text-gray-900 outline-none',
+    'focus:border-brand focus:ring-2 focus:ring-brand/30 disabled:bg-gray-100',
+    error ? 'border-red-500' : 'border-gray-300',
+  );
+
+/** The label above a control, its hint or error underneath, and the ids that tie them together. */
+function useField({ label, error, hint }: FieldProps, id: string | undefined, className: string | undefined) {
   const generated = useId();
-  const inputId = id ?? generated;
-  const noteId = `${inputId}-note`;
+  const controlId = id ?? generated;
+  const noteId = `${controlId}-note`;
   const note = error ?? hint;
-  return (
+  const control = {
+    id: controlId,
+    'aria-invalid': error ? true : undefined,
+    'aria-describedby': note ? noteId : undefined,
+    className: controlClass(error),
+  };
+  const frame = (child: ReactNode) => (
     <div className={cx('flex flex-col gap-1', className)}>
-      <label htmlFor={inputId} className="text-sm font-medium text-gray-700">
+      <label htmlFor={controlId} className="text-sm font-medium text-gray-700">
         {label}
       </label>
-      <input
-        id={inputId}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={note ? noteId : undefined}
-        className={cx(
-          'min-h-11 rounded-xl border bg-white px-3 text-base text-gray-900 outline-none',
-          'focus:border-brand focus:ring-2 focus:ring-brand/30 disabled:bg-gray-100',
-          error ? 'border-red-500' : 'border-gray-300',
-        )}
-        {...props}
-      />
+      {child}
       {note && (
         <p id={noteId} className={cx('text-sm', error ? 'text-red-600' : 'text-gray-500')}>
           {note}
@@ -37,6 +51,29 @@ export function TextField({ label, error, hint, className, id, ...props }: TextF
       )}
     </div>
   );
+  return { control, frame };
+}
+
+/** A labelled input with its hint or error underneath. */
+export function TextField({ label, error, hint, className, id, ...props }: TextFieldProps) {
+  const { control, frame } = useField({ label, error, hint }, id, className);
+  return frame(<input {...control} {...props} />);
+}
+
+/** A labelled native select (the phone's own picker), with its hint or error underneath. */
+export function SelectField({ label, error, hint, className, id, children, ...props }: SelectFieldProps) {
+  const { control, frame } = useField({ label, error, hint }, id, className);
+  return frame(
+    <select {...control} {...props}>
+      {children}
+    </select>,
+  );
+}
+
+/** A labelled multi-line text input, e.g. for notes. */
+export function TextAreaField({ label, error, hint, className, id, rows = 4, ...props }: TextAreaFieldProps) {
+  const { control, frame } = useField({ label, error, hint }, id, className);
+  return frame(<textarea {...control} rows={rows} {...props} className={cx(control.className, 'py-2')} />);
 }
 
 /** The form-level message of a failed request (see formErrorsOf). */

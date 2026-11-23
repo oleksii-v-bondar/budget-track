@@ -8,9 +8,9 @@ import { safeRedirect } from './router';
 describe('route guards', () => {
   it('send a signed-out visitor to sign in, remembering where they were going', async () => {
     fakeApi({ 'GET /api/auth/status': { body: { authenticated: false } } });
-    const { history } = renderApp('/payees');
+    const { history } = renderApp('/settings');
     await waitFor(() => expect(history.location.pathname).toBe('/login'));
-    expect(history.location.search).toBe('?redirect=%2Fpayees');
+    expect(history.location.search).toBe('?redirect=%2Fsettings');
   });
 
   it('send a signed-in owner from the sign-in page and / to the budget', async () => {
@@ -50,21 +50,19 @@ describe('app shell', () => {
       'Budget',
       'Accounts',
       'New transaction',
-      'More',
+      'Settings',
     ]);
     expect(within(nav).getByRole('link', { name: 'Budget' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
   });
 
-  it('reaches Scheduled, Payees and Settings through More', async () => {
+  it('reaches Settings from the bottom navigation', async () => {
     fakeApi(SIGNED_IN);
     renderApp('/budget');
-    await userEvent.click(await screen.findByRole('link', { name: 'More' }));
-    expect(await screen.findByRole('heading', { name: 'More' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('link', { name: 'Payees' }));
-    expect(await screen.findByRole('heading', { name: 'Payees' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'More' })).toHaveAttribute('aria-current', 'page');
+    await userEvent.click(await screen.findByRole('link', { name: 'Settings' }));
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Budget' })).not.toHaveAttribute('aria-current');
   });
 

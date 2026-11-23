@@ -1,18 +1,13 @@
-import { Link, useRouterState } from '@tanstack/react-router';
-import { AccountsIcon, BudgetIcon, MoreIcon, PlusIcon } from '../ui/icons';
-import { cx } from '../ui/cx';
-
-/** Screens reached through More; its tab is active on them too. */
-export const MORE_PATHS = ['/more', '/scheduled', '/payees', '/settings'];
+import { Link } from '@tanstack/react-router';
+import { AccountsIcon, BudgetIcon, PlusIcon, SettingsIcon } from '../ui/icons';
 
 const tab = 'flex flex-1 flex-col items-center gap-0.5 py-2 text-xs font-medium';
 // Exactly one colour class at a time: two text colours on one element would leave the winner to CSS order.
 const active = { className: 'text-brand', 'aria-current': 'page' } as const;
 const inactive = { className: 'text-gray-500' } as const;
 
-/** Spec §11: Budget · Accounts · ＋ (new transaction) · More. */
+/** Budget · Accounts · ＋ (new transaction) · Settings. */
 export function BottomNav() {
-  const inMore = useRouterState({ select: (s) => MORE_PATHS.some((p) => s.location.pathname.startsWith(p)) });
   return (
     <nav
       aria-label="Main"
@@ -35,9 +30,9 @@ export function BottomNav() {
           <PlusIcon className="size-7" />
         </Link>
       </div>
-      <Link to="/more" className={cx(tab, inMore ? 'text-brand' : 'text-gray-500')} aria-current={inMore ? 'page' : undefined}>
-        <MoreIcon />
-        More
+      <Link to="/settings" className={tab} activeProps={active} inactiveProps={inactive}>
+        <SettingsIcon />
+        Settings
       </Link>
     </nav>
   );

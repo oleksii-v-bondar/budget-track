@@ -38,8 +38,7 @@ test('sign in, open Settings, sign out and sign in again', async ({ page }) => {
   await expect(page.getByRole('alert')).toHaveText('Wrong username or password.');
   await signIn(page);
 
-  // 2. Settings through More, then sign out.
-  await page.getByRole('link', { name: 'More' }).click();
+  // 2. Settings from the bottom navigation, then sign out.
   await page.getByRole('link', { name: 'Settings' }).click();
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await page.getByRole('button', { name: 'Sign out' }).click();

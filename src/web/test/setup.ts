@@ -8,6 +8,8 @@ window.scrollTo = () => {};
 // Vitest runs without globals, so Testing Library can't register its own cleanup.
 afterEach(() => {
   cleanup();
+  // The Budget screen remembers collapsed groups in localStorage.
+  localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
