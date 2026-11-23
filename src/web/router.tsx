@@ -6,13 +6,18 @@ import {
   Outlet,
   redirect,
   type RouterHistory,
+  useNavigate,
+  useParams,
   useSearch,
 } from '@tanstack/react-router';
 import { useState } from 'react';
+import { AccountsScreen } from './accounts/accounts-screen';
 import { LoginScreen } from './auth/login-screen';
 import { BudgetScreen } from './budget/budget-screen';
 import { thisMonth } from './lib/format';
 import { authStatusQuery } from './lib/query';
+import { filtersFromSearch } from './register/filters';
+import { RegisterScreen } from './register/register-screen';
 import { SettingsScreen } from './settings/settings-screen';
 import { AppShell, AuthLayout } from './shell/app-shell';
 import { OfflineBanner } from './shell/offline-banner';
@@ -76,6 +81,26 @@ const appLayout = createRoute({
   component: AppShell,
 });
 
+function AccountRegister() {
+  const { accountId = '' } = useParams({ strict: false });
+  const filters = filtersFromSearch(useSearch({ strict: false }));
+  const navigate = useNavigate();
+  return (
+    <RegisterScreen
+      key={accountId}
+      accountId={accountId}
+      filters={filters}
+      onFiltersChange={(search) => void navigate({ to: '/accounts/$accountId', params: { accountId }, search })}
+    />
+  );
+}
+
+function AllAccountsRegister() {
+  const filters = filtersFromSearch(useSearch({ strict: false }));
+  const navigate = useNavigate();
+  return <RegisterScreen filters={filters} onFiltersChange={(search) => void navigate({ to: '/transactions', search })} />;
+}
+
 /** `/budget?month=YYYY-MM`; without a (valid) month it shows this device's current month. */
 const budgetRoute = createRoute({
   getParentRoute: () => appLayout,
@@ -105,7 +130,21 @@ const appRoutes = [
     getParentRoute: () => appLayout,
     path: 'accounts',
     staticData: { title: 'Accounts' },
-    component: () => <PlaceholderScreen name="Accounts" />,
+    component: AccountsScreen,
+  }),
+  createRoute({
+    getParentRoute: () => appLayout,
+    path: 'accounts/$accountId',
+    staticData: { title: 'Account' },
+    validateSearch: filtersFromSearch,
+    component: AccountRegister,
+  }),
+  createRoute({
+    getParentRoute: () => appLayout,
+    path: 'transactions',
+    staticData: { title: 'All accounts' },
+    validateSearch: filtersFromSearch,
+    component: AllAccountsRegister,
   }),
   createRoute({
     getParentRoute: () => appLayout,
