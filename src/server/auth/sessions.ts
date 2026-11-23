@@ -56,18 +56,24 @@ export async function deleteSession(db: Executor, id: string): Promise<void> {
   await db.delete(session).where(eq(session.id, id));
 }
 
+/**
+ * Lax, not Strict: the bank's redirect back to /api/bank/callback is a top-level GET from another site, and it needs
+ * the session. Lax still keeps the cookie off cross-site subrequests and non-GET navigations, every non-GET request
+ * must carry the CSRF header (csrfGuard), and the one GET that writes (the callback) also needs the state cookie that
+ * /api/bank/connect set.
+ */
 export function setSessionCookie(c: Context, token: string, secure: boolean): void {
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true,
     secure,
-    sameSite: 'Strict',
+    sameSite: 'Lax',
     path: '/',
     maxAge: SESSION_TTL_MS / 1000,
   });
 }
 
 export function clearSessionCookie(c: Context, secure: boolean): void {
-  deleteCookie(c, SESSION_COOKIE, { httpOnly: true, secure, sameSite: 'Strict', path: '/' });
+  deleteCookie(c, SESSION_COOKIE, { httpOnly: true, secure, sameSite: 'Lax', path: '/' });
 }
 
 interface SessionDeps {

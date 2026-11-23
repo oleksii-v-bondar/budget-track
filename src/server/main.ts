@@ -5,7 +5,8 @@ import { createDatabase } from './db/client';
 import { runMigrations } from './db/migrate';
 import { ensureBudget } from './db/seed';
 import { nbpRates } from './fx/fx-rates';
-import { createApp } from './http/app';
+import { startAutoSync } from './bank/bank-sync';
+import { type AppDeps, createApp } from './http/app';
 import { createLogger } from './logger';
 
 async function main(): Promise<void> {
@@ -17,7 +18,7 @@ async function main(): Promise<void> {
   logger.info('database migrations applied');
   await ensureBudget(database.db, monthIn(config.timeZone, systemClock.now()));
 
-  const app = createApp({
+  const deps: AppDeps = {
     db: database.db,
     config,
     clock: systemClock,
@@ -29,13 +30,16 @@ async function main(): Promise<void> {
       timeZone: config.timeZone,
       baseUrl: config.nbpBaseUrl,
     }),
-  });
+  };
+  const app = createApp(deps);
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     logger.info({ port: info.port }, 'listening');
   });
+  const stopAutoSync = config.aiia ? startAutoSync(deps) : () => {};
 
   const shutdown = (signal: NodeJS.Signals) => {
     logger.info({ signal }, 'shutting down');
+    stopAutoSync();
     server.close(() => {
       database
         .close()

@@ -27,7 +27,26 @@ const EnvSchema = z.object({
     .default('https://api.nbp.pl')
     .transform((url) => url.replace(/\/+$/, '')),
   WEB_DIR: z.string().default('dist/web'),
+  AIIA_CLIENT_ID: z.string().optional(),
+  AIIA_CLIENT_SECRET: z.string().optional(),
+  AIIA_BASE_URL: z
+    .url({ protocol: /^https?$/, error: 'must be an http(s) URL, e.g. https://api.aiia.eu' })
+    .default('https://api.aiia.eu')
+    .transform((url) => url.replace(/\/+$/, '')),
+  AIIA_REDIRECT_URI: z
+    .url({ protocol: /^https?$/, error: 'must be an http(s) URL' })
+    .default('http://localhost:3080/api/bank/callback'),
 });
+
+/** Mastercard Open Banking (the Aiia Data API) for bank sync. */
+export interface AiiaConfig {
+  clientId: string;
+  clientSecret: string;
+  /** e.g. https://api.aiia.eu (no trailing slash). */
+  baseUrl: string;
+  /** Where Aiia sends the browser back to: this server's /api/bank/callback, registered in the Aiia console. */
+  redirectUri: string;
+}
 
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
@@ -47,6 +66,8 @@ export interface Config {
   nbpBaseUrl: string;
   /** The built web app (`npm run build:web`), served for every non-/api path. */
   webDir: string;
+  /** Bank sync; null (feature off) unless both AIIA_CLIENT_ID and AIIA_CLIENT_SECRET are set. */
+  aiia: AiiaConfig | null;
 }
 
 /** Parses and validates the process environment; throws one error listing every invalid variable. */
@@ -65,5 +86,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     migrationsDir: e.MIGRATIONS_DIR,
     nbpBaseUrl: e.NBP_BASE_URL,
     webDir: e.WEB_DIR,
+    aiia:
+      e.AIIA_CLIENT_ID && e.AIIA_CLIENT_SECRET
+        ? {
+            clientId: e.AIIA_CLIENT_ID,
+            clientSecret: e.AIIA_CLIENT_SECRET,
+            baseUrl: e.AIIA_BASE_URL,
+            redirectUri: e.AIIA_REDIRECT_URI,
+          }
+        : null,
   };
 }

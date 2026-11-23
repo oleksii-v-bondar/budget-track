@@ -66,6 +66,7 @@ export const frequency = pgEnum('frequency', [
   'every_other_year',
 ]);
 export const undoState = pgEnum('undo_state', ['done', 'undone']);
+export const bankConnectionStatus = pgEnum('bank_connection_status', ['active', 'reconnect_needed']);
 
 // ---------------------------------------------------------------- settings and auth (spec §4.1)
 
@@ -392,6 +393,36 @@ export const undoEntry = pgTable('undo_entry', {
   changes: jsonb('changes').notNull(),
   state: undoState('state').notNull().default('done'),
   createdAt: instant('created_at').defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------- bank sync (Mastercard Open Banking / Aiia)
+
+/**
+ * The one Aiia consent. Its tokens are stored in plain text: this is a single-user, self-hosted app, and the database
+ * already holds everything the tokens can read (protect the database and its backups accordingly).
+ */
+export const bankConnection = pgTable('bank_connection', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  accessToken: text('access_token').notNull(),
+  refreshToken: text('refresh_token').notNull(),
+  accessExpiresAt: instant('access_expires_at').notNull(),
+  status: bankConnectionStatus('status').notNull().default('active'),
+  createdAt: instant('created_at').defaultNow().notNull(),
+});
+
+/** A bank account the consent covers; `accountId` links it to the Budget Track account it syncs into. */
+export const bankAccount = pgTable('bank_account', {
+  /** Aiia's account id. */
+  id: text('id').primaryKey(),
+  connectionId: uuid('connection_id')
+    .notNull()
+    .references(() => bankConnection.id),
+  name: text('name').notNull(),
+  currency: text('currency'),
+  providerName: text('provider_name'),
+  // Not recorded for undo, so deleting the account (or undoing its creation) may simply unlink it.
+  accountId: uuid('account_id').references(() => account.id, { onDelete: 'set null' }),
+  lastSyncedAt: instant('last_synced_at'),
 });
 
 // ---------------------------------------------------------------- ledger view (spec §4.6)

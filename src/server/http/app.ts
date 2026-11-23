@@ -6,6 +6,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import type { ApiErrorBody } from '../../shared/http';
 import { accountRoutes } from '../accounts/account-routes';
 import { loginRoutes } from '../auth/login-routes';
+import { bankRoutes } from '../bank/bank-routes';
 import { budgetRoutes } from '../budget/budget-routes';
 import { categoryRoutes } from '../categories/category-routes';
 import { groupRoutes } from '../categories/group-routes';
@@ -80,7 +81,8 @@ export function createApp(deps: AppDeps) {
     .route('/api/budget', budgetRoutes(deps))
     .route('/api/payees', payeeRoutes(deps))
     .route('/api/transactions', transactionRoutes(deps))
-    .route('/api/fx', fxRoutes(deps));
+    .route('/api/fx', fxRoutes(deps))
+    .route('/api/bank', bankRoutes(deps));
 
   // Outside the chain above, so the RPC type (App) has only API routes; every API route matches first.
   app.get('*', serveWeb(deps.config.webDir, deps.logger));

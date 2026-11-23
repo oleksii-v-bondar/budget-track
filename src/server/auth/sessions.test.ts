@@ -98,7 +98,7 @@ describe('requireSession', () => {
     expect(cookie).toContain('Max-Age=2592000');
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('Secure');
-    expect(cookie).toContain('SameSite=Strict');
+    expect(cookie).toContain('SameSite=Lax');
   });
 
   it('turns a client away once its session has expired, and clears its cookie', async () => {

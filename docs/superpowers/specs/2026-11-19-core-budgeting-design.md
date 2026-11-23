@@ -584,8 +584,8 @@ the app shell; `/api` is always network-only.
   private network or behind a reverse proxy that limits access.
 - `POST /api/auth/logout` ends the current session; `GET /api/auth/status` (public) returns `{ authenticated }`.
 - The server creates the `app_user` row (the budget's settings) at startup when it is missing.
-- Session cookie: httpOnly, Secure, SameSite=Strict, opaque random token; the DB stores its SHA-256. 30-day sliding
-  expiry. `/status` slides a live session like any authenticated request; a cookie for an unknown or expired session
+- Session cookie: httpOnly, Secure, SameSite=Lax (the bank's redirect back to `/api/bank/callback` needs it), opaque
+  random token; the DB stores its SHA-256. 30-day sliding expiry. `/status` slides a live session like any authenticated request; a cookie for an unknown or expired session
   is cleared (`Max-Age=0`) by `/status` and by the 401 of any private route.
 
 **Requests**

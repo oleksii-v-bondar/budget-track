@@ -31,6 +31,8 @@ describe('migrations', () => {
       'account',
       'app_user',
       'assignment',
+      'bank_account',
+      'bank_connection',
       'category',
       'category_group',
       'fx_rate',
@@ -168,11 +170,12 @@ describe('schema hardening (P2b1)', () => {
     expect(row?.micros).toBe(0);
   });
 
-  it('has no ON DELETE actions, which would bypass the undo recorder', async () => {
+  it('has no ON DELETE actions on recorded tables, which would bypass the undo recorder', async () => {
     const rows = await t.db.execute<{ conname: string }>(
       sql`select conname from pg_constraint where contype = 'f' and confdeltype <> 'a'`,
     );
-    expect(rows.map((r) => r.conname)).toEqual([]);
+    // bank_account isn't recorded: deleting its linked account just unlinks it.
+    expect(rows.map((r) => r.conname)).toEqual(['bank_account_account_id_account_id_fk']);
   });
 });
 

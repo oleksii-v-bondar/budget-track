@@ -20,6 +20,7 @@ describe('loadConfig', () => {
       migrationsDir: 'drizzle',
       nbpBaseUrl: 'https://api.nbp.pl',
       webDir: 'dist/web',
+      aiia: null,
     });
   });
 
@@ -33,6 +34,9 @@ describe('loadConfig', () => {
       MIGRATIONS_DIR: '/app/drizzle',
       NBP_BASE_URL: 'http://localhost:8081/',
       WEB_DIR: '/app/web',
+      AIIA_CLIENT_ID: 'id',
+      AIIA_CLIENT_SECRET: 'secret',
+      AIIA_BASE_URL: 'https://api-sandbox.aiia.eu/',
     });
     expect(config).toMatchObject({
       port: 8080,
@@ -42,6 +46,12 @@ describe('loadConfig', () => {
       migrationsDir: '/app/drizzle',
       nbpBaseUrl: 'http://localhost:8081',
       webDir: '/app/web',
+      aiia: {
+        clientId: 'id',
+        clientSecret: 'secret',
+        baseUrl: 'https://api-sandbox.aiia.eu',
+        redirectUri: 'http://localhost:3080/api/bank/callback',
+      },
     });
   });
 
