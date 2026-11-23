@@ -1,18 +1,23 @@
-# Budget Track: roadmap
+# Budget Track: status
 
-Status as of 2026-11-23. The project was simplified: one user signs in with a username and password from the
-environment (`APP_USERNAME`, `APP_PASSWORD`); one backend and one frontend, no setup wizard, authenticator app,
-recovery codes or sign-in lockout.
+As of 2026-11-23, Budget Track is a single-user YNAB-style budget app: one backend (Hono + Postgres) and one frontend
+(React PWA). The owner signs in with a username and password from the environment (`APP_USERNAME`, `APP_PASSWORD`).
 
-Done: the budget engine (`src/engine`), the server API, and the web app's shell with sign-in and Settings (sign out).
+Done:
+- **Budget:** month switcher, Ready to Assign with a breakdown and auto-assign, filters, groups and categories with
+  Available pills.
+- **Category sheet:** assign keypad, move money, targets, activity, note and hide. Also edit mode and the month note.
+- **Credit cards:** payment categories with "Need X to pay in full".
+- **Accounts:** add, edit, close/reopen and delete accounts; foreign-currency accounts with NBP rates and revalue.
+- **Register:** search, filters, bulk actions, reconcile.
+- **Transaction sheet:** payee autocomplete, category picker, transfers, splits, FX rate, flag, cleared and delete.
+  Future dates become one-time scheduled entries.
+- **Undo/redo** for every change.
 
-Remaining work is the YNAB screens:
-- Budget
-- Accounts and the register
-- Transactions
-- Targets
-- Credit cards
-- FX
+Possible next steps, only if wanted:
+- Bank sync through Mastercard Open Banking.
+- Repeating scheduled transactions.
+- Reports.
 
-The old phase plans (`docs/superpowers/plans/`, the `*-plan` branches) and `p2-carry-over.md` are superseded: read
-them for ideas only, and leave out anything about setup, the authenticator app, recovery codes or rate limiting.
+The old phase plans (`docs/superpowers/plans/`, the `*-plan` branches) and `p2-carry-over.md` are superseded. Use them
+for ideas only.
