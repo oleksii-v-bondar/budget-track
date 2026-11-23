@@ -2,16 +2,6 @@ import { type ErrorComponentProps, Link, useRouter } from '@tanstack/react-route
 import { errorMessage } from '../lib/commands';
 import { Button } from '../ui/button';
 
-/** Stands in for a screen that isn't built yet. */
-export function PlaceholderScreen({ name }: { name: string }) {
-  return (
-    <div className="px-4 py-12 text-center text-gray-500">
-      <p className="font-medium text-gray-700">{name}</p>
-      <p>This screen isn't built yet.</p>
-    </div>
-  );
-}
-
 export function NotFoundScreen() {
   return (
     <div className="mx-auto max-w-[480px] px-4 py-12 text-center">

@@ -10,6 +10,7 @@ import { RevalueForm } from '../accounts/revalue';
 import { accountsQuery } from '../accounts/accounts-api';
 import { formatDate, formatMoney } from '../lib/format';
 import { categoriesQuery, payeesQuery } from '../transactions/lookups';
+import { TransactionForm } from '../transactions/transaction-form';
 import { Button } from '../ui/button';
 import { cx } from '../ui/cx';
 import { CloseIcon } from '../ui/icons';
@@ -36,6 +37,8 @@ function Balance({ label, minor, currency }: { label: string; minor: number; cur
 /** The register header's actions: compact, in one row that scrolls sideways on a narrow phone. */
 const HEADER_ACTION =
   'inline-flex min-h-9 shrink-0 items-center rounded-full bg-gray-100 px-3 text-sm font-semibold text-gray-800 hover:bg-gray-200';
+const HEADER_PRIMARY =
+  'inline-flex min-h-9 shrink-0 items-center rounded-full bg-brand px-3 text-sm font-semibold text-white hover:bg-brand-dark';
 
 /** Spec §11 Register header: the account's cleared, uncleared and working balance, in its currency. */
 function RegisterHeader({ account, balance }: { account: AccountDto; balance: AccountBalances }) {
@@ -60,6 +63,15 @@ function RegisterHeader({ account, balance }: { account: AccountDto; balance: Ac
         <p className="mt-1 text-right text-sm text-gray-500">≈ {formatMoney(account.balanceAtLatestRate)}</p>
       )}
       <div className="mt-3 flex gap-2 overflow-x-auto">
+        {!account.closed && (
+          <Link
+            to="/transactions/new"
+            search={{ accountId: account.id }}
+            className={HEADER_PRIMARY}
+          >
+            Add transaction
+          </Link>
+        )}
         {!account.closed && (
           <button type="button" className={HEADER_ACTION} onClick={() => setOpen('reconcile')}>
             Reconcile
@@ -254,10 +266,11 @@ interface RegisterListProps {
   transactions: TransactionDto[];
   accounts: Map<string, AccountDto>;
   showAccount: boolean;
+  onOpen: (transaction: TransactionDto) => void;
   selection: Selection | null;
 }
 
-function RegisterList({ transactions, accounts, showAccount, selection }: RegisterListProps) {
+function RegisterList({ transactions, accounts, showAccount, onOpen, selection }: RegisterListProps) {
   return groupByDate(transactions).map((day) => (
     <section key={day.date} aria-label={formatDate(day.date)}>
       <h3 className="bg-gray-100 px-4 py-1 text-xs font-semibold text-gray-500">{formatDate(day.date)}</h3>
@@ -281,7 +294,9 @@ function RegisterList({ transactions, accounts, showAccount, selection }: Regist
                   <span className="min-w-0 flex-1">{row}</span>
                 </label>
               ) : (
-                row
+                <button type="button" className="block w-full text-left hover:bg-gray-50" onClick={() => onOpen(transaction)}>
+                  {row}
+                </button>
               )}
             </li>
           );
@@ -308,6 +323,7 @@ export function RegisterScreen({
   // While other filters load, the last results stay on screen.
   const register = useInfiniteQuery({ ...registerQuery(registerParams(accountId, filters)), placeholderData: keepPreviousData });
   const [selected, setSelected] = useState<Set<string> | null>(null);
+  const [editing, setEditing] = useState<TransactionDto | null>(null);
   const toggle = (id: string) =>
     setSelected((current) => {
       const next = new Set(current);
@@ -355,6 +371,7 @@ export function RegisterScreen({
           transactions={transactions}
           accounts={byId}
           showAccount={account === null}
+          onOpen={setEditing}
           selection={selected && { ids: selected, toggle }}
         />
       )}
@@ -370,6 +387,9 @@ export function RegisterScreen({
           onDone={() => setSelected(null)}
         />
       )}
+      <Sheet open={editing !== null} onClose={() => setEditing(null)} title="Edit transaction">
+        {editing && <TransactionForm transaction={editing} onDone={() => setEditing(null)} />}
+      </Sheet>
     </div>
   );
 }

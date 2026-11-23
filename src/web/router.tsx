@@ -21,7 +21,8 @@ import { RegisterScreen } from './register/register-screen';
 import { SettingsScreen } from './settings/settings-screen';
 import { AppShell, AuthLayout } from './shell/app-shell';
 import { OfflineBanner } from './shell/offline-banner';
-import { ErrorScreen, NotFoundScreen, PlaceholderScreen } from './shell/screens';
+import { ErrorScreen, NotFoundScreen } from './shell/screens';
+import { NewTransactionScreen, prefillFromSearch } from './transactions/new-transaction-screen';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -150,7 +151,8 @@ const appRoutes = [
     getParentRoute: () => appLayout,
     path: 'transactions/new',
     staticData: { title: 'New transaction' },
-    component: () => <PlaceholderScreen name="New transaction" />,
+    validateSearch: prefillFromSearch,
+    component: NewTransactionScreen,
   }),
   createRoute({
     getParentRoute: () => appLayout,
