@@ -54,7 +54,9 @@ export function LoginScreen() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!authenticatorEnabled) login.mutate({ password });
+    // An empty code sends the password alone: the cached status may be stale (the authenticator turned off elsewhere),
+    // and if one is on the server answers 422 `code_required`, which keeps the code field.
+    if (!authenticatorEnabled || code === '') login.mutate({ password });
     else login.mutate(factor === 'totp' ? { password, totpCode: code } : { password, recoveryCode: code });
   };
 

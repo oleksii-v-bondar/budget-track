@@ -60,7 +60,8 @@ export function invalidateData(queryClient: QueryClient): Promise<void> {
 
 /**
  * After signing out (or a 401): forgets every budget-data query and records that nobody is signed in. Whether sign-in
- * asks for a code stays as cached; the sign-in form learns otherwise from a 422 `code_required`.
+ * asks for a code stays as cached; the sign-in form sends the password alone when no code is typed, and learns from a
+ * 422 `code_required` that one is needed.
  */
 export function forgetSession(queryClient: QueryClient): void {
   queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });

@@ -63,6 +63,19 @@ describe('sign-in with an authenticator', () => {
     expect(requests.find((r) => r.method === 'POST')!.body).toEqual({ password: PASSWORD, totpCode: '123456' });
   });
 
+  it('sends the password alone when the code is left empty, so a stale status never blocks sign-in', async () => {
+    const user = userEvent.setup();
+    const { requests } = fakeApi({
+      ...signedOut(true),
+      'POST /api/auth/login': { body: { authenticatorEnabled: false, recoveryCodesRemaining: 0 } },
+    });
+    const { history } = renderApp('/login');
+    await user.type(await screen.findByLabelText('Password'), PASSWORD);
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+    await waitFor(() => expect(history.location.pathname).toBe('/budget'));
+    expect(requests.find((r) => r.method === 'POST')!.body).toEqual({ password: PASSWORD });
+  });
+
   it('signs in with a recovery code instead, and warns when few are left', async () => {
     const user = userEvent.setup();
     const { requests } = fakeApi({
