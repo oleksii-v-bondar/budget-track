@@ -40,6 +40,24 @@ Rough effort: 30–40 minutes per task with review, about 20 minutes in fast mod
    landed since.
 
 ### Known adjustments per phase (because the execution order changed)
+**Every later phase: the authenticator app is optional** (branch `auth-optional-totp`; the plans predate it).
+- Setup no longer enrolls an authenticator: `POST /api/auth/setup` takes `{ setupToken, password }` and returns
+  `{ ok: true }`, and `POST /api/auth/setup/totp` is gone. Any plan's e2e step or test helper that scans a QR code,
+  types a code or saves recovery codes at setup must use password-only setup: setup token → password → "Finish
+  setup".
+- Sign-in, the password change and other re-authentication take the password only unless an authenticator is on;
+  the sign-in form has no code field then. The server helper `setUpBudget(ctx)` returns nothing (no `totpSecret` or
+  `recoveryCodes`); a test that needs codes calls `enableAuthenticator(ctx)` first.
+- `AuthStatus` has `authenticatorEnabled`; web fixtures (`SIGNED_IN`) carry it, and `useEnterApp()` takes
+  `{ href, authenticatorEnabled }`. Settings has an "Authenticator app" section (Turn on / Replace / New recovery
+  codes / Turn off) instead of "Change authenticator app" and "New recovery codes" under Security.
+- Setup, every sign-in and every re-authentication count toward 5 attempts per minute per IP. The smoke test already
+  makes six and waits a minute before the last; extensions that add sign-ins must wait too.
+- **P2d2**: the export test reads `totpSecret` and `recoveryCodes` from `setUpBudget`; take them from
+  `enableAuthenticator(ctx)` instead, and skip the NULL `totpSecretEnc` in its "no secret in the file" loop.
+- **P3d**: its recovery-code e2e step must first turn the authenticator on (Settings → Authenticator app → Turn on,
+  code from otplib with the shown key, keep the ten codes), or drop that step.
+
 **P2d2.** It was written before P2d1 and P3a were executed.
 - Use P2d1's real `FxRates` (`deps.fx.quote`). The prototype's stand-in is not in the plan.
 - `PlanContext.defaults` now takes `{ date, rates }`, so the schedule job passes the occurrence date. P2d1's way of

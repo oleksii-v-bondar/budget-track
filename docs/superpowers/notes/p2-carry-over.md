@@ -348,3 +348,16 @@ These items were found in the P1 final review and deferred. Fold them into the P
 - P2d2: add `'totpLastStep'` to the export's omit list in `src/server/export/export.ts` (P2d2 runs after P3a, so
   its plan doesn't know the column); until P2d2 lands, Settings' "Download JSON export" link (`/api/export`) is a
   404.
+
+## Optional authenticator (`auth-optional-totp`)
+- The authenticator app (TOTP) is optional and off by default. Migration 0005 makes `app_user.totp_secret_enc`
+  nullable (NULL = none); setup takes the setup token and a password only. `GET /api/auth/status` reports
+  `authenticatorEnabled`. Settings turns it on (`POST /api/auth/totp`: the password and a code from the new secret;
+  returns ten recovery codes once) or off (`POST /api/auth/totp/disable`: the password and the current code or a
+  recovery code; clears the secret, recovery codes and `totp_last_step`). Both sign out other sessions.
+- `ENCRYPTION_KEY` stays required: it encrypts the secret once an authenticator is on.
+- Open: the global lockout (above) matters more without a second factor: a guessed password alone signs in. Keep the
+  app behind a private network or an access-limiting reverse proxy, or turn the authenticator on, until per-device
+  counting lands.
+- P2d2: its export already omits `totpSecretEnc` and `recoveryCodeHashes`, but its export test takes `totpSecret`
+  and `recoveryCodes` from `setUpBudget`: call `enableAuthenticator(ctx)` for them (see the roadmap).

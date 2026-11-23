@@ -28,7 +28,7 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   `TESTCONTAINERS_RYUK_DISABLED` and stops the container itself, including when setup fails.
 - Server tests: `createTestDatabase()` clones a migrated template DB for each call (`{ empty: true }` gives an
   unmigrated one); `createTestApp(db, { now })` returns `{ app, client, clock, config }`; `setUpBudget(testApp)`
-  performs first-run setup and leaves `client` signed in; `TestClient(app, ip)` keeps cookies and sends the CSRF
+  performs first-run setup (a password, no authenticator) and leaves `client` signed in; `TestClient(app, ip)` keeps cookies and sends the CSRF
   header.
 
 ### Drizzle / postgres.js
@@ -74,6 +74,17 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   SQLSTATE 55P03). Any new advisory lock needs a different key; list keys in this file:
   - `727274001`: login and re-authentication.
   - `727274002`: user commands and undo/redo (`COMMAND_LOCK_KEY` in `src/server/commands/run-command.ts`).
+- The authenticator app is optional and off by default: `app_user.totp_secret_enc` is NULL without one
+  (`hasAuthenticator(user)` in `second-factor.ts`). Without one, `verifySecondFactor` passes and ignores any code
+  sent; with one, `assertFactorSent` refuses a check that sends no code (422 `code_required`), before the password
+  check, so it isn't an attempt. In `security-routes.ts`, `reauthenticated(ip, credentials, apply,
+  { requireAuthenticator })` re-checks the password (and the factor while one is on) for every Settings change;
+  `requireAuthenticator` answers 422 `no_authenticator` (turning it off, new recovery codes). `POST /api/auth/totp`
+  turns it on (returns `{ ok, recoveryCodes }`) or, while one is on, replaces it (`{ ok }`).
+- Server tests: `setUpBudget(ctx)` leaves no authenticator; `enableAuthenticator(ctx)` (`src/server/test/auth.ts`)
+  turns one on through Settings and returns `{ totpSecret, recoveryCodes }`. Its confirming code is used up. Setup,
+  each sign-in and each re-authentication count toward the 5 attempts per minute per IP, so a test that makes more
+  from one client moves the clock on or signs in from other `TestClient` IPs.
 - Each authenticator code works once: `verifyTotp` returns the code's time step (or null), `verifySecondFactor`
   refuses a step at or before `app_user.totp_last_step`, and a passed check stores `spentFactor(user, result)` (the
   recovery codes left and the newest step). Server tests that sign in or re-authenticate more than once take each code
@@ -181,8 +192,11 @@ P3b and P3c build their screens on these conventions.
   CSRF header on every request. The server's `App` type has only the chained `/api` routes: keep chaining routers,
   and keep `app.get('*', serveWeb(…))` outside the chain.
 - **Query cache** (`src/web/lib/query.ts`). Keys are `[area, ...params]` (`['budget', '2026-11']`, `['accounts']`);
-  the `auth` area holds only the auth status, which the route guards read (`authStatusQuery`, never stale; setup,
-  sign-in and sign-out set it). Reads are fresh for 30 s and retry twice after network and 5xx errors.
+  the `auth` area holds only the auth status, which the route guards, the sign-in form and Settings read
+  (`authStatusQuery`, never stale). Setup, sign-in, sign-out and turning the authenticator on or off set it with
+  `setAuthStatus(queryClient, change)`, which keeps what `change` leaves out; `useEnterApp()({ href,
+  authenticatorEnabled })` records a new session. The sign-in form shows the code field only when
+  `authenticatorEnabled` is true, and a 422 `code_required` turns it on. Reads are fresh for 30 s and retry twice after network and 5xx errors.
 - **Commands.** No optimistic updates: run every undoable command through `useCommand(fn)`
   (`src/web/lib/commands.ts`). It waits for the server, invalidates every non-auth query (`invalidateData`), reads
   `GET /api/undo` and shows a toast with the command's undo label and Undo (if that read fails, there is no toast, but
@@ -220,7 +234,10 @@ P3b and P3c build their screens on these conventions.
   `vi.spyOn(navigator, 'onLine', 'get')`. `src/web/test/setup.ts` restores mocks and stubbed globals after each test.
 - **End to end.** `npm run test:e2e` builds, then `e2e/global-setup.ts` starts Postgres (Testcontainers, Ryuk off)
   and `dist/server/main.js` on a free port, and Playwright runs chromium at 390×844 (install it once with
-  `npx playwright install chromium`). Each sign-in after the first needs a code from a later 30 s step.
+  `npx playwright install chromium`). Setup enrolls no authenticator: the smoke test turns one on in Settings
+  (codes from otplib with the shown key) and off again. While it is on, each sign-in after the first needs a code
+  from a later 30 s step. Setup, sign-ins and re-authentications all count toward 5 per minute per IP, so the
+  smoke test's sixth waits until setup's is a minute old.
 - **Serving and assets.** `serveWeb(webDir)` (`src/server/http/web.ts`) serves the build; `testConfig` points
   `webDir` at `src/server/test/web-fixture`. The icons are generated by `npm run icons` (`scripts/generate-icons.ts`)
   and committed. The service worker activates at once and claims open pages (`skipWaiting`, `clientsClaim` in

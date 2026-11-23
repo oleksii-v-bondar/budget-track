@@ -6,7 +6,7 @@ A personal, single-user budgeting app that follows YNAB's rules, with PLN as the
 Status: the budget engine (`src/engine`), the server API and the web app's foundation are done. The server covers
 first-run setup and sign-in, accounts (with NBP exchange rates, revaluation, reconciliation and loans), categories,
 the budget with targets and auto-assign, payees and transactions. The web app is an installable phone web app with
-first-run setup, sign-in with password + authenticator app, and Settings. The budget, accounts and transaction
+first-run setup, sign-in with a password (plus an optional authenticator app, off by default), and Settings. The budget, accounts and transaction
 screens are next.
 
 Scheduled transactions and the JSON export endpoint (`GET /api/export`) arrive with P2d2, which hasn't run yet; until
@@ -26,8 +26,10 @@ docker compose up -d --build
 curl http://localhost:3000/healthz   # {"status":"ok"}
 ```
 
-Then open http://localhost:3000 and set up the budget with the `SETUP_TOKEN` from `.env`, a password and an
-authenticator app. Set `APP_PORT` in `.env` if port 3000 is already taken.
+Then open http://localhost:3000 and set up the budget: enter the `SETUP_TOKEN` from `.env`, then choose a password
+(at least 12 characters). Setup signs you in. Sign-in asks for the password only; to also require a code from an
+authenticator app, turn it on in Settings → Authenticator app (scan the QR code, confirm a code, and save the ten
+recovery codes). Set `APP_PORT` in `.env` if port 3000 is already taken.
 
 The port is bound to 127.0.0.1 only. For remote access, put an HTTPS reverse proxy (e.g. Caddy) in front, and only
 then set `TRUST_PROXY=true`.
@@ -74,7 +76,7 @@ docker rm -f $(docker ps -aq --filter label=org.testcontainers=true)
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `DATABASE_URL` | yes | | Postgres connection URL |
-| `ENCRYPTION_KEY` | yes | | 32 random bytes, base64 (`openssl rand -base64 32`); encrypts the authenticator secret |
+| `ENCRYPTION_KEY` | yes | | 32 random bytes, base64 (`openssl rand -base64 32`); encrypts the authenticator secret once one is turned on |
 | `SETUP_TOKEN` | yes | | One-time token for first-run setup (16–256 characters) |
 | `PORT` | no | `3000` | HTTP port |
 | `TZ` | no | `Europe/Warsaw` | Time zone for "today" and month boundaries |

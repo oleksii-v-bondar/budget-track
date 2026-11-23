@@ -25,7 +25,7 @@ Budget Track is a personal, single-user clone of YNAB, hosted in the cloud and u
 | Client | Online-only installable PWA; phone layout only (desktop shows the phone layout centered, max ~480px) |
 | Currency | Budget currency PLN; foreign-currency accounts allowed, every transaction stores native amount + PLN base amount + FX rate |
 | FX source | NBP table A mid rate for the transaction date (falls back to the last published day), manual override |
-| Auth | Password + TOTP, recovery codes |
+| Auth | Password; optional authenticator app (TOTP) with recovery codes, off by default |
 | Hosting | Undecided; deliverable is a portable Docker image + `docker-compose.yml` |
 | UI language | English; Polish number/currency formatting (`1 234,56 zł`), dates `dd.MM.yyyy` |
 | Time zone | `Europe/Warsaw` for "today", scheduled jobs and month boundaries |
@@ -68,11 +68,11 @@ on each request; at single-user scale (≈10 years × 150 categories) this is we
 - Dates are calendar dates (`date` type, no time). Months are represented as the first day of the month.
 - Sign convention: positive = inflow, negative = outflow, from the account's perspective.
 
-**Config (env):** `DATABASE_URL`, `ENCRYPTION_KEY` (32-byte key, base64, AES-256-GCM for the TOTP secret), `SETUP_TOKEN`,
-`TZ=Europe/Warsaw`, `PORT`, `COOKIE_SECURE` (default true), `TRUST_PROXY` (default false; take the client IP from
-`X-Forwarded-For`), `LOG_LEVEL`, `MIGRATIONS_DIR`, `NBP_BASE_URL` (default `https://api.nbp.pl`), `WEB_DIR` (the
-built web app, default `dist/web`). Sessions are opaque random tokens stored hashed, so no session-signing secret is
-needed.
+**Config (env):** `DATABASE_URL`, `ENCRYPTION_KEY` (32-byte key, base64, AES-256-GCM for the TOTP secret; required
+even while no authenticator is on), `SETUP_TOKEN`, `TZ=Europe/Warsaw`, `PORT`, `COOKIE_SECURE` (default true),
+`TRUST_PROXY` (default false; take the client IP from `X-Forwarded-For`), `LOG_LEVEL`, `MIGRATIONS_DIR`,
+`NBP_BASE_URL` (default `https://api.nbp.pl`), `WEB_DIR` (the built web app, default `dist/web`). Sessions are
+opaque random tokens stored hashed, so no session-signing secret is needed.
 
 ## 3. Domain concepts
 
@@ -104,8 +104,9 @@ Foreign keys have no `ON DELETE` actions: commands delete or re-point child rows
 change.
 
 ### 4.1 Settings and auth
-- `app_user` (at most one row): `password_hash` (argon2id), `totp_secret_enc`, `recovery_code_hashes text[]`,
-  `totp_last_step` (the RFC 6238 time step of the newest authenticator code accepted, for replay protection),
+- `app_user` (at most one row): `password_hash` (argon2id), `totp_secret_enc` (null while no authenticator app is on,
+  the default), `recovery_code_hashes text[]` (empty without an authenticator), `totp_last_step` (the RFC 6238 time
+  step of the newest authenticator code accepted, for replay protection; null without an authenticator),
   `base_currency` (`PLN`), `budget_start_month`.
 - `session`: `token_hash` (SHA-256 of a 256-bit random token), `expires_at`, `last_seen_at`, `user_agent`.
 - `login_attempt`: `at`, `success`, `ip` (for rate limiting and lockout).
@@ -570,10 +571,14 @@ The header has Undo/Redo, and every successful command shows a toast with "Undo"
 
 **Payees:** list with search; rename, merge, delete.
 
-**Settings:** change password, regenerate TOTP secret and recovery codes, log out all sessions, download JSON export.
-Each security action opens a sheet that asks for the password and the current authenticator code (a recovery code
-also works for a new authenticator); "Sign out everywhere" asks for confirmation. The export is a plain download link
-to `GET /api/export`.
+**Settings:** change password; the authenticator app (off by default): turn it on, or while it is on replace it, make
+new recovery codes, or turn it off; log out all sessions; download JSON export.
+- Each security action opens a sheet that asks for the password, plus the current authenticator code while one is on
+  (a recovery code also works to replace or turn off the authenticator); "Sign out everywhere" asks for confirmation.
+- The "Authenticator app" section shows Off or On. Turning it on: the password → a new secret as a QR code (inline
+  SVG) and as text → a code from the app → the 10 recovery codes, shown once. Turning it off needs the password and
+  the current code or a recovery code, and a confirmation checkbox.
+- The export is a plain download link to `GET /api/export`.
 
 **Offline:** when offline, a banner appears and every mutating control is disabled. The service worker caches only
 the app shell; `/api` is always network-only.
@@ -588,20 +593,37 @@ the app shell; `/api` is always network-only.
 
 **First-run setup**
 - `/setup` is enabled only while `app_user` is empty and requires `SETUP_TOKEN` (from env), entered on the page.
-- Steps: set password (min 12 chars) → scan TOTP QR (otplib, 30 s step, ±1 window) and confirm a code → 10 recovery
-  codes shown once (stored as argon2 hashes, single-use).
-- The setup page asks for the token first (`POST /api/auth/setup/totp` checks it and returns the new secret), then
-  the password (checked in the browser with the shared schema, sent with the final step), then the QR code with the
-  secret as text in groups of four, then the recovery codes with Copy and Download (a text file). The QR code is
-  drawn as inline SVG, so the CSP needs no `data:` images and the secret never leaves the page.
+- Steps: the setup token → set password (min 12 chars, typed twice) → signed in → the app. Setup enrolls no
+  authenticator: `POST /api/auth/setup` takes `{ setupToken, password }` and creates the owner with no TOTP secret
+  and no recovery codes.
+- The setup page asks for the token first (checked only when the form is sent; a refused token brings its step
+  back), then the password (checked in the browser with the shared schema).
 - Setup-token attempts are rate-limited like sign-ins: a wrong token is recorded as a failed sign-in attempt, so the
   per-IP limit and the lockout below also stop guessing.
 
+**Authenticator app (optional)**
+- Off by default. The owner turns it on in Settings (`POST /api/auth/totp/secret`, then `POST /api/auth/totp` with
+  the password and a code from the new secret: otplib, 30 s step, ±1 window). That stores the secret, returns 10
+  recovery codes once (stored as argon2 hashes, single-use) and signs out other sessions.
+- While it is on, `POST /api/auth/totp` replaces it (the password, the current code or a recovery code, and a code
+  from the new secret; the recovery codes stay), and `POST /api/auth/recovery-codes` makes new codes.
+- `POST /api/auth/totp/disable` turns it off: the password and the current code or a recovery code. It clears the
+  secret, the recovery codes and `totp_last_step`, and signs out other sessions. It and `/recovery-codes` answer 422
+  `no_authenticator` while none is on.
+- The QR code is drawn as inline SVG, so the CSP needs no `data:` images and the secret never leaves the page; the
+  secret is also shown as text in groups of four, and the recovery codes have Copy and Download (a text file).
+
 **Login and sessions**
-- Login is password + TOTP code, or password + recovery code.
+- `GET /api/auth/status` (public) reports `authenticatorEnabled`, so the sign-in page asks for a code only when one is
+  on.
+- Without an authenticator, login is the password only (a code sent is ignored). With one, login is password + TOTP
+  code, or password + recovery code; sending neither is 422 `code_required` (not counted as an attempt), which the
+  sign-in page answers by showing the code field.
+- Re-authentication (password change, new recovery codes, authenticator changes) follows the same rule: the password
+  only without an authenticator, the password and the current factor with one.
 - Each authenticator code works once (RFC 6238 §5.2): a code is accepted only if its time step is after
-  `app_user.totp_last_step`, which every accepted code (sign-in, re-authentication, the code confirming setup or a
-  new authenticator) moves forward. A code from an earlier step is refused even inside the ±1 window.
+  `app_user.totp_last_step`, which every accepted code (sign-in, re-authentication, the code confirming a new
+  authenticator) moves forward. A code from an earlier step is refused even inside the ±1 window.
 - Session cookie: httpOnly, Secure, SameSite=Strict, opaque random token; the DB stores its SHA-256. 30-day sliding
   expiry.
 - `GET /api/auth/status` slides a live session and refreshes its cookie like any authenticated request. A cookie for
@@ -631,12 +653,12 @@ the app shell; `/api` is always network-only.
   service worker is registered from the bundle, zod runs `jitless` (no `new Function`), and images are files or inline
   SVG. The end-to-end test fails on any CSP violation.
 
-**Secrets:** the TOTP secret is encrypted with AES-256-GCM using `ENCRYPTION_KEY`. HTTPS is terminated by the hosting
+**Secrets:** the TOTP secret (when an authenticator is on) is encrypted with AES-256-GCM using `ENCRYPTION_KEY`. HTTPS is terminated by the hosting
 platform or reverse proxy.
 
 **Settings actions:** "log out all sessions" deletes every session row; changing the password also logs out all other
-sessions. Changing the authenticator requires the password plus the current authenticator code or a recovery code, and
-signs out other sessions.
+sessions. Turning the authenticator on needs the password and a code from the new secret; replacing it or turning it
+off needs the password plus the current authenticator code or a recovery code. All three sign out other sessions.
 
 ## 13. Error handling
 
@@ -689,7 +711,8 @@ signs out other sessions.
 - Each command handler: happy path plus its domain errors.
 - Undo → redo round-trips restore an identical DB state, including bulk operations and category delete.
 - Scheduled job catch-up across multiple missed occurrences.
-- Auth: setup guard, TOTP, recovery codes, rate limiting/lockout, CSRF header.
+- Auth: setup guard, password-only sign-in, turning the authenticator on and off, TOTP, recovery codes, rate
+  limiting/lockout, CSRF header.
 - NBP client against a stubbed HTTP server (weekend fallback, 404, timeout).
 - Testcontainers runs with Ryuk disabled (Docker Desktop's Enhanced Container Isolation blocks it); the global teardown stops the container.
 
@@ -697,9 +720,11 @@ signs out other sessions.
 - Component tests (Vitest + Testing Library) for the amount keypad expression parser, split editor and category picker.
 - Playwright smoke test at a 390×844 viewport: setup → login → add checking account → add category →
   assign → add transaction → reconcile → undo.
-  P3a's part (`e2e/smoke.spec.ts`, `npm run test:e2e`): setup → sign out → sign in with a code → sign out everywhere
-  → sign in with a recovery code, with no CSP violation and `/api` never served by the service worker. Chromium only,
-  against the built app and a Testcontainers Postgres; codes come from otplib. Later phases extend it.
+  P3a's part (`e2e/smoke.spec.ts`, `npm run test:e2e`): setup with the token and a password → sign in with the
+  password only → turn the authenticator on in Settings → sign out everywhere → sign in with password + code → turn
+  it off with a recovery code → sign out → sign in with the password only, with no CSP violation and `/api` never
+  served by the service worker. Chromium only, against the built app and a Testcontainers Postgres; codes come from
+  otplib. Later phases extend it.
   `e2e/service-worker.spec.ts` checks that the built service worker activates at once and controls the open page.
 - Unit and component tests for the money/date formatting, the API client's error handling, the query cache rules,
   the component kit and each screen (Vitest `web` project, jsdom, Testing Library, a fake `fetch`).
