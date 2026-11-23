@@ -4,8 +4,9 @@ import { errorMessage } from '../lib/commands';
 import { useOnline } from '../lib/online';
 import { ChevronRightIcon } from '../ui/icons';
 import { useToast } from '../ui/toast';
+import { BankSection } from './bank-section';
 
-/** Settings: signing out. */
+/** Settings: bank connections and signing out. */
 export function SettingsScreen() {
   const online = useOnline();
   const toast = useToast();
@@ -17,16 +18,19 @@ export function SettingsScreen() {
   });
 
   return (
-    <div className="mt-6 border-y border-gray-200">
-      <button
-        type="button"
-        className="flex min-h-14 w-full items-center justify-between px-4 text-left text-base hover:bg-gray-50 disabled:text-gray-400"
-        disabled={!online}
-        onClick={() => signOut.mutate()}
-      >
-        Sign out
-        <ChevronRightIcon className="text-gray-400" />
-      </button>
-    </div>
+    <>
+      <BankSection />
+      <div className="mt-6 border-y border-gray-200">
+        <button
+          type="button"
+          className="flex min-h-14 w-full items-center justify-between px-4 text-left text-base hover:bg-gray-50 disabled:text-gray-400"
+          disabled={!online}
+          onClick={() => signOut.mutate()}
+        >
+          Sign out
+          <ChevronRightIcon className="text-gray-400" />
+        </button>
+      </div>
+    </>
   );
 }

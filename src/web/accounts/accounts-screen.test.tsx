@@ -15,7 +15,7 @@ const euro = account({
   latestRate: { rate: '4.300000', effectiveDate: '2026-11-20' },
   balanceAtLatestRate: 43_000,
 });
-const card = account({ name: 'Visa', type: 'credit_card', balance: balances(-5_000) });
+const card = account({ name: 'Visa', type: 'credit_card', balance: balances(-5_000), unapprovedCount: 2 });
 const old = account({ name: 'Old savings', type: 'savings', closed: true });
 
 async function openAccounts(accounts = [checking, euro, card, old]) {
@@ -35,6 +35,7 @@ describe('accounts screen', () => {
     expect(rest).toEqual([]);
     expect(screen.getByTestId('total-cash')).toHaveTextContent('1 654,56 zł');
     expect(screen.getByTestId('total-credit')).toHaveTextContent('-50,00 zł');
+    expect(screen.getByRole('link', { name: /Visa/ })).toHaveTextContent('VisaCredit card · 2 to approve');
     expect(screen.getByRole('link', { name: /All accounts/ })).toHaveTextContent('1 604,56 zł');
   });
 

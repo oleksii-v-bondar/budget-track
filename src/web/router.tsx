@@ -158,6 +158,9 @@ const appRoutes = [
     getParentRoute: () => appLayout,
     path: 'settings',
     staticData: { title: 'Settings' },
+    // ?bank=error: the bank's consent flow failed (see /api/bank/callback).
+    validateSearch: (search: Record<string, unknown>): { bank?: 'error' } =>
+      search.bank === 'error' ? { bank: 'error' } : {},
     component: SettingsScreen,
   }),
 ] as const;

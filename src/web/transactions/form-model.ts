@@ -47,7 +47,7 @@ export interface FormValues {
   fxRate: string;
   /** Transfers between currencies: the other account's amount, as a positive amount. */
   transferAmount: string;
-  /** Approving a transaction that waits for approval (bank import, #2). */
+  /** Saving approves a transaction that waits for approval (a bank import), like YNAB. */
   approve: boolean;
   /** A split's lines; null for a plain transaction. */
   lines: LineValues[] | null;
@@ -164,7 +164,7 @@ export function editValues(transaction: TransactionDto, categoryId = transaction
       transaction.transfer && transaction.transfer.currency !== transaction.currency
         ? amountToExpression(Math.abs(transaction.transfer.amount))
         : '',
-    approve: false,
+    approve: !transaction.approved,
     lines: transaction.isSplit ? linesOf(transaction.lines, direction) : null,
   };
 }

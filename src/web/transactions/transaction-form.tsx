@@ -399,13 +399,10 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
           checked={values.cleared}
           onChange={(event) => set({ cleared: event.target.checked })}
         />
-        {transaction && !transaction.approved && (
-          <Checkbox label="Approve" checked={values.approve} onChange={(event) => set({ approve: event.target.checked })} />
-        )}
         <FormError message={server.form} />
         {needsConfirmation(failure) && <ConfirmReconciled busy={save.isPending || remove.isPending} onConfirm={confirm} />}
         <Button type="submit" mutating busy={save.isPending} block>
-          {transaction ? 'Save' : 'Add transaction'}
+          {transaction ? (transaction.approved ? 'Save' : 'Approve') : 'Add transaction'}
         </Button>
         {transaction && (
           <Button

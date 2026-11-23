@@ -11,7 +11,8 @@ const nodeModules = `^(node:|(?:${builtinModules.join('|')})(?:/|$))`;
 const intoLayer = (...layers) => `^(?:\\.{1,2}/)*\\.\\./(?:[^/]+/)*(?:${layers.join('|')})(?:/|$)`;
 
 export default defineConfig(
-  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'test-results/**', 'playwright-report/**'] },
+  // .superpowers/ holds local, git-ignored agent scratch files.
+  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'test-results/**', 'playwright-report/**', '.superpowers/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

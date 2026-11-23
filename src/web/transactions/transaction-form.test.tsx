@@ -174,8 +174,8 @@ describe('editing from the register', () => {
     transfer: null,
   });
 
-  async function openSaved(routes: Parameters<typeof fakeApi>[0]) {
-    const api = server({ 'GET /api/transactions': { body: registerPage([saved], { owner: checking }) }, ...routes });
+  async function openSaved(routes: Parameters<typeof fakeApi>[0], shown = saved) {
+    const api = server({ 'GET /api/transactions': { body: registerPage([shown], { owner: checking }) }, ...routes });
     renderApp(`/accounts/${checking.id}`);
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: /Lidl/ }));
@@ -200,6 +200,16 @@ describe('editing from the register', () => {
       { amount: -2_100, confirmReconciled: false },
       { amount: -2_100, confirmReconciled: true },
     ]);
+  });
+
+  it('approves an imported transaction together with its edits', async () => {
+    const imported = { ...saved, cleared: 'cleared' as const, approved: false };
+    const { user, sheet, requests } = await openSaved({ [`PATCH /api/transactions/${saved.id}`]: { body: imported } }, imported);
+    await user.click(within(sheet).getByRole('button', { name: 'Category: Groceries' }));
+    await user.click(screen.getByRole('option', { name: /Rent/ }));
+    await user.click(within(sheet).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(posted(requests).map((r) => r.body)).toEqual([{ categoryId: rent.id, approved: true, confirmReconciled: false }]);
   });
 
   it('deletes it (confirming, as it is reconciled)', async () => {

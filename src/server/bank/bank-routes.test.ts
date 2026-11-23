@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { asc, eq, isNotNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AccountListResponse } from '../../shared/api/accounts';
 import type { BankStatus } from '../../shared/api/bank';
 import { bankAccount, bankConnection, payee, transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
@@ -302,6 +303,11 @@ describe('POST /api/bank/sync', () => {
       },
     ]);
     expect(await (await app.client.get('/api/undo')).json()).toEqual({ undo: { label: 'Bank sync' }, redo: null });
+    const { accounts } = (await (await app.client.get('/api/accounts')).json()) as AccountListResponse;
+    expect(accounts.map((a) => [a.name, a.unapprovedCount])).toEqual([
+      ['PKO', 2],
+      ['Revolut', 1],
+    ]);
     const after = await snapshot(t.db);
     expect((await status(app)).accounts.map((a) => a.lastSyncedAt)).toEqual([
       '2026-11-20T10:00:00.000Z',

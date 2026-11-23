@@ -12,9 +12,10 @@ interface Sums {
   uncleared: number;
   clearedBase: number;
   unclearedBase: number;
+  unapproved: number;
 }
 
-const ZERO: Sums = { cleared: 0, uncleared: 0, clearedBase: 0, unclearedBase: 0 };
+const ZERO: Sums = { cleared: 0, uncleared: 0, clearedBase: 0, unclearedBase: 0, unapproved: 0 };
 
 const balances = (cleared: number, uncleared: number): AccountBalances => ({
   cleared,
@@ -34,6 +35,7 @@ async function sumsByAccount(db: Executor, accountIds: string[]): Promise<Map<st
       uncleared: sql<number>`coalesce(sum(${transaction.amount}) filter (where not ${isCleared}), 0)::bigint`,
       clearedBase: sql<number>`coalesce(sum(${transaction.amountBase}) filter (where ${isCleared}), 0)::bigint`,
       unclearedBase: sql<number>`coalesce(sum(${transaction.amountBase}) filter (where not ${isCleared}), 0)::bigint`,
+      unapproved: sql<number>`(count(*) filter (where not ${transaction.approved}))::int`,
     })
     .from(transaction)
     .where(and(inArray(transaction.accountId, accountIds), isNull(transaction.deletedAt)))
@@ -99,6 +101,7 @@ export async function listAccounts(
       balanceBase: balances(s.clearedBase, s.unclearedBase),
       latestRate,
       balanceAtLatestRate: atRate(s.cleared + s.uncleared, latestRate),
+      unapprovedCount: booked.unapproved,
     };
   });
 }

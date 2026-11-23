@@ -62,6 +62,16 @@ function RegisterHeader({ account, balance }: { account: AccountDto; balance: Ac
       {isForeign(account) && account.balanceAtLatestRate !== null && (
         <p className="mt-1 text-right text-sm text-gray-500">≈ {formatMoney(account.balanceAtLatestRate)}</p>
       )}
+      {account.unapprovedCount > 0 && (
+        <Link
+          to="/accounts/$accountId"
+          params={{ accountId: account.id }}
+          search={{ unapproved: true }}
+          className="mt-2 block text-sm font-medium text-blue-600"
+        >
+          {account.unapprovedCount} to approve
+        </Link>
+      )}
       <div className="mt-3 flex gap-2 overflow-x-auto">
         {!account.closed && (
           <Link

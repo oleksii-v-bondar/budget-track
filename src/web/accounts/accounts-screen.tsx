@@ -25,7 +25,12 @@ function AccountRow({ account }: { account: AccountDto }) {
     >
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium">{account.name}</span>
-        <span className="block text-sm text-gray-500">{ACCOUNT_TYPE_LABELS[account.type]}</span>
+        <span className="block text-sm text-gray-500">
+          {ACCOUNT_TYPE_LABELS[account.type]}
+          {account.unapprovedCount > 0 && (
+            <span className="font-medium text-blue-600"> · {account.unapprovedCount} to approve</span>
+          )}
+        </span>
       </span>
       <span className="flex flex-col items-end">
         <span className={amountClass(working)}>{formatMoney(working, account.currency)}</span>

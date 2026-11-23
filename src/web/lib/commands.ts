@@ -15,7 +15,7 @@ export function errorMessage(error: unknown): string {
 }
 
 /** The toast key of command results: a new one replaces the last, so only the newest command offers Undo. */
-const COMMAND_TOAST = 'command';
+export const COMMAND_TOAST = 'command';
 
 /**
  * Undo and redo (spec §10), for the header buttons and the toasts' Undo. Afterwards every budget-data query is

@@ -136,6 +136,8 @@ export interface AccountDto {
    * `balanceAtLatestRate − balanceBase.working`.
    */
   balanceAtLatestRate: number | null;
+  /** Transactions waiting for approval (bank imports). */
+  unapprovedCount: number;
 }
 
 export interface AccountListResponse {

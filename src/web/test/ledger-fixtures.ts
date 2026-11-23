@@ -42,6 +42,7 @@ export function account(fields: Partial<AccountDto> & Pick<AccountDto, 'name'>):
     balanceBase: balance,
     latestRate: null,
     balanceAtLatestRate: null,
+    unapprovedCount: 0,
     ...fields,
   };
 }
