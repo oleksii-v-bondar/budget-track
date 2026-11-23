@@ -162,11 +162,11 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - zod 4 discriminated unions nest (`kind` → `cadence` / `debtMode`), and refined objects can be options.
   `z.flattenError` reports an unknown discriminator under its key, e.g. `fieldErrors.cadence`.
 
-### Web app (P3a)
-P3b and P3c build their screens on these conventions.
+### Web app
 - **Layout.** `src/web/`: `main.tsx` (entry), `app.tsx` (query client, toasts, router), `router.tsx` (route tree and
-  guards), `shell/` (app shell, bottom nav, Undo/Redo, offline banner, placeholder screens), `lib/` (API client,
-  query cache, commands, form errors, `useOnline`, formatting, the keypad's calculator), `ui/` (the component kit),
+  guards), `shell/` (app shell, bottom nav, Undo/Redo, offline banner, not-found and error screens), `lib/` (API
+  client, query cache, commands, form errors, `useOnline`, formatting, the keypad's calculator, NBP rate lookup,
+  today's date), `ui/` (the component kit), the screens (`budget/`, `accounts/`, `register/`, `transactions/`),
   `auth/`, `settings/`, `test/` (test helpers). `index.html` and `public/` (generated icons) are Vite's root.
 - **Boundaries** (ESLint; `src/server/lint-boundaries.test.ts` pins them): `src/web` imports only types from
   `src/server` (`import type`), and no Node modules or globals; `src/server` and `src/shared` never import `src/web`;
@@ -197,29 +197,36 @@ P3b and P3c build their screens on these conventions.
   Keyboard shortcuts that submit (the keypad's Enter) follow the same rules as their button (busy, offline).
 - **Display and input.** Amounts: `formatMoney(minor, currency?)` / `formatAmount` (no-break space groups, decimal
   comma, `zł` for PLN, the code otherwise); dates `formatDate` / `parseDate` (dd.MM.yyyy ↔ ISO); months
-  `formatMonth` / `formatMonthShort` (`'2026-11'`). Amount entry: `AmountKeypad` (`evaluateAmount`: + − × ÷ exactly,
-  result rounded half away from zero).
-- **Kit** (`src/web/ui`): `Button` (`variant`, `mutating`, `busy`, `block`), `TextField`, `Checkbox`,
-  `SegmentedControl`, `FormError`, `Pill` (spec §6 tones), `Sheet` (bottom sheet; its children unmount on close, so
-  forms in it start empty; Tab and Shift+Tab wrap inside it), `ToastProvider` / `useToast`, icons and `cx`.
+  `formatMonth` / `formatMonthShort` (`'2026-11'`). Amount entry: `AmountKeypad` or `AmountField` (`evaluateAmount`:
+  + − × ÷ exactly, result rounded half away from zero, at most `MAX_AMOUNT` from `src/shared/api/common.ts`).
+- **Kit** (`src/web/ui`): `Button` (`variant`, `mutating`, `busy`, `block`), `TextField`, `TextAreaField`,
+  `SelectField`, `AmountField`, `Checkbox`, `SegmentedControl`, `Tabs`, `FormError`, `Loading` / `LoadError`, `Pill`
+  (spec §6 tones), `Sheet` (bottom sheet; its children unmount on close, so forms in it start empty; Tab and
+  Shift+Tab wrap inside it), `ToastProvider` / `useToast`, icons and `cx`.
   Tailwind v4; theme tokens (`brand`, `brand-dark`, `brand-light`) in `styles.css`.
 - **CSP.** No inline scripts or `<style>` elements, no `eval` (zod runs `jitless`: `zod-jitless.ts` is imported
   first), no `data:`/`blob:` images (draw inline SVG), no other origins. React's `style` prop is
   fine. `npm run test:e2e` fails on any violation.
-- **Screens.** Add a route under `appLayout` in `router.tsx` with `staticData: { title }` (the header shows it),
-  replacing a `PlaceholderScreen`. Screens reached through More are listed in `MORE_PATHS` (`shell/bottom-nav.tsx`).
-  A route whose guard or loader throws shows `ErrorScreen` (the router's `defaultErrorComponent`), whose Try again
-  runs `router.invalidate()`. Whatever makes a guard's cached auth status wrong must set it, or the guards send the
-  user to the wrong place.
+- **Screens.** Routes live under `appLayout` in `router.tsx` with `staticData: { title }` (the header shows it):
+  `/budget?month=`, `/accounts`, `/accounts/$accountId` and `/transactions` (registers; filters in the search
+  params), `/transactions/new?accountId=`, `/settings`. The bottom nav is Budget · Accounts · ＋ · Settings. Editing
+  a transaction, a category or an account happens in a `Sheet` on its screen. Budget edit mode reorders with
+  `@dnd-kit`. There are no Scheduled, Payees or loan screens: a future-dated transaction becomes a one-time schedule
+  on the server and the sheet only toasts "Scheduled for <date>". A route whose guard or loader throws shows
+  `ErrorScreen` (the router's `defaultErrorComponent`), whose Try again runs `router.invalidate()`. Whatever makes a
+  guard's cached auth status wrong must set it, or the guards send the user to the wrong place.
 - **Tests.** The Vitest `web` project (jsdom) runs `src/web/**/*.test.{ts,tsx}`. Fake the server with
   `fakeApi({ 'GET /api/x': { body }, 'POST /api/y': (req) => json(body, 422) })` (it records `requests`), then
   render the whole app with `renderApp(path)` (memory history; spread `SIGNED_IN` into the routes) or a component
-  with `renderWithProviders(ui)`; drive it with `userEvent.setup()`. Fake offline with
+  with `renderWithProviders(ui)`; drive it with `userEvent.setup()`. A route key may use `:param` segments
+  (`'GET /api/budget/:month'`); `undoStack()` fakes the undo label a command's toast shows and `writes(requests)`
+  lists the non-GET requests. Fixtures: `test/budget-fixtures.ts`, `test/ledger-fixtures.ts`. Fake offline with
   `vi.spyOn(navigator, 'onLine', 'get')`. `src/web/test/setup.ts` restores mocks and stubbed globals after each test.
 - **End to end.** `npm run test:e2e` builds, then `e2e/global-setup.ts` starts Postgres (Testcontainers, Ryuk off)
   and `dist/server/main.js` on a free port, and Playwright runs chromium at 390×844 (install it once with
   `npx playwright install chromium`). The server runs with `APP_USERNAME` / `APP_PASSWORD` from `e2e/env.ts`; the
-  smoke test signs in, opens Settings, signs out and signs in again.
+  smoke test (`e2e/smoke.spec.ts`) signs in, adds a checking account, a group and a category, assigns with a keypad
+  expression, adds a transaction with a new payee, checks the register and the budget, and undoes it.
 - **Serving and assets.** `serveWeb(webDir)` (`src/server/http/web.ts`) serves the build; `testConfig` points
   `webDir` at `src/server/test/web-fixture`. The icons are generated by `npm run icons` (`scripts/generate-icons.ts`)
   and committed. The service worker activates at once and claims open pages (`skipWaiting`, `clientsClaim` in
