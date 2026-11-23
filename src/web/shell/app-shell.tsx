@@ -22,7 +22,7 @@ export function AppShell() {
   );
 }
 
-/** Setup and sign-in: one centred column without navigation. */
+/** Sign-in: one centred column without navigation. */
 export function AuthLayout() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-[480px] flex-col justify-center gap-6 px-4 py-8">

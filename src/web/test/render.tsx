@@ -23,11 +23,8 @@ export function renderWithProviders(ui: ReactElement) {
   return { queryClient, ...result };
 }
 
-/**
- * The API's answers for a signed-in owner with an empty history and no authenticator app (merge more routes into
- * it).
- */
+/** The API's answers for a signed-in owner with an empty history (merge more routes into it). */
 export const SIGNED_IN = {
-  'GET /api/auth/status': { body: { setupRequired: false, authenticated: true, authenticatorEnabled: false } },
+  'GET /api/auth/status': { body: { authenticated: true } },
   'GET /api/undo': { body: { undo: null, redo: null } },
 };

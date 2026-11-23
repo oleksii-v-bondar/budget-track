@@ -1,5 +1,6 @@
-/** The SETUP_TOKEN the end-to-end server runs with. */
-export const E2E_SETUP_TOKEN = 'e2e-setup-token-0123456789';
+/** The credentials the end-to-end server runs with (APP_USERNAME, APP_PASSWORD). */
+export const E2E_USERNAME = 'owner';
+export const E2E_PASSWORD = 'correct horse battery staple';
 
 /** Where global-setup started the server (set there, read by the tests). */
 export const baseURL = () => {

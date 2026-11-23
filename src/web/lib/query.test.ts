@@ -1,10 +1,10 @@
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
-import { createQueryClient, forgetSession, invalidateData, queryKeys, setAuthStatus } from './query';
+import { createQueryClient, forgetSession, invalidateData, queryKeys } from './query';
 
 const unauthorized = new ApiError(401, { code: 'unauthorized', message: 'Please sign in.' });
-const wrongPassword = new ApiError(401, { code: 'invalid_credentials', message: 'Wrong password or code.' });
+const wrongPassword = new ApiError(401, { code: 'invalid_credentials', message: 'Wrong username or password.' });
 
 describe('createQueryClient', () => {
   it('reports an expired session from any query or mutation, but not a failed sign-in', async () => {
@@ -33,7 +33,7 @@ describe('createQueryClient', () => {
 describe('cache helpers', () => {
   function seeded() {
     const client = new QueryClient();
-    client.setQueryData(queryKeys.authStatus, { setupRequired: false, authenticated: true, authenticatorEnabled: true });
+    client.setQueryData(queryKeys.authStatus, { authenticated: true });
     client.setQueryData(['budget', '2026-11'], { month: '2026-11' });
     client.setQueryData(queryKeys.undo, { undo: null, redo: null });
     return client;
@@ -51,28 +51,6 @@ describe('cache helpers', () => {
     forgetSession(client);
     expect(client.getQueryData(['budget', '2026-11'])).toBeUndefined();
     expect(client.getQueryData(queryKeys.undo)).toBeUndefined();
-    // Sign-in still asks for a code.
-    expect(client.getQueryData(queryKeys.authStatus)).toEqual({
-      setupRequired: false,
-      authenticated: false,
-      authenticatorEnabled: true,
-    });
-  });
-
-  it('setAuthStatus changes only what it is given, and fills in an empty cache', () => {
-    const client = seeded();
-    setAuthStatus(client, { authenticatorEnabled: false });
-    expect(client.getQueryData(queryKeys.authStatus)).toEqual({
-      setupRequired: false,
-      authenticated: true,
-      authenticatorEnabled: false,
-    });
-    const empty = new QueryClient();
-    setAuthStatus(empty, { authenticated: true });
-    expect(empty.getQueryData(queryKeys.authStatus)).toEqual({
-      setupRequired: false,
-      authenticated: true,
-      authenticatorEnabled: false,
-    });
+    expect(client.getQueryData(queryKeys.authStatus)).toEqual({ authenticated: false });
   });
 });

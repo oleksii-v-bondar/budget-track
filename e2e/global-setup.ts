@@ -1,10 +1,9 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { E2E_SETUP_TOKEN } from './env';
+import { E2E_PASSWORD, E2E_USERNAME } from './env';
 
 async function freePort(): Promise<number> {
   const server = createServer().listen(0, '127.0.0.1');
@@ -46,8 +45,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       env: {
         ...process.env,
         DATABASE_URL: database.getConnectionUri(),
-        ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-        SETUP_TOKEN: E2E_SETUP_TOKEN,
+        APP_USERNAME: E2E_USERNAME,
+        APP_PASSWORD: E2E_PASSWORD,
         PORT: String(port),
         // Plain http on 127.0.0.1.
         COOKIE_SECURE: 'false',

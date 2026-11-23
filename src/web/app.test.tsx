@@ -5,27 +5,17 @@ import { fakeApi, json } from './test/fake-api';
 import { renderApp, SIGNED_IN } from './test/render';
 import { safeRedirect } from './router';
 
-const status = (setupRequired: boolean, authenticated: boolean) => ({
-  'GET /api/auth/status': { body: { setupRequired, authenticated, authenticatorEnabled: false } },
-});
-
 describe('route guards', () => {
-  it('send a fresh install to setup', async () => {
-    fakeApi(status(true, false));
-    const { history } = renderApp('/budget');
-    await waitFor(() => expect(history.location.pathname).toBe('/setup'));
-  });
-
   it('send a signed-out visitor to sign in, remembering where they were going', async () => {
-    fakeApi(status(false, false));
+    fakeApi({ 'GET /api/auth/status': { body: { authenticated: false } } });
     const { history } = renderApp('/payees');
     await waitFor(() => expect(history.location.pathname).toBe('/login'));
     expect(history.location.search).toBe('?redirect=%2Fpayees');
   });
 
-  it('send a signed-in owner from the sign-in pages and / to the budget', async () => {
+  it('send a signed-in owner from the sign-in page and / to the budget', async () => {
     fakeApi(SIGNED_IN);
-    for (const path of ['/', '/login', '/setup']) {
+    for (const path of ['/', '/login']) {
       const { history, unmount } = renderApp(path);
       await waitFor(() => expect(history.location.pathname).toBe('/budget'));
       unmount();
@@ -44,7 +34,7 @@ describe('route guards', () => {
 
   it('only redirect to paths of this app after signing in', () => {
     expect(safeRedirect('/budget/2026-11?x=1')).toBe('/budget/2026-11?x=1');
-    for (const unsafe of ['//evil.example', '/\\evil.example', 'https://evil.example', '/login', '/setup?x', 42]) {
+    for (const unsafe of ['//evil.example', '/\\evil.example', 'https://evil.example', '/login', '/login?x', 42]) {
       expect(safeRedirect(unsafe)).toBeUndefined();
     }
   });

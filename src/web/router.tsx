@@ -8,7 +8,6 @@ import {
   type RouterHistory,
 } from '@tanstack/react-router';
 import { LoginScreen } from './auth/login-screen';
-import { SetupScreen } from './auth/setup-screen';
 import { authStatusQuery } from './lib/query';
 import { SettingsScreen } from './settings/settings-screen';
 import { AppShell, AuthLayout } from './shell/app-shell';
@@ -29,10 +28,10 @@ declare module '@tanstack/react-router' {
   }
 }
 
-/** A path to return to after signing in: only paths of this app, and never the sign-in pages themselves. */
+/** A path to return to after signing in: only paths of this app, and never the sign-in page itself. */
 export function safeRedirect(value: unknown): string | undefined {
   if (typeof value !== 'string' || !/^\/(?![/\\])/.test(value)) return undefined;
-  return /^\/(login|setup)(?=[/?#]|$)/.test(value) ? undefined : value;
+  return /^\/login(?=[/?#]|$)/.test(value) ? undefined : value;
 }
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
@@ -45,18 +44,8 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
   notFoundComponent: NotFoundScreen,
 });
 
-// Setup and sign-in. The guards read the cached auth status, which setup, sign-in, sign-out and any 401 keep current.
+// Sign-in. The guards read the cached auth status, which sign-in, sign-out and any 401 keep current.
 const authLayout = createRoute({ getParentRoute: () => rootRoute, id: 'auth', component: AuthLayout });
-
-const setupRoute = createRoute({
-  getParentRoute: () => authLayout,
-  path: 'setup',
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData(authStatusQuery);
-    if (!status.setupRequired) throw redirect({ to: status.authenticated ? '/budget' : '/login' });
-  },
-  component: SetupScreen,
-});
 
 const loginRoute = createRoute({
   getParentRoute: () => authLayout,
@@ -67,7 +56,6 @@ const loginRoute = createRoute({
   },
   beforeLoad: async ({ context }) => {
     const status = await context.queryClient.ensureQueryData(authStatusQuery);
-    if (status.setupRequired) throw redirect({ to: '/setup' });
     if (status.authenticated) throw redirect({ to: '/budget' });
   },
   component: LoginScreen,
@@ -79,7 +67,6 @@ const appLayout = createRoute({
   id: 'app',
   beforeLoad: async ({ context, location }) => {
     const status = await context.queryClient.ensureQueryData(authStatusQuery);
-    if (status.setupRequired) throw redirect({ to: '/setup' });
     if (!status.authenticated) throw redirect({ to: '/login', search: { redirect: safeRedirect(location.href) } });
   },
   component: AppShell,
@@ -133,7 +120,7 @@ const appRoutes = [
 ] as const;
 
 const routeTree = rootRoute.addChildren([
-  authLayout.addChildren([setupRoute, loginRoute]),
+  authLayout.addChildren([loginRoute]),
   appLayout.addChildren(appRoutes),
 ]);
 

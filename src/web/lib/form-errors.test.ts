@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { newPasswordSchema } from '../../shared/auth';
+import { loginRequestSchema } from '../../shared/auth';
 import { ApiError } from './api';
 import { formErrorsOf, NO_ERRORS, zodFormErrors } from './form-errors';
 
@@ -50,10 +50,10 @@ describe('formErrorsOf', () => {
 
 describe('zodFormErrors', () => {
   it('reports a shared schema the way the server would', () => {
-    const schema = z.object({ password: newPasswordSchema, lines: z.array(z.object({ amount: z.int() })) });
-    const result = schema.safeParse({ password: 'short', lines: [{ amount: 1 }, { amount: 'x' }] });
-    expect(zodFormErrors(result.error!, ['password', 'lines.1.amount'])).toEqual({
-      fields: { password: 'Use at least 12 characters.', 'lines.1.amount': expect.any(String) },
+    const schema = loginRequestSchema.extend({ lines: z.array(z.object({ amount: z.int() })) });
+    const result = schema.safeParse({ username: '', password: 'p', lines: [{ amount: 1 }, { amount: 'x' }] });
+    expect(zodFormErrors(result.error!, ['username', 'lines.1.amount'])).toEqual({
+      fields: { username: 'Enter your username.', 'lines.1.amount': expect.any(String) },
       form: null,
     });
   });

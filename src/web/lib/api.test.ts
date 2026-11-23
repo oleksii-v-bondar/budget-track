@@ -11,18 +11,18 @@ const failure = (call: Promise<unknown>) =>
 
 describe('api client', () => {
   it('returns the JSON body of a successful call', async () => {
-    fakeApi({ 'GET /api/auth/status': { body: { setupRequired: false, authenticated: true } } });
+    fakeApi({ 'GET /api/auth/status': { body: { authenticated: true } } });
     const status = await unwrap(api.api.auth.status.$get());
-    expect(status).toEqual({ setupRequired: false, authenticated: true });
+    expect(status).toEqual({ authenticated: true });
   });
 
   it('sends JSON bodies with the CSRF header', async () => {
-    const { requests } = fakeApi({ 'POST /api/auth/login': { body: { recoveryCodesRemaining: 10 } } });
-    await unwrap(api.api.auth.login.$post({ json: { password: 'correct horse', totpCode: '123456' } }));
+    const { requests } = fakeApi({ 'POST /api/auth/login': { body: { ok: true } } });
+    await unwrap(api.api.auth.login.$post({ json: { username: 'owner', password: 'correct horse' } }));
     expect(requests).toHaveLength(1);
     expect(requests[0]!.headers.get('X-Requested-With')).toBe('budget-track');
     expect(requests[0]!.headers.get('content-type')).toMatch(/^application\/json/);
-    expect(requests[0]!.body).toEqual({ password: 'correct horse', totpCode: '123456' });
+    expect(requests[0]!.body).toEqual({ username: 'owner', password: 'correct horse' });
   });
 
   it('keeps the dotted field paths of validation errors', async () => {
@@ -56,7 +56,7 @@ describe('api client', () => {
   it('reads Retry-After from 429 and 503 responses', async () => {
     const limited = { code: 'rate_limited', message: 'Too many sign-in attempts. Wait a minute and try again.' };
     fakeApi({ 'POST /api/auth/login': json(limited, 429, { 'Retry-After': '30' }) });
-    const error = await failure(unwrap(api.api.auth.login.$post({ json: { password: 'p', totpCode: '123456' } })));
+    const error = await failure(unwrap(api.api.auth.login.$post({ json: { username: 'owner', password: 'p' } })));
     expect(error).toMatchObject({ status: 429, code: 'rate_limited', retryAfter: 30 });
   });
 
