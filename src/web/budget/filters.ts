@@ -1,9 +1,10 @@
 import type { BudgetCategoryDto, BudgetGroupDto, BudgetMonthDto } from '../../shared/api/budget';
 import { type HiddenCategory, splitHidden } from './view-model';
 
-/** Spec §11's filter chips, in order. */
+/** Spec §11's filters (and Overspent, which Home links to), in order. */
 export const BUDGET_FILTERS = [
   { value: 'all', label: 'All' },
+  { value: 'overspent', label: 'Overspent' },
   { value: 'underfunded', label: 'Underfunded' },
   { value: 'overfunded', label: 'Overfunded' },
   { value: 'available', label: 'Money available' },
@@ -12,9 +13,13 @@ export const BUDGET_FILTERS = [
 
 export type BudgetFilter = (typeof BUDGET_FILTERS)[number]['value'];
 
-/** Spec §6: underfunded > 0 (0 while snoozed), Assigned above the need, Available > 0, snoozed this month. */
+/**
+ * Available < 0; spec §6: underfunded > 0 (0 while snoozed), Assigned above the need, Available > 0, snoozed this
+ * month.
+ */
 const MATCHES: Record<BudgetFilter, (category: BudgetCategoryDto) => boolean> = {
   all: () => true,
+  overspent: (c) => c.available < 0,
   underfunded: (c) => (c.targetEvaluation?.underfunded ?? 0) > 0,
   overfunded: (c) => c.targetEvaluation?.overfunded === true,
   available: (c) => c.available > 0,
@@ -46,7 +51,7 @@ export function filterBudget(view: BudgetMonthDto, filter: BudgetFilter): Filter
   };
 }
 
-/** How many listed categories (Uncategorized included) each chip would show. */
+/** How many listed categories (Uncategorized included) each filter would show. */
 export function filterCounts(view: BudgetMonthDto): Record<BudgetFilter, number> {
   const counts = {} as Record<BudgetFilter, number>;
   for (const { value } of BUDGET_FILTERS) {
@@ -58,9 +63,15 @@ export function filterCounts(view: BudgetMonthDto): Record<BudgetFilter, number>
 
 /** Shown when a filter matches nothing. */
 export const EMPTY_FILTER_MESSAGES: Record<BudgetFilter, string> = {
-  all: 'No categories yet. Tap Edit to add a group and its categories.',
+  all: 'No categories yet. Tap Edit categories to add a group and its categories.',
+  overspent: 'No category is overspent.',
   underfunded: 'No target needs more money this month.',
   overfunded: 'No category has more assigned than its target needs.',
   available: 'No category has money available.',
   snoozed: 'No target is snoozed this month.',
 };
+
+/** The router's check of `?filter=`. */
+export function isBudgetFilter(value: unknown): value is BudgetFilter {
+  return BUDGET_FILTERS.some((filter) => filter.value === value);
+}

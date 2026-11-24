@@ -16,8 +16,8 @@ export interface CategoryHint {
 
 /** Text colours of the hint tones. */
 export const HINT_TONES: Record<CategoryHint['tone'], string> = {
-  bad: 'text-red-300',
-  warn: 'text-yellow-300',
+  bad: 'text-red-400',
+  warn: 'text-yellow-400',
   good: 'text-lime',
   muted: 'text-muted',
 };
@@ -54,6 +54,68 @@ export function categoryHint(category: BudgetCategoryDto, { cardNeed = true } = 
   return null;
 }
 
+/** A budget row's progress bar and status line (YNAB's iOS app). */
+export interface CategoryStatus {
+  /** The line under the bar; null when there is nothing to say. */
+  text: string | null;
+  tone: CategoryHint['tone'];
+  /** The bar's colour; `empty` shows only the track. */
+  bar: 'lime' | 'yellow' | 'red' | 'empty';
+  /** How much of the bar is filled, 0..1. */
+  filled: number;
+  /** How much of the filled part was spent (drawn darker), 0..1. */
+  spent: number;
+}
+
+const fraction = (part: number, whole: number) => (whole > 0 ? Math.min(1, Math.max(0, part / whole)) : 0);
+
+/**
+ * A budget row's status from the month's numbers: what needs doing first (Uncategorized activity, overspending, an
+ * unfinished or underfunded target, a card to pay), then how the money stands: "Funded", "Funded. Spent X of Y" or
+ * "Fully Spent". The bar shows the funding, with the part already spent darker.
+ */
+export function categoryStatus(category: BudgetCategoryDto): CategoryStatus {
+  const { available, activity, targetEvaluation: evaluation } = category;
+  const spentSoFar = Math.max(0, -activity);
+  // What the month had to spend: Available plus what is already gone.
+  const funds = available + spentSoFar;
+  const spent = fraction(spentSoFar, funds);
+  const status = (text: string | null, tone: CategoryHint['tone'], bar: CategoryStatus['bar'], filled: number) => ({
+    text,
+    tone,
+    bar,
+    filled,
+    spent: bar === 'lime' ? spent : 0,
+  });
+
+  if (category.kind === 'uncategorized') {
+    return status(
+      activity !== 0 ? 'Give these transactions a category' : null,
+      'warn',
+      available < 0 ? 'red' : 'empty',
+      1,
+    );
+  }
+  if (category.cashOverspent > 0) return status('Overspent', 'bad', 'red', 1);
+  if (category.creditOverspent > 0) return status('Overspent on credit', 'warn', 'yellow', 1);
+  if (evaluation && (evaluation.incomplete || evaluation.underfunded > 0)) {
+    return status(categoryHint(category)!.text, 'warn', 'yellow', evaluation.progress);
+  }
+  if (category.needToPayInFull !== null && category.needToPayInFull > 0) {
+    const need = category.needToPayInFull;
+    return status(`Need ${formatMoney(need)} to pay in full`, 'muted', 'lime', fraction(available, available + need));
+  }
+  if (evaluation?.snoozed) return status('Target snoozed this month', 'muted', funds > 0 ? 'lime' : 'empty', 1);
+  if (funds <= 0) {
+    if (evaluation) return status(categoryHint(category)!.text, 'muted', 'empty', 0);
+    return status(null, 'muted', 'empty', 0);
+  }
+  if (available <= 0) return status('Fully Spent', 'muted', 'lime', 1);
+  if (spentSoFar > 0)
+    return status(`Funded. Spent ${formatMoney(spentSoFar)} of ${formatMoney(funds)}`, 'muted', 'lime', 1);
+  return status('Funded', 'muted', 'lime', 1);
+}
+
 /** The category with this id in the month view (Uncategorized included), or null once it is gone. */
 export function findCategory(view: BudgetMonthDto, id: string): BudgetCategoryDto | null {
   if (view.uncategorized?.id === id) return view.uncategorized;
@@ -86,9 +148,4 @@ export function splitHidden(view: BudgetMonthDto): { groups: BudgetGroupDto[]; h
     groups.push({ ...group, categories: group.categories.filter((c) => !c.hidden) });
   }
   return { groups, hidden };
-}
-
-/** The total Available of a group's listed categories, shown in its header. */
-export function totalAvailable(categories: readonly BudgetCategoryDto[]): number {
-  return categories.reduce((sum, category) => sum + category.available, 0);
 }

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { budgetCategory, budgetGroup, budgetMonth, evaluation, monthlyTarget, sampleBudget } from '../test/budget-fixtures';
-import { categoryHint, rtaTone, splitHidden, totalAvailable } from './view-model';
+import {
+  budgetCategory,
+  budgetGroup,
+  budgetMonth,
+  evaluation,
+  monthlyTarget,
+  sampleBudget,
+} from '../test/budget-fixtures';
+import { categoryHint, categoryStatus, rtaTone, splitHidden } from './view-model';
 
 const hint = (fields: Parameters<typeof budgetCategory>[0]) => categoryHint(budgetCategory(fields));
 
@@ -54,7 +61,12 @@ describe('categoryHint', () => {
   it("names what an incomplete debt target's account lacks", () => {
     const incomplete = evaluation(0, 0, { incomplete: true });
     const debt = (debtMode: 'min_payment' | 'payoff_by_date') =>
-      hint({ ...base, kind: 'cc_payment', target: { ...target, kind: 'debt', debtMode }, targetEvaluation: incomplete });
+      hint({
+        ...base,
+        kind: 'cc_payment',
+        target: { ...target, kind: 'debt', debtMode },
+        targetEvaluation: incomplete,
+      });
     expect(debt('min_payment')?.text).toBe("Add the account's minimum payment to finish this target");
     expect(debt('payoff_by_date')?.text).toBe("Add the account's APR to finish this target");
   });
@@ -66,6 +78,76 @@ describe('categoryHint', () => {
     });
     expect(hint({ ...base, kind: 'cc_payment', needToPayInFull: 0 })).toBeNull();
     expect(hint(base)).toBeNull();
+  });
+});
+
+describe('categoryStatus', () => {
+  const status = (fields: Partial<Parameters<typeof budgetCategory>[0]>) =>
+    categoryStatus(budgetCategory({ id: 'c', name: 'Groceries', ...fields }));
+  const target = monthlyTarget('c', 70000);
+
+  it('says how the money stands: funded, partly spent or fully spent, with the spent part of the bar', () => {
+    expect(status({ assigned: 390000, available: 390000 })).toEqual({
+      text: 'Funded',
+      tone: 'muted',
+      bar: 'lime',
+      filled: 1,
+      spent: 0,
+    });
+    expect(
+      status({ assigned: 70000, activity: -21500, available: 48500, target, targetEvaluation: evaluation(70000, 0) }),
+    ).toEqual({
+      text: 'Funded. Spent 215,00\u00a0zł of 700,00\u00a0zł',
+      tone: 'muted',
+      bar: 'lime',
+      filled: 1,
+      spent: 21500 / 70000,
+    });
+    expect(status({ assigned: 8000, activity: -8000 })).toMatchObject({ text: 'Fully Spent', bar: 'lime', spent: 1 });
+    expect(status({ carry: 5000, activity: -5000 })).toMatchObject({ text: 'Fully Spent', spent: 1 });
+  });
+
+  it('puts overspending first, then a target that needs more', () => {
+    const underfunded = evaluation(70000, 20000);
+    expect(
+      status({ activity: -9000, available: -1000, cashOverspent: 1000, target, targetEvaluation: underfunded }),
+    ).toMatchObject({
+      text: 'Overspent',
+      tone: 'bad',
+      bar: 'red',
+    });
+    expect(status({ activity: -1000, available: -1000, creditOverspent: 1000 })).toMatchObject({
+      text: 'Overspent on credit',
+      tone: 'warn',
+      bar: 'yellow',
+    });
+    expect(status({ assigned: 50000, available: 50000, target, targetEvaluation: underfunded })).toEqual({
+      text: '200,00\u00a0zł more needed this month',
+      tone: 'warn',
+      bar: 'yellow',
+      filled: 50000 / 70000,
+      spent: 0,
+    });
+  });
+
+  it('has nothing to say about an empty category, and names a target with nothing to do', () => {
+    expect(status({})).toEqual({ text: null, tone: 'muted', bar: 'empty', filled: 0, spent: 0 });
+    expect(status({ target, targetEvaluation: evaluation(0, 0, { progress: 0.5 }) })).toMatchObject({
+      text: 'Nothing needed this month',
+      bar: 'empty',
+    });
+  });
+
+  it('shows what a card payment needs, and Uncategorized activity', () => {
+    expect(status({ kind: 'cc_payment', available: 5500, needToPayInFull: 35000 })).toMatchObject({
+      text: 'Need 350,00\u00a0zł to pay in full',
+      filled: 5500 / 40500,
+    });
+    expect(status({ kind: 'uncategorized', activity: -9900, available: -9900, cashOverspent: 9900 })).toMatchObject({
+      text: 'Give these transactions a category',
+      tone: 'warn',
+      bar: 'red',
+    });
   });
 });
 
@@ -92,12 +174,5 @@ describe('splitHidden', () => {
       ],
     });
     expect(splitHidden(view).groups.map((g) => g.name)).toEqual(['New group']);
-  });
-});
-
-describe('totalAvailable', () => {
-  it("sums the categories' Available", () => {
-    const categories = [budgetCategory({ id: 'a', name: 'A', available: 500 }), budgetCategory({ id: 'b', name: 'B', available: -200 })];
-    expect(totalAvailable(categories)).toBe(300);
   });
 });

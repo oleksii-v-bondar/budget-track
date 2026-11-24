@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { AccountsScreen } from './accounts/accounts-screen';
 import { LoginScreen } from './auth/login-screen';
 import { BudgetScreen } from './budget/budget-screen';
+import { type BudgetFilter, isBudgetFilter } from './budget/filters';
 import { HomeScreen } from './home/home-screen';
 import { thisMonth } from './lib/format';
 import { authStatusQuery } from './lib/query';
@@ -100,19 +101,36 @@ function AllAccountsRegister() {
   return <RegisterScreen filters={filters} onFiltersChange={(search) => void navigate({ to: '/transactions', search })} />;
 }
 
-/** `/budget?month=YYYY-MM`; without a (valid) month it shows this device's current month. */
+/**
+ * The Plan: `/budget?month=YYYY-MM&filter=…`; without a (valid) month it shows this device's current month, without a
+ * filter every category.
+ */
 const budgetRoute = createRoute({
   getParentRoute: () => appLayout,
   path: 'budget',
-  validateSearch: (search: Record<string, unknown>): { month?: string } =>
-    typeof search.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(search.month) ? { month: search.month } : {},
+  validateSearch: (search: Record<string, unknown>): { month?: string; filter?: BudgetFilter } => ({
+    ...(typeof search.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(search.month)
+      ? { month: search.month }
+      : {}),
+    ...(isBudgetFilter(search.filter) && search.filter !== 'all' ? { filter: search.filter } : {}),
+  }),
   component: BudgetRoute,
 });
 
 function BudgetRoute() {
-  const { month } = useSearch({ strict: false });
+  const { month, filter } = useSearch({ from: '/app/budget' });
+  const navigate = useNavigate();
   const [today] = useState(thisMonth);
-  return <BudgetScreen month={month ?? today} />;
+  return (
+    <BudgetScreen
+      month={month ?? today}
+      filter={filter ?? 'all'}
+      onMonthChange={(target) => void navigate({ to: '/budget', search: (prev) => ({ ...prev, month: target }) })}
+      onFilterChange={(target) =>
+        void navigate({ to: '/budget', search: (prev) => ({ ...prev, filter: target === 'all' ? undefined : target }) })
+      }
+    />
+  );
 }
 
 const appRoutes = [

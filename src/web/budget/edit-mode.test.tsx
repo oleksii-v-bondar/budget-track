@@ -40,7 +40,7 @@ describe('edit mode', () => {
     const stack = undoStack();
     const server = fakeApi({ ...SIGNED_IN, ...stack.route, 'GET /api/budget/:month': { body: budget() }, ...routes });
     renderApp('/budget?month=2026-11');
-    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit categories' }));
     return { ...server, stack };
   }
   const sheet = () => screen.getByRole('dialog');

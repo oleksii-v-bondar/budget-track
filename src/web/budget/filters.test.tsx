@@ -2,7 +2,14 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { BudgetMonthDto } from '../../shared/api/budget';
-import { budgetCategory, budgetGroup, budgetMonth, evaluation, monthlyTarget, sampleBudget } from '../test/budget-fixtures';
+import {
+  budgetCategory,
+  budgetGroup,
+  budgetMonth,
+  evaluation,
+  monthlyTarget,
+  sampleBudget,
+} from '../test/budget-fixtures';
 import { fakeApi } from '../test/fake-api';
 import { renderApp, SIGNED_IN } from '../test/render';
 import { filterBudget, filterCounts } from './filters';
@@ -21,20 +28,44 @@ const view = budgetMonth({
           target,
           targetEvaluation: evaluation(200000, 0, { overfunded: true }),
         }),
-        budgetCategory({ id: 'power', name: 'Electricity', available: 10000, target, targetEvaluation: evaluation(25000, 15000) }),
+        budgetCategory({
+          id: 'power',
+          name: 'Electricity',
+          available: 10000,
+          target,
+          targetEvaluation: evaluation(25000, 15000),
+        }),
       ],
     }),
     budgetGroup({
       id: 'g-everyday',
       name: 'Everyday',
       categories: [
-        budgetCategory({ id: 'gym', name: 'Gym', target, targetEvaluation: evaluation(10000, 0, { snoozed: true, progress: 0 }) }),
-        budgetCategory({ id: 'gifts', name: 'Gifts', hidden: true, available: 5000, target, targetEvaluation: evaluation(9000, 4000) }),
+        budgetCategory({
+          id: 'gym',
+          name: 'Gym',
+          target,
+          targetEvaluation: evaluation(10000, 0, { snoozed: true, progress: 0 }),
+        }),
+        budgetCategory({
+          id: 'gifts',
+          name: 'Gifts',
+          hidden: true,
+          available: 5000,
+          target,
+          targetEvaluation: evaluation(9000, 4000),
+        }),
       ],
     }),
     budgetGroup({ id: 'g-empty', name: 'Empty' }),
   ],
-  uncategorized: budgetCategory({ id: 'u', name: 'Uncategorized', kind: 'uncategorized', activity: 700, available: 700 }),
+  uncategorized: budgetCategory({
+    id: 'u',
+    name: 'Uncategorized',
+    kind: 'uncategorized',
+    activity: 700,
+    available: 700,
+  }),
 });
 
 const shown = (budget: BudgetMonthDto, filter: Parameters<typeof filterBudget>[1]) => {
@@ -60,7 +91,11 @@ describe('filterBudget', () => {
   });
 
   it('lists only matching visible categories, in the groups that have one, under the other filters', () => {
-    expect(shown(view, 'underfunded')).toEqual({ uncategorized: null, groups: [['Bills', ['Electricity']]], hidden: [] });
+    expect(shown(view, 'underfunded')).toEqual({
+      uncategorized: null,
+      groups: [['Bills', ['Electricity']]],
+      hidden: [],
+    });
     expect(shown(view, 'overfunded')).toEqual({ uncategorized: null, groups: [['Bills', ['Rent']]], hidden: [] });
     expect(shown(view, 'available')).toEqual({
       uncategorized: 'Uncategorized',
@@ -70,36 +105,55 @@ describe('filterBudget', () => {
     expect(shown(view, 'snoozed')).toEqual({ uncategorized: null, groups: [['Everyday', ['Gym']]], hidden: [] });
   });
 
+  it('lists categories with less than nothing available under Overspent', () => {
+    const { uncategorized, groups } = filterBudget(sampleBudget(), 'overspent');
+    expect([uncategorized?.name, groups.map((g) => [g.name, g.categories.map((c) => c.name)])]).toEqual([
+      'Uncategorized',
+      [['Everyday', ['Groceries', 'Eating out']]],
+    ]);
+  });
+
   it('counts what each chip shows', () => {
-    expect(filterCounts(view)).toEqual({ all: 4, underfunded: 1, overfunded: 1, available: 3, snoozed: 1 });
+    expect(filterCounts(view)).toEqual({
+      all: 4,
+      overspent: 0,
+      underfunded: 1,
+      overfunded: 1,
+      available: 3,
+      snoozed: 1,
+    });
   });
 });
 
-describe('the filter chips', () => {
-  it('filter the budget and say when nothing matches', async () => {
+describe('the filter menu', () => {
+  it('filters the budget from a sheet and says when nothing matches', async () => {
     fakeApi({ ...SIGNED_IN, 'GET /api/budget/:month': { body: sampleBudget() } });
     renderApp('/budget?month=2026-11');
-    const chips = await screen.findByRole('group', { name: 'Show' });
-    expect(within(chips).getAllByRole('button').map((chip) => chip.textContent)).toEqual([
-      'All',
-      'Underfunded1',
-      'Overfunded0',
-      'Money available3',
-      'Snoozed0',
-    ]);
-    expect(within(chips).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    const openMenu = async () => {
+      await userEvent.click(await screen.findByRole('button', { name: 'Filter categories' }));
+      return within(screen.getByRole('dialog', { name: 'Show' })).getByRole('group', { name: 'Show' });
+    };
+    let menu = await openMenu();
+    expect(
+      within(menu)
+        .getAllByRole('button')
+        .map((option) => option.textContent),
+    ).toEqual(['All', 'Overspent3', 'Underfunded1', 'Overfunded0', 'Money available3', 'Snoozed0']);
+    expect(within(menu).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
 
-    await userEvent.click(within(chips).getByRole('button', { name: /^Underfunded/ }));
-    expect(within(chips).getByRole('button', { name: /^Underfunded/ })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(within(menu).getByRole('button', { name: /^Underfunded/ }));
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getAllByRole('region').map((region) => region.getAttribute('aria-label'))).toEqual(['Bills']);
     expect(screen.getByTestId('category-c-power')).toBeInTheDocument();
     expect(screen.queryByTestId('category-c-rent')).toBeNull();
 
-    await userEvent.click(within(chips).getByRole('button', { name: /^Snoozed/ }));
+    menu = await openMenu();
+    expect(within(menu).getByRole('button', { name: /^Underfunded/ })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(within(menu).getByRole('button', { name: /^Snoozed/ }));
     expect(screen.getByText('No target is snoozed this month.')).toBeInTheDocument();
     expect(screen.queryAllByRole('region')).toEqual([]);
 
-    await userEvent.click(within(chips).getByRole('button', { name: 'All' }));
+    await userEvent.click(within(await openMenu()).getByRole('button', { name: 'All' }));
     expect(screen.getByRole('button', { name: 'Hidden categories (2)' })).toBeInTheDocument();
   });
 });
