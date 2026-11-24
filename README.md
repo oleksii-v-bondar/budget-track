@@ -4,20 +4,27 @@ A personal, single-user budgeting app that follows YNAB's rules, with PLN as the
 [`docs/superpowers/specs/2026-11-19-core-budgeting-design.md`](docs/superpowers/specs/2026-11-19-core-budgeting-design.md).
 
 Status: the budget engine (`src/engine`), the server API and the web app's YNAB screens are done. The web app is an
-installable phone web app (Budget · Accounts · ＋ · Settings):
+installable phone web app, dark and laid out like YNAB's iOS app (tabs Home · Plan · Spending · Accounts · Reflect,
+"+ Transaction" above them, and a "…" menu with Undo, Redo, Settings and Sign out):
 
-- **Budget**: month switcher; Ready to Assign with its breakdown and Auto-assign; filter chips; category groups with
-  Available pills and a hidden section; a note per month. A category's sheet assigns with a calculator keypad, moves
-  money, sets a target, lists the activity, keeps a note and hides the category. Credit card payment categories show
-  what paying the card in full needs. Edit mode adds, renames, reorders, hides and deletes groups and categories.
+- **Home**: Ready to Assign; what needs attention (transactions to review, overspent and underfunded categories);
+  this month's spending against income; net worth. The Home tab's badge counts reviews and overspent categories.
+- **Plan**: month picker; Ready to Assign with its breakdown and Auto-assign; filters (overspent, underfunded, ...);
+  category groups with Available pills, a progress bar and a status line ("Funded. Spent X of Y", "Fully Spent", "X
+  more needed this month", "Overspent") and a hidden section; a note per month. A category's sheet assigns with a
+  calculator keypad, moves money, sets a target, lists the activity, keeps a note and hides the category. Credit card
+  payment categories show what paying the card in full needs. Edit mode adds, renames, reorders, hides and deletes
+  groups and categories.
+- **Spending**: every account's transactions by date, with search, filters, bulk changes, and a review of new
+  (imported) transactions to approve one by one or all at once.
 - **Accounts**: cash, credit and tracking accounts in PLN or another currency (shown also as ≈ PLN at the latest NBP
-  rate), grouped with totals; add, edit, close (with an adjustment), reopen and delete.
-- **Register**: per account or all accounts, with balances, rows by date, search, filters, bulk changes, reconcile,
-  and revalue for foreign accounts.
+  rate), grouped with totals; add, edit, close (with an adjustment), reopen and delete. Each account's register has
+  its balances, rows by date, search, filters, bulk changes, reconcile, and revalue for foreign accounts.
+- **Reflect**: a month's spending breakdown by category, and income against spending over the last six months.
 - **Transactions**: outflow/inflow with a keypad, payee autocomplete (new payees and transfers), category, date, memo,
   flag, cleared, FX rate and splits. A date after today saves it as a one-time scheduled transaction.
 - **Bank connections** (optional): PKO BP, Revolut and other Polish banks through Enable Banking; imported
-  transactions wait for approval in the register.
+  transactions wait for approval (Spending → Review).
 - Undo and redo of every change; sign-in with a username and password.
 
 ## Requirements
@@ -54,7 +61,7 @@ restricted production mode is free for your own accounts.
 4. Activate the application by linking your own PKO BP and Revolut accounts in the Control Panel (restricted mode: it
    can only read the accounts linked there).
 5. Restart: `docker compose up -d`. Without the app id or a readable key, Settings doesn't show bank connections.
-6. In the app: Settings → Bank connections → **Connect bank**, pick the bank and sign in there. Back in Settings,
+6. In the app: "…" → Settings → Bank connections → **Connect bank**, pick the bank and sign in there. Back in Settings,
    **link** each bank account to a Budget Track account in the same currency, then **Sync now**.
 
 How it works:

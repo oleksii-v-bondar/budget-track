@@ -183,9 +183,11 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 
 ### Web app
 - **Layout.** `src/web/`: `main.tsx` (entry), `app.tsx` (query client, toasts, router), `router.tsx` (route tree and
-  guards), `shell/` (app shell, bottom nav, Undo/Redo, offline banner, not-found and error screens), `lib/` (API
+  guards), `shell/` (app shell, tab bar, "+ Transaction", each screen's top bar with the "…" menu (Undo/Redo, Settings, Sign
+  out), offline banner, not-found and error screens), `lib/` (API
   client, query cache, commands, form errors, `useOnline`, formatting, the keypad's calculator, NBP rate lookup,
-  today's date), `ui/` (the component kit), the screens (`budget/`, `accounts/`, `register/`, `transactions/`),
+  today's date), `ui/` (the component kit), the screens (`home/`, `budget/` (the Plan), `register/` (Spending and the account registers), `accounts/`, `reflect/`,
+  `transactions/`),
   `auth/`, `settings/`, `test/` (test helpers). `index.html` and `public/` (generated icons) are Vite's root.
 - **Boundaries** (ESLint; `src/server/lint-boundaries.test.ts` pins them): `src/web` imports only types from
   `src/server` (`import type`), and no Node modules or globals; `src/server` and `src/shared` never import `src/web`;
@@ -222,18 +224,27 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   `SelectField`, `AmountField`, `Checkbox`, `SegmentedControl`, `Tabs`, `FormError`, `Loading` / `LoadError`, `Pill`
   (spec §6 tones), `Sheet` (bottom sheet; its children unmount on close, so forms in it start empty; Tab and
   Shift+Tab wrap inside it), `ToastProvider` / `useToast`, icons and `cx`.
-  Tailwind v4; theme tokens (`brand`, `brand-dark`, `brand-light`) in `styles.css`.
+  Tailwind v4, dark only; theme tokens in `styles.css`: `page`, `header` (darker than `page`), `surface` (cards and
+  rows), `raised` (buttons, inputs), `line` (dividers), `zero` (grey pills), `muted` (secondary text), `lime` /
+  `lime-dark` (money that's fine, spent), `income`, and `brand` / `brand-dark` / `brand-light` (indigo: links, the
+  active tab, primary buttons). Top bars use `ScreenHeader` (`shell/screen-header.tsx`) with `ROUND_BUTTON` /
+  `PILL_BUTTON`.
 - **CSP.** No inline scripts or `<style>` elements, no `eval` (zod runs `jitless`: `zod-jitless.ts` is imported
   first), no `data:`/`blob:` images (draw inline SVG), no other origins. React's `style` prop is
   fine. `npm run test:e2e` fails on any violation.
-- **Screens.** Routes live under `appLayout` in `router.tsx` with `staticData: { title }` (the header shows it):
-  `/budget?month=`, `/accounts`, `/accounts/$accountId` and `/transactions` (registers; filters in the search
-  params), `/transactions/new?accountId=`, `/settings`. The bottom nav is Budget · Accounts · ＋ · Settings. Editing
-  a transaction, a category or an account happens in a `Sheet` on its screen. Budget edit mode reorders with
-  `@dnd-kit`. There are no Scheduled, Payees or loan screens: a future-dated transaction becomes a one-time schedule
-  on the server and the sheet only toasts "Scheduled for <date>". A route whose guard or loader throws shows
-  `ErrorScreen` (the router's `defaultErrorComponent`), whose Try again runs `router.invalidate()`. Whatever makes a
-  guard's cached auth status wrong must set it, or the guards send the user to the wrong place.
+- **Screens.** Routes live under `appLayout` in `router.tsx`; each screen renders its own `ScreenHeader` (top bar and
+  large title). `/home` (where sign-in and `/` land), `/budget?month=&filter=` (the Plan; `filter` is one of
+  `BUDGET_FILTERS`), `/transactions` (Spending: every account; filters in the search params, `?unapproved=true` is the
+  review), `/accounts`, `/accounts/$accountId` (a register), `/reflect`, `/transactions/new?accountId=`, `/settings`
+  (from the "…" menu). The tab bar is Home · Plan · Spending · Accounts · Reflect; "+ Transaction" opens the new
+  transaction in a `Sheet` (in a register it starts in that account). Editing a transaction, a category or an account
+  happens in a `Sheet` on its screen. Plan edit mode reorders with `@dnd-kit`. Home's counts (`useAttention`,
+  `home/attention.ts`) and Reflect (`reflect/reflect-model.ts`) read the month views (`GET /api/budget/:month`):
+  spending is the categories' net outflows (card payment categories left out), income `rta.income`. There are no
+  Scheduled, Payees or loan screens: a future-dated transaction becomes a one-time schedule on the server and the
+  sheet only toasts "Scheduled for <date>". A route whose guard or loader throws shows `ErrorScreen` (the router's
+  `defaultErrorComponent`), whose Try again runs `router.invalidate()`. Whatever makes a guard's cached auth status
+  wrong must set it, or the guards send the user to the wrong place.
 - **Tests.** The Vitest `web` project (jsdom) runs `src/web/**/*.test.{ts,tsx}`. Fake the server with
   `fakeApi({ 'GET /api/x': { body }, 'POST /api/y': (req) => json(body, 422) })` (it records `requests`), then
   render the whole app with `renderApp(path)` (memory history; spread `SIGNED_IN` into the routes) or a component
@@ -245,7 +256,8 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   and `dist/server/main.js` on a free port, and Playwright runs chromium at 390×844 (install it once with
   `npx playwright install chromium`). The server runs with `APP_USERNAME` / `APP_PASSWORD` from `e2e/env.ts`; the
   smoke test (`e2e/smoke.spec.ts`) signs in, adds a checking account, a group and a category, assigns with a keypad
-  expression, adds a transaction with a new payee, checks the register and the budget, and undoes it.
+  expression, adds a transaction with a new payee from "+ Transaction", checks Spending, the register, Reflect and
+  the Plan, and undoes it from the "…" menu.
 - **Serving and assets.** `serveWeb(webDir)` (`src/server/http/web.ts`) serves the build; `testConfig` points
   `webDir` at `src/server/test/web-fixture`. The icons are generated by `npm run icons` (`scripts/generate-icons.ts`)
   and committed. The service worker activates at once and claims open pages (`skipWaiting`, `clientsClaim` in
