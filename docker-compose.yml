@@ -28,11 +28,12 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in .env}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # Optional bank connections (README "Bank connections"); off while the client id or secret is empty.
-      AIIA_CLIENT_ID: ${AIIA_CLIENT_ID:-}
-      AIIA_CLIENT_SECRET: ${AIIA_CLIENT_SECRET:-}
-      AIIA_BASE_URL: ${AIIA_BASE_URL:-https://api.aiia.eu}
-      AIIA_REDIRECT_URI: ${AIIA_REDIRECT_URI:-http://localhost:${APP_PORT:-3000}/api/bank/callback}
+      # Optional bank connections (README "Bank connections (Enable Banking)"): off while the app id is empty or
+      # ./secrets/enablebanking.pem is missing (read as /app/secrets/enablebanking.pem, the default key file).
+      ENABLE_BANKING_APP_ID: ${ENABLE_BANKING_APP_ID:-}
+      BANK_REDIRECT_URI: ${BANK_REDIRECT_URI:-http://localhost:${APP_PORT:-3000}/api/bank/callback}
+    volumes:
+      - ./secrets:/app/secrets:ro
     ports:
       - '127.0.0.1:${APP_PORT:-3000}:3000'
 

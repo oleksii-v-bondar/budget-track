@@ -141,15 +141,24 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   - A loan's first month has no interest (its start balance is 0); users add an interest override for it.
   - A foreign loan's charges are converted at Σ payment base / Σ payment amount of the month, with no NBP call.
 
-### Bank sync (Mastercard Open Banking / Aiia)
-- `src/server/bank/`: `aiia.ts` is the HTTP client (15 s timeout, permissive zod schemas that log only the keys of an
-  unexpected answer), `bank-sync.ts` connects, links, syncs and runs the 6-hourly auto-sync (started in `main.ts` when
-  `config.aiia` is set), `bank-routes.ts` is `/api/bank`. Tests run against a `node:http` stub of Aiia on port 0.
+### Bank sync (Enable Banking)
+- `src/server/bank/`: `enable-banking.ts` is the HTTP client (RS256 JWT from `node:crypto`, `kid` = app id, cached
+  until 5 minutes before its hour is up; 30 s timeout; permissive zod schemas that log only the keys of an unexpected
+  answer; the PL bank list cached 24 h), `bank-sync.ts` connects, links, syncs and runs the 6-hourly auto-sync (started
+  in `main.ts` when `config.enableBanking` is set), `bank-routes.ts` is `/api/bank`. `loadConfig` reads the key file
+  (`ENABLE_BANKING_KEY_FILE`, injectable `readFile` for tests); a missing or bad key means "not configured". Never log
+  the key or a JWT. Tests run against a `node:http` stub on port 0 that verifies the JWT with the public key of a
+  `generateKeyPairSync` pair.
+- One `bank_connection` per bank (unique ASPSP name + country); a reconnect replaces it and carries account links over
+  by IBAN + currency. Account uids change with every session, so the dedupe compares the part of `import_id` after
+  `<uid>:` per account. A session past `valid_until`, or a 401/403/422 `EXPIRED_SESSION` / `REVOKED_SESSION` /
+  `CLOSED_SESSION`, sets `reconnect_needed`; the sync skips that bank and reports it.
 - A sync quotes NBP rates first, then imports through `createTransaction` in one `runCommand` ("Bank sync") and marks
-  the rows `approved = false` with `import_id = <aiia account id>:<transaction id>`; `last_synced_at` is written after
-  the command (not recorded for undo). `bank_connection` / `bank_account` aren't recorded tables.
+  the rows `approved = false` with `import_id = <uid>:<entry_reference ?? transaction_id ?? sha256>`; `last_synced_at`
+  is written after the command (not recorded for undo). `bank_connection` / `bank_account` aren't recorded tables.
 - The session cookie is SameSite=Lax so the bank's redirect back to `/api/bank/callback` carries it; the callback
-  checks the state cookie `/api/bank/connect` set.
+  checks the state cookie `/api/bank/connect` set. The web app reaches `/connect` with plain links (top-level
+  navigations); the service worker never serves `/api/*`. Bank logos are not shown, so the CSP keeps no other origins.
 
 ### Budget read model
 - `loadBudgetInput(db, { throughMonth, today })` (`src/server/budget/budget-input.ts`) is the only place that turns

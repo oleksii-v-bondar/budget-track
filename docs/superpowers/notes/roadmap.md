@@ -1,6 +1,6 @@
 # Budget Track: status
 
-As of 2026-11-23, Budget Track is a single-user YNAB-style budget app: one backend (Hono + Postgres) and one frontend
+As of 2026-11-24, Budget Track is a single-user YNAB-style budget app: one backend (Hono + Postgres) and one frontend
 (React PWA). The owner signs in with a username and password from the environment (`APP_USERNAME`, `APP_PASSWORD`).
 
 Done:
@@ -13,9 +13,10 @@ Done:
 - **Transaction sheet:** payee autocomplete, category picker, transfers, splits, FX rate, flag, cleared and delete.
   Future dates become one-time scheduled entries.
 - **Undo/redo** for every change.
+- **Bank connections** (optional) through Enable Banking (free restricted production mode; PKO BP and Revolut):
+  connect per bank, link accounts, Sync now and a 6-hourly auto-sync, imports to approve.
 
 Possible next steps, only if wanted:
-- Bank sync through Mastercard Open Banking.
 - Repeating scheduled transactions.
 - Reports.
 
