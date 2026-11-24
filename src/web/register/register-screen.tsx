@@ -1,6 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import type { AccountBalances, AccountDto } from '../../shared/api/accounts';
 import type { TransactionDto } from '../../shared/api/transactions';
 import { ACCOUNT_TYPE_LABELS, isForeign, isOnBudget } from '../accounts/account-groups';
@@ -8,16 +8,19 @@ import { AccountSettings } from '../accounts/account-settings';
 import { ReconcileForm } from '../accounts/reconcile';
 import { RevalueForm } from '../accounts/revalue';
 import { accountsQuery } from '../accounts/accounts-api';
-import { formatDate, formatMoney } from '../lib/format';
-import { BackLink, ScreenHeader } from '../shell/screen-header';
+import { api, unwrap } from '../lib/api';
+import { useCommand } from '../lib/commands';
+import { formatDayHeading, formatMoney } from '../lib/format';
+import { BackLink, PILL_BUTTON, ROUND_BUTTON, ScreenHeader } from '../shell/screen-header';
 import { categoriesQuery, payeesQuery } from '../transactions/lookups';
 import { TransactionForm } from '../transactions/transaction-form';
 import { Button } from '../ui/button';
 import { cx } from '../ui/cx';
-import { CloseIcon } from '../ui/icons';
+import { FormError } from '../ui/field';
+import { CloseIcon, SearchIcon } from '../ui/icons';
 import { LoadError, Loading } from '../ui/load-state';
 import { Sheet } from '../ui/sheet';
-import { BulkActions } from './bulk-actions';
+import { BulkActions, bulkErrorMessage } from './bulk-actions';
 import { FilterForm } from './filter-form';
 import { filterChips, type RegisterFilters, registerParams } from './filters';
 import { registerQuery } from './register-api';
@@ -27,7 +30,7 @@ import { TransactionRow } from './transaction-row';
 function Balance({ label, minor, currency }: { label: string; minor: number; currency: string }) {
   return (
     <div>
-      <dt className="text-xs text-muted">{label}</dt>
+      <dt className="text-sm text-muted">{label}</dt>
       <dd className={cx('font-semibold tabular-nums whitespace-nowrap', minor < 0 && 'text-red-400')}>
         {formatMoney(minor, currency)}
       </dd>
@@ -37,9 +40,7 @@ function Balance({ label, minor, currency }: { label: string; minor: number; cur
 
 /** The register header's actions: compact, in one row that scrolls sideways on a narrow phone. */
 const HEADER_ACTION =
-  'inline-flex min-h-9 shrink-0 items-center rounded-full bg-raised px-3 text-sm font-semibold text-gray-100 hover:bg-white/10';
-const HEADER_PRIMARY =
-  'inline-flex min-h-9 shrink-0 items-center rounded-full bg-brand px-3 text-sm font-semibold text-white hover:bg-brand-dark';
+  'inline-flex min-h-10 shrink-0 items-center rounded-full bg-raised px-4 text-sm font-semibold text-white ring-1 ring-white/5 hover:bg-white/10';
 
 /** Spec §11 Register header: the account's cleared, uncleared and working balance, in its currency. */
 function RegisterHeader({ account, balance }: { account: AccountDto; balance: AccountBalances }) {
@@ -47,15 +48,13 @@ function RegisterHeader({ account, balance }: { account: AccountDto; balance: Ac
   const close = () => setOpen(null);
   const navigate = useNavigate();
   return (
-    <section aria-label="Balances" className="border-b border-line bg-surface px-4 py-3">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="truncate text-xl font-semibold">{account.name}</h2>
-        <span className="shrink-0 text-sm text-muted">
-          {ACCOUNT_TYPE_LABELS[account.type]}
-          {account.closed && ' · Closed'}
-        </span>
-      </div>
-      <dl className="mt-3 grid grid-cols-3 gap-2">
+    <section aria-label="Balances" className="px-4 pb-2">
+      <h2 className="mt-4 truncate text-[34px] leading-tight font-bold tracking-tight">{account.name}</h2>
+      <p className="text-muted">
+        {ACCOUNT_TYPE_LABELS[account.type]}
+        {account.closed && ' · Closed'}
+      </p>
+      <dl className="mt-3 grid grid-cols-3 gap-2 rounded-2xl bg-surface p-4">
         <Balance label="Cleared" minor={balance.cleared} currency={account.currency} />
         <Balance label="Uncleared" minor={balance.uncleared} currency={account.currency} />
         <Balance label="Working" minor={balance.working} currency={account.currency} />
@@ -63,26 +62,7 @@ function RegisterHeader({ account, balance }: { account: AccountDto; balance: Ac
       {isForeign(account) && account.balanceAtLatestRate !== null && (
         <p className="mt-1 text-right text-sm text-muted">≈ {formatMoney(account.balanceAtLatestRate)}</p>
       )}
-      {account.unapprovedCount > 0 && (
-        <Link
-          to="/accounts/$accountId"
-          params={{ accountId: account.id }}
-          search={{ unapproved: true }}
-          className="mt-2 block text-sm font-medium text-brand"
-        >
-          {account.unapprovedCount} to approve
-        </Link>
-      )}
       <div className="mt-3 flex gap-2 overflow-x-auto">
-        {!account.closed && (
-          <Link
-            to="/transactions/new"
-            search={{ accountId: account.id }}
-            className={HEADER_PRIMARY}
-          >
-            Add transaction
-          </Link>
-        )}
         {!account.closed && (
           <button type="button" className={HEADER_ACTION} onClick={() => setOpen('reconcile')}>
             Reconcile
@@ -131,61 +111,63 @@ function LoadMore({ onLoad, busy }: { onLoad: () => void; busy: boolean }) {
   );
 }
 
-/** Filters and Select beside the search box (the kit's Button is taller). */
-const TOOLBAR_BUTTON =
-  'min-h-10 shrink-0 rounded-xl bg-surface px-3 text-sm font-semibold text-white ring-1 ring-line hover:bg-white/5';
+/** The Filters button beside the search box (the kit's Button is taller). */
+const FILTERS_BUTTON =
+  'min-h-11 shrink-0 rounded-full bg-raised px-4 text-sm font-semibold text-white ring-1 ring-white/5 hover:bg-white/10';
 
 /** Spec §10: search text (payee, memo, category) and the filter sheet, with the active filters as removable chips. */
-function RegisterToolbar({
+function SearchBar({
   filters,
+  open,
   onFiltersChange,
-  onSelect,
 }: {
   filters: RegisterFilters;
+  /** The search box and Filters are shown (the top bar's search button); the chips always are. */
+  open: boolean;
   onFiltersChange: (filters: RegisterFilters) => void;
-  /** Starts choosing transactions for a bulk action. */
-  onSelect: () => void;
 }) {
   const [text, setText] = useState(filters.q ?? '');
-  const [open, setOpen] = useState(false);
+  const [sheet, setSheet] = useState(false);
   const categories = useQuery(categoriesQuery);
   const payees = useQuery(payeesQuery);
   const lookups = { groups: categories.data?.groups ?? [], payees: payees.data?.payees ?? [] };
   const chips = filterChips(filters, lookups);
+  // The review bar stands for "Unapproved".
+  const shown = chips.filter((chip) => chip.key !== 'unapproved');
   const search = (q: string) => onFiltersChange({ ...filters, q: q.trim() === '' ? undefined : q.trim() });
+  if (!open && shown.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2 border-b border-line bg-surface px-4 py-2">
-      <div className="flex gap-2">
-        <form
-          role="search"
-          className="flex-1"
-          onSubmit={(event) => {
-            event.preventDefault();
-            search(text);
-          }}
-        >
-          <input
-            type="search"
-            aria-label="Search transactions"
-            placeholder="Search payee, memo, category"
-            value={text}
-            onChange={(event) => {
-              setText(event.target.value);
-              if (event.target.value === '' && filters.q) search('');
+    <div className="flex flex-col gap-2 px-4 pb-3">
+      {open && (
+        <div className="flex gap-2">
+          <form
+            role="search"
+            className="flex-1"
+            onSubmit={(event) => {
+              event.preventDefault();
+              search(text);
             }}
-            className="min-h-10 w-full rounded-xl border border-line bg-raised px-3 text-base outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
-          />
-        </form>
-        <button type="button" className={TOOLBAR_BUTTON} onClick={() => setOpen(true)}>
-          Filters{chips.length > 0 && ` (${chips.length})`}
-        </button>
-        <button type="button" className={TOOLBAR_BUTTON} onClick={onSelect}>
-          Select
-        </button>
-      </div>
-      {chips.length > 0 && (
+          >
+            <input
+              type="search"
+              aria-label="Search transactions"
+              placeholder="Search payee, memo, category"
+              value={text}
+              onChange={(event) => {
+                setText(event.target.value);
+                if (event.target.value === '' && filters.q) search('');
+              }}
+              className="min-h-11 w-full rounded-full border border-line bg-raised px-4 text-base outline-none placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/30"
+            />
+          </form>
+          <button type="button" className={FILTERS_BUTTON} onClick={() => setSheet(true)}>
+            Filters{chips.length > 0 && ` (${chips.length})`}
+          </button>
+        </div>
+      )}
+      {shown.length > 0 && (
         <ul aria-label="Active filters" className="flex flex-wrap gap-2">
-          {chips.map((chip) => (
+          {shown.map((chip) => (
             <li key={chip.key}>
               <button
                 type="button"
@@ -200,17 +182,63 @@ function RegisterToolbar({
           ))}
         </ul>
       )}
-      <Sheet open={open} onClose={() => setOpen(false)} title="Filters">
+      <Sheet open={sheet} onClose={() => setSheet(false)} title="Filters">
         <FilterForm
           filters={filters}
           groups={lookups.groups}
           payees={lookups.payees}
           onApply={(next) => {
-            setOpen(false);
+            setSheet(false);
             onFiltersChange(next);
           }}
         />
       </Sheet>
+    </div>
+  );
+}
+
+/** "① N New transactions [Review]": shows only the unapproved ones (bank imports) to approve them. */
+function ReviewBanner({ count, onReview }: { count: number; onReview: () => void }) {
+  return (
+    <div className="mx-4 mb-3 flex items-center gap-3 rounded-full bg-surface py-2 pr-2 pl-4">
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-brand-light text-sm font-bold text-indigo-200 tabular-nums">
+        {count}
+      </span>
+      <span className="flex-1 text-[17px]">New transaction{count === 1 ? '' : 's'}</span>
+      <button
+        type="button"
+        onClick={onReview}
+        className="min-h-11 rounded-full bg-brand-light px-6 text-[17px] font-semibold text-brand hover:bg-brand-light/70"
+      >
+        Review
+      </button>
+    </div>
+  );
+}
+
+/** While reviewing: approve every listed transaction, or stop reviewing. */
+function ReviewBar({
+  count,
+  busy,
+  onApproveAll,
+  onDone,
+}: {
+  count: number;
+  busy: boolean;
+  onApproveAll: () => void;
+  onDone: () => void;
+}) {
+  return (
+    <div className="mx-4 mb-3 flex items-center gap-2 rounded-full bg-surface py-2 pr-2 pl-4">
+      <span className="flex-1 text-[17px]">{count === 0 ? 'Nothing to review' : `${count} to review`}</span>
+      {count > 0 && (
+        <Button mutating busy={busy} className="min-h-10 px-4 text-sm" onClick={onApproveAll}>
+          Approve all
+        </Button>
+      )}
+      <Button variant="secondary" className="min-h-10 px-4 text-sm" onClick={onDone}>
+        Done
+      </Button>
     </div>
   );
 }
@@ -243,7 +271,7 @@ function BulkBar({
     <div
       role="toolbar"
       aria-label="Selected transactions"
-      className="fixed inset-x-0 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-20 mx-auto flex max-w-[480px] items-center gap-2 border-t border-line bg-surface px-4 py-2 shadow-lg"
+      className="fixed inset-x-0 bottom-[calc(5.5rem+max(0.75rem,env(safe-area-inset-bottom)))] z-30 mx-auto flex max-w-[480px] items-center gap-2 rounded-t-3xl border-t border-line bg-surface px-4 py-3 shadow-2xl"
     >
       <span className="flex-1 font-medium">{n} selected</span>
       {n < loaded && (
@@ -279,35 +307,56 @@ interface RegisterListProps {
   showAccount: boolean;
   onOpen: (transaction: TransactionDto) => void;
   selection: Selection | null;
+  /** While reviewing: approves one transaction. */
+  onApprove: ((transaction: TransactionDto) => void) | null;
 }
 
-function RegisterList({ transactions, accounts, showAccount, onOpen, selection }: RegisterListProps) {
+function RegisterList({ transactions, accounts, showAccount, onOpen, selection, onApprove }: RegisterListProps) {
   return groupByDate(transactions).map((day) => (
-    <section key={day.date} aria-label={formatDate(day.date)}>
-      <h3 className="bg-raised px-4 py-1 text-xs font-semibold text-muted">{formatDate(day.date)}</h3>
+    <section key={day.date} aria-label={formatDayHeading(day.date)}>
+      <h3 className="px-4 pt-5 pb-2 text-lg font-semibold">{formatDayHeading(day.date)}</h3>
       <ul className="divide-y divide-line bg-surface">
         {day.items.map((transaction) => {
           const owner = accounts.get(transaction.accountId);
           const row = (
-            <TransactionRow transaction={transaction} onBudget={owner ? isOnBudget(owner) : true} showAccount={showAccount} />
+            <TransactionRow
+              transaction={transaction}
+              onBudget={owner ? isOnBudget(owner) : true}
+              showAccount={showAccount}
+            />
           );
+          const name = `${payeeLabel(transaction)} ${formatMoney(transaction.amount, transaction.currency)}`;
           return (
-            <li key={transaction.id}>
+            <li key={transaction.id} className="flex items-center">
               {selection ? (
-                <label className="flex items-center pl-4">
+                <label className="flex min-w-0 flex-1 items-center pl-4">
                   <input
                     type="checkbox"
                     className="size-5 shrink-0 accent-brand"
-                    aria-label={`Select ${payeeLabel(transaction)} ${formatMoney(transaction.amount, transaction.currency)}`}
+                    aria-label={`Select ${name}`}
                     checked={selection.ids.has(transaction.id)}
                     onChange={() => selection.toggle(transaction.id)}
                   />
                   <span className="min-w-0 flex-1">{row}</span>
                 </label>
               ) : (
-                <button type="button" className="block w-full text-left hover:bg-white/5" onClick={() => onOpen(transaction)}>
+                <button
+                  type="button"
+                  className="block min-w-0 flex-1 text-left hover:bg-white/5"
+                  onClick={() => onOpen(transaction)}
+                >
                   {row}
                 </button>
+              )}
+              {onApprove && !selection && !transaction.approved && (
+                <Button
+                  mutating
+                  aria-label={`Approve ${name}`}
+                  className="mr-4 min-h-9 shrink-0 px-3 text-sm"
+                  onClick={() => onApprove(transaction)}
+                >
+                  Approve
+                </Button>
               )}
             </li>
           );
@@ -318,8 +367,9 @@ function RegisterList({ transactions, accounts, showAccount, onOpen, selection }
 }
 
 /**
- * Spec §11 Register, for one account (`accountId`) or all of them: the balances header, then the transactions
- * grouped by date, newest first, loading more pages as the list scrolls (cursor pagination).
+ * Spending (every account) and an account's register (spec §11, `accountId`): the top bar with search and Select,
+ * the balances header of an account, the review banner, then the transactions grouped by date, newest first, loading
+ * more pages as the list scrolls (cursor pagination).
  */
 export function RegisterScreen({
   accountId,
@@ -332,9 +382,19 @@ export function RegisterScreen({
 }) {
   const accounts = useQuery(accountsQuery);
   // While other filters load, the last results stay on screen.
-  const register = useInfiniteQuery({ ...registerQuery(registerParams(accountId, filters)), placeholderData: keepPreviousData });
+  const register = useInfiniteQuery({
+    ...registerQuery(registerParams(accountId, filters)),
+    placeholderData: keepPreviousData,
+  });
+  // Open while a search or filter is on (reviewing has a bar of its own).
+  const [searching, setSearching] = useState(() =>
+    Object.entries(filters).some(([key, value]) => key !== 'unapproved' && value !== undefined),
+  );
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [editing, setEditing] = useState<TransactionDto | null>(null);
+  const approve = useCommand((ids: string[]) =>
+    unwrap(api.api.transactions.bulk.$post({ json: { ids, action: { type: 'approve' }, confirmReconciled: false } })),
+  );
   const toggle = (id: string) =>
     setSelected((current) => {
       const next = new Set(current);
@@ -346,8 +406,30 @@ export function RegisterScreen({
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
   };
 
-  if (accounts.isPending) return <Loading />;
-  if (accounts.isError) return <LoadError error={accounts.error} onRetry={() => void accounts.refetch()} />;
+  // Search and Select once the accounts are known (the rows need them).
+  const header = (account: AccountDto | null, actions?: ReactNode) => (
+    <ScreenHeader
+      title={account ? undefined : 'Spending'}
+      left={account && <BackLink to="/accounts" label="Accounts" />}
+      actions={actions}
+    />
+  );
+  if (accounts.isPending) {
+    return (
+      <>
+        {header(null)}
+        <Loading />
+      </>
+    );
+  }
+  if (accounts.isError) {
+    return (
+      <>
+        {header(null)}
+        <LoadError error={accounts.error} onRetry={() => void accounts.refetch()} />
+      </>
+    );
+  }
   const account = accountId === undefined ? null : accounts.data.accounts.find((a) => a.id === accountId);
   if (account === undefined) {
     return (
@@ -363,21 +445,67 @@ export function RegisterScreen({
   const transactions = register.data?.pages.flatMap((page) => page.transactions) ?? [];
   const filtered = Object.values(filters).some((value) => value !== undefined);
   const byId = new Map(accounts.data.accounts.map((a) => [a.id, a]));
+  const unapproved = account
+    ? account.unapprovedCount
+    : accounts.data.accounts.reduce((n, a) => n + a.unapprovedCount, 0);
+  const reviewing = filters.unapproved === true;
+  const toApprove = transactions.filter((t) => !t.approved);
   let list;
   if (register.isPending) list = <Loading />;
   else if (register.isError) list = <LoadError error={register.error} onRetry={() => void register.refetch()} />;
   else if (transactions.length === 0) {
     list = (
       <p className="px-4 py-12 text-center text-muted">
-        {filtered ? 'No transactions match.' : 'No transactions yet.'}
+        {reviewing ? 'Every transaction is approved.' : filtered ? 'No transactions match.' : 'No transactions yet.'}
       </p>
     );
   }
+  const actions = (
+    <>
+      <button
+        type="button"
+        aria-label="Search"
+        aria-expanded={searching}
+        className={ROUND_BUTTON}
+        onClick={() => setSearching(!searching)}
+      >
+        <SearchIcon />
+      </button>
+      <button
+        type="button"
+        aria-pressed={selected !== null}
+        className={cx(PILL_BUTTON, selected && 'text-brand')}
+        onClick={() => setSelected(selected ? null : new Set())}
+      >
+        Select
+      </button>
+    </>
+  );
   return (
     <div>
-      {account ? <ScreenHeader left={<BackLink to="/accounts" label="Accounts" />} /> : <ScreenHeader title="Spending" />}
-      {account && <RegisterHeader account={account} balance={register.data?.pages[0]?.balances?.balance ?? account.balance} />}
-      <RegisterToolbar filters={filters} onFiltersChange={onFiltersChange} onSelect={() => setSelected(new Set())} />
+      {header(account, actions)}
+      {account && (
+        <RegisterHeader account={account} balance={register.data?.pages[0]?.balances?.balance ?? account.balance} />
+      )}
+      <SearchBar filters={filters} open={searching} onFiltersChange={onFiltersChange} />
+      {reviewing ? (
+        <ReviewBar
+          count={toApprove.length}
+          busy={approve.isPending}
+          // A bulk command takes at most 500 transactions.
+          onApproveAll={() => approve.mutate(toApprove.slice(0, 500).map((t) => t.id))}
+          onDone={() => onFiltersChange({ ...filters, unapproved: undefined })}
+        />
+      ) : (
+        unapproved > 0 && (
+          <ReviewBanner count={unapproved} onReview={() => onFiltersChange({ ...filters, unapproved: true })} />
+        )
+      )}
+      {approve.error && (
+        <div className="mx-4 mb-3">
+          <FormError message={bulkErrorMessage(approve.error, toApprove)} />
+        </div>
+      )}
       {list ?? (
         <RegisterList
           transactions={transactions}
@@ -385,6 +513,7 @@ export function RegisterScreen({
           showAccount={account === null}
           onOpen={setEditing}
           selection={selected && { ids: selected, toggle }}
+          onApprove={reviewing ? (transaction) => approve.mutate([transaction.id]) : null}
         />
       )}
       {hasNextPage && <LoadMore onLoad={loadMore} busy={isFetchingNextPage} />}

@@ -22,11 +22,11 @@ function AccountRow({ account }: { account: AccountDto }) {
     <Link
       to="/accounts/$accountId"
       params={{ accountId: account.id }}
-      className="flex min-h-14 items-center gap-3 px-4 py-2 hover:bg-white/5"
+      className="flex min-h-16 items-center gap-3 px-4 py-3 hover:bg-white/5"
     >
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">{account.name}</span>
-        <span className="block text-sm text-muted">
+        <span className="block truncate text-[17px] font-semibold">{account.name}</span>
+        <span className="block text-[15px] text-muted">
           {ACCOUNT_TYPE_LABELS[account.type]}
           {account.unapprovedCount > 0 && (
             <span className="font-medium text-brand"> · {account.unapprovedCount} to approve</span>
@@ -34,7 +34,9 @@ function AccountRow({ account }: { account: AccountDto }) {
         </span>
       </span>
       <span className="flex flex-col items-end">
-        <span className={amountClass(working)}>{formatMoney(working, account.currency)}</span>
+        <span className={cx('text-[17px] font-semibold', amountClass(working))}>
+          {formatMoney(working, account.currency)}
+        </span>
         {isForeign(account) && account.balanceAtLatestRate !== null && (
           <span className="text-sm whitespace-nowrap text-muted">≈ {formatMoney(account.balanceAtLatestRate)}</span>
         )}
@@ -46,7 +48,7 @@ function AccountRow({ account }: { account: AccountDto }) {
 
 function AccountList({ accounts, label }: { accounts: AccountDto[]; label: string }) {
   return (
-    <ul aria-label={label} className="divide-y divide-line border-y border-line bg-surface">
+    <ul aria-label={label} className="mx-4 divide-y divide-line overflow-hidden rounded-2xl bg-surface">
       {accounts.map((account) => (
         <li key={account.id}>
           <AccountRow account={account} />
@@ -66,20 +68,22 @@ export function AccountsScreen() {
   const [adding, setAdding] = useState(false);
   const navigate = useNavigate();
   const header = <ScreenHeader title="Accounts" />;
-  if (query.isPending)
+  if (query.isPending) {
     return (
       <>
         {header}
         <Loading />
       </>
     );
-  if (query.isError)
+  }
+  if (query.isError) {
     return (
       <>
         {header}
         <LoadError error={query.error} onRetry={() => void query.refetch()} />
       </>
     );
+  }
 
   const { accounts } = query.data;
   const { groups, closed } = groupAccounts(accounts);
@@ -93,11 +97,11 @@ export function AccountsScreen() {
         ) : (
           <Link
             to="/transactions"
-            className="mx-4 flex min-h-14 items-center justify-between rounded-xl bg-surface px-4 shadow-sm ring-1 ring-line"
+            className="mx-4 flex min-h-16 items-center justify-between rounded-2xl bg-surface px-4 hover:bg-white/5"
           >
-            <span className="font-semibold">All accounts</span>
+            <span className="text-[17px] font-semibold">All accounts</span>
             <span className="flex items-center gap-2">
-              <span className={amountClass(total)}>{formatMoney(total)}</span>
+              <span className={cx('text-[17px] font-semibold', amountClass(total))}>{formatMoney(total)}</span>
               <ChevronRightIcon className="text-muted" />
             </span>
           </Link>
@@ -105,7 +109,7 @@ export function AccountsScreen() {
 
         {groups.map((group) => (
           <section key={group.key} aria-labelledby={`group-${group.key}`}>
-            <h2 id={`group-${group.key}`} className="flex justify-between px-4 pb-1 text-xs font-semibold text-muted">
+            <h2 id={`group-${group.key}`} className="flex justify-between px-8 pb-2 text-sm font-semibold text-muted">
               <span className="tracking-wide uppercase">{group.label}</span>
               <span className={amountClass(group.total)} data-testid={`total-${group.key}`}>
                 {formatMoney(group.total)}
@@ -121,7 +125,7 @@ export function AccountsScreen() {
               type="button"
               aria-expanded={showClosed}
               onClick={() => setShowClosed((shown) => !shown)}
-              className="flex min-h-11 w-full items-center gap-1 px-4 text-xs font-semibold tracking-wide text-muted uppercase"
+              className="flex min-h-11 w-full items-center gap-1 px-7 text-sm font-semibold tracking-wide text-muted uppercase"
             >
               <ChevronRightIcon className={cx('size-4 transition-transform', showClosed && 'rotate-90')} />
               Closed accounts ({closed.length})

@@ -125,14 +125,6 @@ export const FlagIcon = (props: IconProps) => (
   </Icon>
 );
 
-/** A transaction's cleared state: a circled C. */
-export const ClearedIcon = (props: IconProps) => (
-  <Icon {...props}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M14.5 9.5a3.5 3.5 0 1 0 0 5" />
-  </Icon>
-);
-
 export const LockIcon = (props: IconProps) => (
   <Icon {...props}>
     <rect x="5" y="11" width="14" height="10" rx="2" />

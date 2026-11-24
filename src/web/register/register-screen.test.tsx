@@ -26,6 +26,9 @@ const salary = transaction(checking, 'salary', {
 const kiosk = transaction(checking, 'kiosk', { date: '2026-11-18', payeeName: 'Kiosk', cleared: 'cleared', approved: false });
 const valuation = transaction(tracking, 'valuation', { date: '2026-11-01', payeeName: 'Valuation', amount: 100_000 });
 
+const registerPaths = (requests: FakeRequest[]) =>
+  requests.filter((r) => /^\/api\/transactions(\?|$)/.test(r.path)).map((r) => decodeURIComponent(r.path));
+
 function registerRoutes(pages: Record<string, ReturnType<typeof registerPage>>) {
   return {
     ...SIGNED_IN,
@@ -50,15 +53,16 @@ describe('register', () => {
       `/api/transactions?accountId=${checking.id}`,
     );
 
-    const day = screen.getByRole('region', { name: '20.11.2026' });
+    const day = screen.getByRole('region', { name: 'November 20, 2026' });
+    expect(within(day).getByRole('heading', { name: 'November 20, 2026' })).toBeInTheDocument();
     const [first, second] = within(day).getAllByRole('listitem');
-    expect(first).toHaveTextContent('LidlGroceries · weekly-25,00 zł');
+    expect(first).toHaveTextContent('LidlGroceriesweekly-25,00 zł');
     expect(within(first!).getByRole('img', { name: 'Red flag' })).toBeInTheDocument();
     expect(within(first!).getByRole('img', { name: 'Uncleared' })).toBeInTheDocument();
     expect(second).toHaveTextContent('EmployerReady to Assign5 000,00 zł');
     expect(within(second!).getByRole('img', { name: 'Reconciled' })).toBeInTheDocument();
-    const earlier = screen.getByRole('region', { name: '18.11.2026' });
-    expect(within(earlier).getByRole('listitem')).toHaveTextContent('KioskUncategorized');
+    const earlier = screen.getByRole('region', { name: 'November 18, 2026' });
+    expect(within(earlier).getByRole('listitem')).toHaveTextContent('KioskCategory Needed');
     expect(within(earlier).getByRole('img', { name: 'Unapproved' })).toBeInTheDocument();
     expect(within(earlier).getByRole('img', { name: 'Cleared' })).toBeInTheDocument();
   });
@@ -73,7 +77,7 @@ describe('register', () => {
     );
     renderApp('/transactions');
     await userEvent.setup().click(await screen.findByRole('button', { name: 'Load more' }));
-    expect(await screen.findByRole('region', { name: '01.11.2026' })).toHaveTextContent('ValuationHouse1 000,00 zł');
+    expect(await screen.findByRole('region', { name: 'November 1, 2026' })).toHaveTextContent('Valuation1 000,00 złHouse');
     expect(requests.filter((r) => r.path.startsWith('/api/transactions')).map((r) => r.path)).toEqual([
       '/api/transactions',
       `/api/transactions?cursor=${encodeURIComponent(cursor)}`,
@@ -85,9 +89,49 @@ describe('register', () => {
     fakeApi(registerRoutes({ first: registerPage([kiosk, valuation]) }));
     renderApp('/transactions');
     expect(await screen.findByRole('heading', { name: 'Spending' })).toBeInTheDocument();
-    expect(await screen.findByText('Checking · Uncategorized')).toBeInTheDocument();
+    const kioskRow = (await screen.findByText('Kiosk')).closest('li')!;
+    expect(kioskRow).toHaveTextContent('KioskCategory Needed-10,00 złChecking');
     expect(screen.getByText('House')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Balances' })).toBeNull();
+  });
+
+  it('offers to review new transactions, approving one or all of them', async () => {
+    const tennis = transaction(checking, 'tennis', { payeeName: 'Legia Tenis', amount: -9_900, approved: false });
+    const { requests } = fakeApi({
+      ...registerRoutes({ first: registerPage([kiosk, tennis]) }),
+      'GET /api/accounts': { body: { accounts: [{ ...checking, unapprovedCount: 2 }, tracking] } },
+      'POST /api/transactions/bulk': { body: { ids: [] } },
+    });
+    const { history } = renderApp('/transactions');
+    const user = userEvent.setup();
+    expect(await screen.findByText('New transactions')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Review' }));
+    await waitFor(() => expect(history.location.search).toBe('?unapproved=true'));
+    await waitFor(() => expect(registerPaths(requests).at(-1)).toBe('/api/transactions?unapproved=true'));
+    expect(screen.getByText('2 to review')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Active filters' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /^Approve Legia Tenis -99,00\szł$/ }));
+    await user.click(screen.getByRole('button', { name: 'Approve all' }));
+    const approvals = requests.filter((r) => r.path === '/api/transactions/bulk').map((r) => r.body);
+    expect(approvals).toEqual([
+      { ids: [tennis.id], action: { type: 'approve' }, confirmReconciled: false },
+      { ids: [kiosk.id, tennis.id], action: { type: 'approve' }, confirmReconciled: false },
+    ]);
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(history.location.search).toBe(''));
+  });
+
+  it("starts a new transaction from an account's register in that account", async () => {
+    fakeApi({
+      ...registerRoutes({ first: registerPage([], { owner: checking }) }),
+      'GET /api/categories': { body: categoryGroups([]) },
+      'GET /api/payees': { body: { payees: [] } },
+    });
+    renderApp(`/accounts/${checking.id}`);
+    await userEvent.click(await screen.findByRole('button', { name: 'New transaction' }));
+    const sheet = screen.getByRole('dialog', { name: 'New transaction' });
+    expect(await within(sheet).findByLabelText('Account')).toHaveValue(checking.id);
   });
 
   it('says when an account does not exist', async () => {
@@ -110,12 +154,11 @@ describe('register search and filters', () => {
     const app = renderApp(path);
     return { ...server, ...app, user: userEvent.setup() };
   }
-  const registerPaths = (requests: FakeRequest[]) =>
-    requests.filter((r) => r.path.startsWith('/api/transactions')).map((r) => decodeURIComponent(r.path));
 
   it('searches the text and keeps it in the URL', async () => {
     const { user, requests, history } = openFiltered(`/accounts/${checking.id}`);
-    await user.type(await screen.findByRole('searchbox', { name: 'Search transactions' }), 'lidl{Enter}');
+    await user.click(await screen.findByRole('button', { name: 'Search' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Search transactions' }), 'lidl{Enter}');
     await waitFor(() => expect(history.location.search).toBe('?q=lidl'));
     await waitFor(() => expect(registerPaths(requests).at(-1)).toBe(`/api/transactions?accountId=${checking.id}&q=lidl`));
     await user.clear(screen.getByRole('searchbox', { name: 'Search transactions' }));
@@ -147,7 +190,6 @@ describe('register search and filters', () => {
       'Category: Groceries',
       'Payee: Lidl',
       'Red flag',
-      'Unapproved',
     ]);
     await waitFor(() =>
       expect(registerPaths(requests).at(-1)).toBe(

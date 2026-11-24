@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatAmount, formatDate, formatMoney, formatMonth, formatMonthShort, NBSP, parseDate } from './format';
+import { formatAmount, formatDate, formatDayHeading, formatMoney, formatMonth, formatMonthShort, NBSP, parseDate } from './format';
 
 /** Writes expectations with plain spaces; the formatter uses no-break spaces. */
 const nb = (text: string) => text.replaceAll(' ', NBSP);
@@ -58,5 +58,13 @@ describe('month labels', () => {
     expect(formatMonthShort('2026-09')).toBe('Sep 2026');
     expect(() => formatMonth('2026-13')).toThrow();
     expect(() => formatMonth('2026-11-01')).toThrow();
+  });
+});
+
+describe('formatDayHeading', () => {
+  it('writes the month out, without a leading zero on the day', () => {
+    expect(formatDayHeading('2026-11-02')).toBe('November 2, 2026');
+    expect(formatDayHeading('2026-01-31')).toBe('January 31, 2026');
+    expect(() => formatDayHeading('2026-13-01')).toThrow();
   });
 });

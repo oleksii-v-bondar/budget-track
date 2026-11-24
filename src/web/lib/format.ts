@@ -44,6 +44,14 @@ export function formatDate(isoDate: string): string {
   return `${match[3]}.${match[2]}.${match[1]}`;
 }
 
+/** "November 20, 2026" for the ISO date "2026-11-20": the date headings of Spending and the registers. */
+export function formatDayHeading(isoDate: string): string {
+  const match = ISO_DATE.exec(isoDate);
+  const name = match ? MONTH_NAMES[Number(match[2]) - 1] : undefined;
+  if (!match || !name) throw new Error(`Not an ISO date: ${isoDate}`);
+  return `${name} ${Number(match[3])}, ${match[1]}`;
+}
+
 /** The ISO date for "20.11.2026" (one-digit day and month allowed), or null if it isn't a real calendar date. */
 export function parseDate(text: string): string | null {
   const match = /^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$/.exec(text);
