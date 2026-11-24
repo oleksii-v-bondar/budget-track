@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import type { ComponentType, SVGProps } from 'react';
+import { useAttention } from '../home/attention';
 import { AccountsIcon, HomeIcon, PlanIcon, ReflectIcon, SpendingIcon } from '../ui/icons';
 
 const tab = 'flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[11px] font-semibold';
@@ -19,8 +20,13 @@ const TABS: {
   { to: '/reflect', label: 'Reflect', icon: ReflectIcon },
 ];
 
-/** The floating tab bar: Home · Plan · Spending · Accounts · Reflect. */
+/**
+ * The floating tab bar: Home · Plan · Spending · Accounts · Reflect. Home's red badge counts the transactions to
+ * review and the overspent categories.
+ */
 export function BottomNav() {
+  const { review, overspent } = useAttention();
+  const badge = review + overspent;
   return (
     <nav
       aria-label="Main"
@@ -29,8 +35,20 @@ export function BottomNav() {
       <div className="flex gap-1 rounded-full bg-raised/80 p-1 shadow-2xl ring-1 ring-white/10 backdrop-blur-md">
         {TABS.map(({ to, label, icon: Icon }) => (
           <Link key={to} to={to} className={tab} activeProps={active} inactiveProps={inactive}>
-            <Icon className="size-6" />
+            <span className="relative">
+              <Icon className="size-6" />
+              {to === '/home' && badge > 0 && (
+                <span
+                  aria-hidden="true"
+                  data-testid="home-badge"
+                  className="absolute -top-1.5 -right-3 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold text-white"
+                >
+                  {badge}
+                </span>
+              )}
+            </span>
             {label}
+            {to === '/home' && badge > 0 && <span className="sr-only">, {badge} need attention</span>}
           </Link>
         ))}
       </div>
