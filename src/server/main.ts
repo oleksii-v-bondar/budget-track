@@ -35,7 +35,8 @@ async function main(): Promise<void> {
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     logger.info({ port: info.port }, 'listening');
   });
-  const stopAutoSync = config.aiia ? startAutoSync(deps) : () => {};
+  if (!config.enableBanking) logger.info('bank connections are off (no ENABLE_BANKING_APP_ID or no readable key file)');
+  const stopAutoSync = config.enableBanking ? startAutoSync(deps) : () => {};
 
   const shutdown = (signal: NodeJS.Signals) => {
     logger.info({ signal }, 'shutting down');

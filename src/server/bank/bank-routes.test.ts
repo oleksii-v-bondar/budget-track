@@ -1,3 +1,4 @@
+import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { asc, eq, isNotNull } from 'drizzle-orm';
@@ -12,66 +13,122 @@ import { createAccount, createCategory, createGroup, createTransaction } from '.
 import { stubFx } from '../test/fx';
 import { snapshot } from '../test/snapshot';
 
+const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const REDIRECT = 'http://localhost:3080/api/bank/callback';
-const BASIC = `Basic ${Buffer.from('client:secret').toString('base64')}`;
-const HOUR = 60 * 60 * 1000;
+/** Friday 20 November 2026, 11:00 in Warsaw. */
+const NOW = '2026-11-20T10:00:00Z';
+const NOW_S = Date.parse(NOW) / 1000;
+const MINUTE = 60 * 1000;
+const DAY = 24 * 60 * MINUTE;
+const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 
-const ACCOUNTS = [
-  { id: 'pko-1', name: 'Konto Za Zero', currency: 'PLN', provider: { name: 'PKO BP' }, number: { iban: 'PL00' } },
-  // No top-level currency: it is read from the balance.
-  { id: 'rev-eur', name: 'EUR', booked: { value: 5, currency: 'EUR' }, provider: { name: 'Revolut' } },
+const ASPSPS = [
+  { name: 'Revolut', country: 'PL', logo: 'https://enablebanking.com/brands/PL/Revolut/', maximum_consent_validity: 90 * 86400, psu_types: ['personal', 'business'], beta: false },
+  { name: 'PKO BP', country: 'PL', logo: 'https://enablebanking.com/brands/PL/PKO%20BP/', maximum_consent_validity: 365 * 86400, psu_types: ['personal'], beta: false },
+  { name: 'Bank Firmowy', country: 'PL', logo: 'https://enablebanking.com/brands/PL/Firmowy/', maximum_consent_validity: 86400, psu_types: ['business'], beta: false },
 ];
 
-/** The stub Aiia server: what it was asked, the tokens it handed out, and the transactions it serves (2 a page). */
+const PKO_IBAN = 'PL61109010140000071219812874';
+const pkoSession = (id: string, uids: [string, string]) => ({
+  session_id: id,
+  aspsp: { name: 'PKO BP', country: 'PL' },
+  psu_type: 'personal',
+  access: { valid_until: '2027-05-19T09:50:00.000000+00:00' },
+  accounts: [
+    { uid: uids[0], account_id: { iban: PKO_IBAN }, name: 'Jan Kowalski', product: 'Konto Za Zero', currency: 'PLN', identification_hash: 'h1' },
+    { uid: uids[1], account_id: { iban: 'PL27114020040000300201355387' }, name: 'Jan Kowalski', details: 'Oszczędności', currency: 'PLN', identification_hash: 'h2' },
+  ],
+});
+const REVOLUT_SESSION = {
+  session_id: 'rev-session',
+  aspsp: { name: 'Revolut', country: 'PL' },
+  psu_type: 'personal',
+  access: { valid_until: '2027-02-18T09:50:00Z' },
+  accounts: [
+    { uid: 'rev-eur', account_id: { iban: 'LT603250000000000001' }, name: 'Jan Kowalski', currency: 'EUR', identification_hash: 'h3' },
+    // No uid: Enable Banking can't read it (e.g. a closed account), so it is left out.
+    { account_id: { iban: 'LT603250000000000001' }, name: 'Jan Kowalski', currency: 'USD', identification_hash: 'h4' },
+  ],
+};
+
+/** The stub Enable Banking API: what it was asked (with the JWT checked), and what it answers. */
 interface StubRequest {
   method: string;
   path: string;
-  authorization: string | undefined;
+  query: Record<string, string>;
   body: Record<string, unknown> | undefined;
+  token: string;
+  jwt: { header: unknown; claims: unknown; verified: boolean };
 }
 let requests: StubRequest[];
-let generation: number;
-let refuseRefresh: boolean;
+let sessions: Record<string, unknown>;
+let expired: Set<string>;
+let failing: Set<string>;
 let bankTransactions: Record<string, unknown[]>;
 let server: Server;
 let t: TestDatabase;
 
+function readJwt(authorization: string | undefined) {
+  const token = authorization?.replace(/^Bearer /, '') ?? '';
+  const [header = '', claims = '', signature = ''] = token.split('.');
+  const decode = (part: string): unknown => {
+    try {
+      return JSON.parse(Buffer.from(part, 'base64url').toString());
+    } catch {
+      return null;
+    }
+  };
+  const verified = verify('RSA-SHA256', Buffer.from(`${header}.${claims}`), publicKey, Buffer.from(signature, 'base64url'));
+  return { token, jwt: { header: decode(header), claims: decode(claims), verified } };
+}
+
 beforeEach(async () => {
   t = await createTestDatabase();
   requests = [];
-  generation = 0;
-  refuseRefresh = false;
+  sessions = { 'pko-code': pkoSession('pko-session', ['pko-1', 'pko-2']), 'rev-code': REVOLUT_SESSION };
+  expired = new Set();
+  failing = new Set();
   bankTransactions = {};
   server = createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk: Buffer) => (raw += chunk.toString()));
     req.on('end', () => {
+      const url = new URL(req.url!, 'http://stub');
       const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : undefined;
-      const path = new URL(req.url!, 'http://stub').pathname;
-      requests.push({ method: req.method!, path, authorization: req.headers.authorization, body });
+      const { token, jwt } = readJwt(req.headers.authorization);
+      const path = url.pathname;
+      requests.push({ method: req.method!, path, query: Object.fromEntries(url.searchParams), body, token, jwt });
       const reply = (status: number, payload: unknown) => {
         res.writeHead(status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(payload));
       };
-      const tokens = () => {
-        generation++;
-        return { access_token: `access-${generation}`, refresh_token: `refresh-${generation}`, expires_in: 3600 };
-      };
-      if (path === '/v1/oauth/token') {
-        if (req.headers.authorization !== BASIC) return reply(401, {});
-        if (body?.grant_type === 'authorization_code' && body.code === 'good-code') return reply(200, tokens());
-        const current = body?.refresh_token === `refresh-${generation}`;
-        if (body?.grant_type === 'refresh_token' && current && !refuseRefresh) return reply(200, tokens());
-        return reply(400, { error: 'invalid_grant' });
+      if (!jwt.verified) return reply(401, { code: 401, error: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized access' });
+      if (req.method === 'GET' && path === '/aspsps') return reply(200, { aspsps: ASPSPS });
+      if (req.method === 'POST' && path === '/auth') {
+        return reply(200, { url: 'https://tilisy.enablebanking.com/welcome?sessionid=auth-1', authorization_id: 'auth-1' });
       }
-      if (req.headers.authorization !== `Bearer access-${generation}`) return reply(401, {});
-      if (path === '/v1/accounts') return reply(200, { accounts: ACCOUNTS });
-      const query = /^\/v1\/accounts\/([^/]+)\/transactions\/query$/.exec(path);
-      if (!query) return reply(404, {});
-      const all = bankTransactions[decodeURIComponent(query[1]!)] ?? [];
-      const start = Number(body?.pagingToken ?? 0);
-      const next = start + 2 < all.length ? String(start + 2) : null;
-      return reply(200, { transactions: all.slice(start, start + 2), pagingToken: next });
+      if (req.method === 'POST' && path === '/sessions') {
+        const session = sessions[String(body?.code)];
+        if (!session) return reply(400, { code: 400, error: 'WRONG_AUTHORIZATION_CODE', message: 'Wrong code' });
+        return reply(200, session);
+      }
+      const deleted = /^\/sessions\/([^/]+)$/.exec(path);
+      if (req.method === 'DELETE' && deleted) {
+        if (failing.has(deleted[1]!)) return reply(500, { code: 500, error: 'ASPSP_ERROR', message: 'Bank error' });
+        return reply(200, { message: 'OK' });
+      }
+      const listed = /^\/accounts\/([^/]+)\/transactions$/.exec(path);
+      if (req.method === 'GET' && listed) {
+        const uid = decodeURIComponent(listed[1]!);
+        const session = uid.startsWith('rev') ? 'rev-session' : 'pko-session';
+        if (expired.has(session)) return reply(401, { code: 401, error: 'EXPIRED_SESSION', message: 'Session is expired' });
+        if (failing.has(session)) return reply(500, { code: 500, error: 'ASPSP_ERROR', message: 'Bank error' });
+        const all = bankTransactions[uid] ?? [];
+        const start = Number(url.searchParams.get('continuation_key') ?? 0);
+        const next = start + 2 < all.length ? String(start + 2) : null;
+        return reply(200, { transactions: all.slice(start, start + 2), continuation_key: next });
+      }
+      return reply(404, { code: 404, message: 'Not found' });
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -81,35 +138,35 @@ afterEach(async () => {
   await t.drop();
 });
 
-/** Friday 20 November 2026, 11:00 in Warsaw; EUR is 4.30 zł at NBP. */
 async function bankApp(): Promise<TestApp> {
   const { port } = server.address() as AddressInfo;
   const app = createTestApp(t.db, {
-    now: '2026-11-20T10:00:00Z',
+    now: NOW,
     fx: stubFx({ EUR: '4.3' }),
-    config: {
-      aiia: { clientId: 'client', clientSecret: 'secret', baseUrl: `http://127.0.0.1:${port}`, redirectUri: REDIRECT },
-    },
+    config: { enableBanking: { appId: APP_ID, privateKey, baseUrl: `http://127.0.0.1:${port}`, redirectUri: REDIRECT } },
   });
   await setUpBudget(app);
   return app;
 }
 
+const connectPath = (bank: string) => `/api/bank/connect?bank=${encodeURIComponent(bank)}`;
+const lastAuth = () => requests.findLast((r) => r.path === '/auth');
+
 /** Goes through the consent flow as the browser does; returns where the callback sends it. */
-async function connect({ client }: TestApp, code = 'good-code'): Promise<string | null> {
-  const start = await client.get('/api/bank/connect');
+async function connect({ client }: TestApp, bank: string, code: string): Promise<string | null> {
+  const start = await client.get(connectPath(bank));
   expect(start.status).toBe(302);
-  const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
-  const back = await client.get(`/api/bank/callback?code=${code}&state=${state}`);
+  const back = await client.get(`/api/bank/callback?code=${code}&state=${String(lastAuth()?.body?.state)}`);
   expect(back.status).toBe(302);
   return back.headers.get('location');
 }
 
 const status = async ({ client }: TestApp) => (await (await client.get('/api/bank/status')).json()) as BankStatus;
-const link = ({ client }: TestApp, id: string, accountId: string | null) =>
-  client.send('PUT', `/api/bank/accounts/${id}/link`, { accountId });
+const connectionOf = async (app: TestApp, bank: string) => (await status(app)).connections.find((c) => c.bank === bank)!;
+const link = ({ client }: TestApp, uid: string, accountId: string | null) =>
+  client.send('PUT', `/api/bank/accounts/${uid}/link`, { accountId });
 const sync = ({ client }: TestApp) => client.post('/api/bank/sync');
-const queried = () => requests.filter((r) => r.path.endsWith('/transactions/query'));
+const listed = () => requests.filter((r) => r.path.endsWith('/transactions'));
 
 function imported() {
   return t.db
@@ -128,99 +185,165 @@ function imported() {
     .from(transaction)
     .leftJoin(payee, eq(payee.id, transaction.payeeId))
     .where(isNotNull(transaction.importId))
-    .orderBy(asc(transaction.importId));
+    .orderBy(asc(transaction.date), asc(transaction.importId));
 }
 
 describe('connecting a bank', () => {
-  it('reports "not configured" without Aiia credentials', async () => {
+  it('is off without an app id or a readable key', async () => {
     const app = createTestApp(t.db);
     await setUpBudget(app);
-    expect(await status(app)).toEqual({ configured: false, connected: false, status: null, accounts: [] });
-    expect((await app.client.get('/api/bank/connect')).status).toBe(404);
+    expect(await status(app)).toEqual({ configured: false, connections: [] });
+    expect((await app.client.get('/api/bank/aspsps')).status).toBe(404);
+    expect((await app.client.get(connectPath('PKO BP'))).headers.get('location')).toBe('/settings?bank=error');
+    expect(requests).toEqual([]);
   });
 
-  it('sends the browser to Aiia, exchanges the code and stores the tokens and bank accounts', async () => {
+  it('signs every call with the application JWT, reused until 5 minutes before it expires; banks are cached a day', async () => {
     const app = await bankApp();
-    const start = await app.client.get('/api/bank/connect');
-    const to = new URL(start.headers.get('location')!);
-    expect(`${to.origin}${to.pathname}`).toBe(`${(app.config.aiia!).baseUrl}/v1/oauth/connect`);
-    expect(Object.fromEntries(to.searchParams)).toEqual({
-      client_id: 'client',
-      redirect_uri: REDIRECT,
-      scope: 'accounts offline_access',
-      response_type: 'code',
-      state: expect.stringMatching(/^[\w-]{43}$/),
+    const banks = await app.client.get('/api/bank/aspsps');
+    // Personal banks only, by name.
+    expect(await banks.json()).toEqual({ aspsps: [{ name: 'PKO BP' }, { name: 'Revolut' }] });
+    expect(requests).toEqual([
+      expect.objectContaining({ method: 'GET', path: '/aspsps', query: { country: 'PL' } }),
+    ]);
+    expect(requests[0]!.jwt).toEqual({
+      header: { typ: 'JWT', alg: 'RS256', kid: APP_ID },
+      claims: { iss: 'enablebanking.com', aud: 'api.enablebanking.com', iat: NOW_S, exp: NOW_S + 3600 },
+      verified: true,
     });
-    expect(to.search).toContain('scope=accounts%20offline_access');
+
+    await app.client.get('/api/bank/aspsps');
+    expect(requests).toHaveLength(1);
+    app.clock.advance(54 * MINUTE);
+    await app.client.get(connectPath('PKO BP'));
+    expect(lastAuth()!.token).toBe(requests[0]!.token);
+    app.clock.advance(MINUTE);
+    await app.client.get(connectPath('PKO BP'));
+    expect(lastAuth()!.jwt).toMatchObject({ claims: { iat: NOW_S + 55 * 60, exp: NOW_S + 55 * 60 + 3600 }, verified: true });
+
+    app.clock.advance(DAY);
+    await app.client.get('/api/bank/aspsps');
+    expect(requests.filter((r) => r.path === '/aspsps')).toHaveLength(2);
+  });
+
+  it('sends the browser to the bank with a state cookie, then stores the session and its accounts', async () => {
+    const app = await bankApp();
+    const start = await app.client.get(connectPath('PKO BP'));
+    expect(start.status).toBe(302);
+    expect(start.headers.get('location')).toBe('https://tilisy.enablebanking.com/welcome?sessionid=auth-1');
     const cookie = start.headers.get('set-cookie')!;
     for (const part of ['bt_bank_state=', 'HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/api/bank']) {
       expect(cookie).toContain(part);
     }
-
-    const back = await app.client.get(`/api/bank/callback?code=good-code&state=${to.searchParams.get('state')}`);
-    expect(back.headers.get('location')).toBe('/settings');
-    expect(requests).toEqual([
-      {
-        method: 'POST',
-        path: '/v1/oauth/token',
-        authorization: BASIC,
-        body: { grant_type: 'authorization_code', code: 'good-code', redirect_uri: REDIRECT },
-      },
-      { method: 'GET', path: '/v1/accounts', authorization: 'Bearer access-1', body: undefined },
-    ]);
-    expect(await t.db.select().from(bankConnection)).toMatchObject([
-      {
-        accessToken: 'access-1',
-        refreshToken: 'refresh-1',
-        accessExpiresAt: new Date('2026-11-20T11:00:00Z'),
-        status: 'active',
-      },
-    ]);
-    expect(await status(app)).toEqual({
-      configured: true,
-      connected: true,
-      status: 'active',
-      accounts: [
-        { id: 'pko-1', name: 'Konto Za Zero', currency: 'PLN', providerName: 'PKO BP', accountId: null, lastSyncedAt: null },
-        { id: 'rev-eur', name: 'EUR', currency: 'EUR', providerName: 'Revolut', accountId: null, lastSyncedAt: null },
-      ],
+    // PKO BP allows a year: the consent asks for 180 days (less a 10-minute margin for clock skew).
+    expect(lastAuth()!.body).toEqual({
+      access: { valid_until: new Date(Date.parse(NOW) + 180 * DAY - 10 * MINUTE).toISOString() },
+      aspsp: { name: 'PKO BP', country: 'PL' },
+      state: expect.stringMatching(/^[\w-]{43}$/),
+      redirect_url: REDIRECT,
+      psu_type: 'personal',
     });
+    expect(cookie).toContain(`bt_bank_state=${String(lastAuth()!.body!.state)}`);
+
+    const back = await app.client.get(`/api/bank/callback?code=pko-code&state=${String(lastAuth()!.body!.state)}`);
+    expect(back.headers.get('location')).toBe('/settings');
+    expect(requests.at(-1)).toMatchObject({ method: 'POST', path: '/sessions', body: { code: 'pko-code' } });
+    const { connections } = await status(app);
+    expect(connections).toEqual([
+      {
+        id: expect.any(String),
+        bank: 'PKO BP',
+        status: 'active',
+        validUntil: '2027-05-19T09:50:00.000Z',
+        accounts: [
+          { uid: 'pko-1', name: 'Konto Za Zero', iban: PKO_IBAN, currency: 'PLN', accountId: null, lastSyncedAt: null },
+          {
+            uid: 'pko-2',
+            name: 'Oszczędności',
+            iban: 'PL27114020040000300201355387',
+            currency: 'PLN',
+            accountId: null,
+            lastSyncedAt: null,
+          },
+        ],
+      },
+    ]);
+    expect(await t.db.select({ sessionId: bankConnection.sessionId }).from(bankConnection)).toEqual([
+      { sessionId: 'pko-session' },
+    ]);
   });
 
-  it('refuses a callback whose state is not the one it sent, and a failed code exchange', async () => {
+  it('refuses an unknown bank, a forged state, a refused consent and a bad code', async () => {
     const app = await bankApp();
-    await app.client.get('/api/bank/connect');
-    const forged = await app.client.get('/api/bank/callback?code=good-code&state=forged');
+    expect((await app.client.get(connectPath('Nope'))).headers.get('location')).toBe('/settings?bank=error');
+    expect(lastAuth()).toBeUndefined();
+
+    await app.client.get(connectPath('PKO BP'));
+    const forged = await app.client.get('/api/bank/callback?code=pko-code&state=forged');
     expect(forged.headers.get('location')).toBe('/settings?bank=error');
-    expect(await connect(app, 'bad-code')).toBe('/settings?bank=error');
-    expect(await status(app)).toMatchObject({ connected: false, accounts: [] });
+    await app.client.get(connectPath('PKO BP'));
+    const state = String(lastAuth()!.body!.state);
+    const refused = await app.client.get(`/api/bank/callback?error=access_denied&state=${state}`);
+    expect(refused.headers.get('location')).toBe('/settings?bank=error');
+    expect(await connect(app, 'PKO BP', 'bad-code')).toBe('/settings?bank=error');
+    expect(requests.filter((r) => r.path === '/sessions').map((r) => r.body)).toEqual([{ code: 'bad-code' }]);
+    expect(await status(app)).toEqual({ configured: true, connections: [] });
   });
 
-  it('links a bank account only to an account in its currency, and a reconnect keeps the link', async () => {
+  it('keeps a connection per bank; a reconnect replaces its own and keeps the links; disconnect ends the session', async () => {
     const app = await bankApp();
     const pko = await createAccount(app.client, { name: 'PKO' });
     const euro = await createAccount(app.client, { name: 'Revolut', currency: 'EUR' });
-    await connect(app);
+    expect(await connect(app, 'PKO BP', 'pko-code')).toBe('/settings');
+    expect(await connect(app, 'Revolut', 'rev-code')).toBe('/settings');
+    // Revolut allows 90 days.
+    expect(lastAuth()!.body!.access).toEqual({
+      valid_until: new Date(Date.parse(NOW) + 90 * DAY - 10 * MINUTE).toISOString(),
+    });
+    const first = await status(app);
+    expect(first.connections.map((c) => [c.bank, c.status, c.validUntil, c.accounts.map((a) => a.uid)])).toEqual([
+      ['PKO BP', 'active', '2027-05-19T09:50:00.000Z', ['pko-1', 'pko-2']],
+      ['Revolut', 'active', '2027-02-18T09:50:00.000Z', ['rev-eur']],
+    ]);
 
     const mismatch = await link(app, 'pko-1', euro.id);
     expect(mismatch.status).toBe(422);
-    expect(await mismatch.json()).toMatchObject({ code: 'bank_currency_mismatch' });
+    expect(await mismatch.json()).toMatchObject({ code: 'bank_currency_mismatch', fieldErrors: { accountId: [expect.any(String)] } });
     expect((await link(app, 'pko-1', pko.id)).status).toBe(200);
+    expect((await link(app, 'rev-eur', euro.id)).status).toBe(200);
     expect((await link(app, 'nope', pko.id)).status).toBe(404);
 
-    expect(await connect(app)).toBe('/settings');
-    expect((await status(app)).accounts.map((a) => [a.id, a.accountId])).toEqual([
-      ['pko-1', pko.id],
-      ['rev-eur', null],
+    // The new session has new account uids; the link follows the IBAN.
+    sessions['pko-code'] = pkoSession('pko-session-2', ['pko-1b', 'pko-2b']);
+    expect(await connect(app, 'PKO BP', 'pko-code')).toBe('/settings');
+    expect(requests.at(-1)).toMatchObject({ method: 'DELETE', path: '/sessions/pko-session' });
+    const second = await status(app);
+    expect(second.connections.map((c) => [c.bank, c.accounts.map((a) => [a.uid, a.accountId])])).toEqual([
+      ['PKO BP', [['pko-1b', pko.id], ['pko-2b', null]]],
+      ['Revolut', [['rev-eur', euro.id]]],
     ]);
-    await app.client.send('DELETE', '/api/bank/connection');
-    expect(await status(app)).toMatchObject({ connected: false, status: null, accounts: [] });
-    expect(await t.db.select().from(bankAccount)).toEqual([]);
+    expect(second.connections[0]!.id).not.toBe(first.connections[0]!.id);
+    expect(second.connections[1]!.id).toBe(first.connections[1]!.id);
+
+    // Enable Banking's answer to the session's deletion doesn't matter.
+    failing.add('rev-session');
+    const gone = await app.client.send('DELETE', `/api/bank/connections/${second.connections[1]!.id}`);
+    expect(gone.status).toBe(200);
+    expect(requests.at(-1)).toMatchObject({ method: 'DELETE', path: '/sessions/rev-session' });
+    expect(((await gone.json()) as BankStatus).connections.map((c) => c.bank)).toEqual(['PKO BP']);
+    expect(await t.db.select({ uid: bankAccount.uid }).from(bankAccount).orderBy(bankAccount.uid)).toEqual([
+      { uid: 'pko-1b' },
+      { uid: 'pko-2b' },
+    ]);
+    expect((await app.client.send('DELETE', `/api/bank/connections/${second.connections[1]!.id}`)).status).toBe(404);
   });
 });
 
 describe('POST /api/bank/sync', () => {
-  async function linkedBank() {
+  const booked = (fields: Record<string, unknown>) => ({ status: 'BOOK', credit_debit_indicator: 'DBIT', ...fields });
+  const pln = (amount: string) => ({ transaction_amount: { currency: 'PLN', amount } });
+
+  async function linkedBanks() {
     const app = await bankApp();
     const pko = await createAccount(app.client, { name: 'PKO', startingDate: '2026-10-01' });
     const euro = await createAccount(app.client, { name: 'Revolut', currency: 'EUR', startingDate: '2026-10-01' });
@@ -233,132 +356,142 @@ describe('POST /api/bank/sync', () => {
       categoryId: groceries.id,
       amount: -1000,
     });
-    await connect(app);
+    await connect(app, 'PKO BP', 'pko-code');
+    await connect(app, 'Revolut', 'rev-code');
     await link(app, 'pko-1', pko.id);
     await link(app, 'rev-eur', euro.id);
     bankTransactions = {
       'pko-1': [
-        { id: 'a', date: '2026-11-18T00:00:00', text: 'Biedronka', amount: -45.99, currency: 'PLN', state: 'Booked' },
-        { id: 'b', date: '2026-11-19', text: 'Salary', amount: { value: '5000.00', currency: 'PLN' }, state: 'Booked' },
-        { id: 'c', date: '2026-11-20', text: 'Lidl', amount: -12.5, state: 'Reserved' },
-        { id: 'd', date: '2026-09-30', text: 'Before the starting balance', amount: -1, state: 'Booked' },
-        { id: 'e', date: '2026-11-21', text: 'Tomorrow', amount: -1, state: 'Booked' },
+        booked({
+          entry_reference: 'E1',
+          ...pln('45.99'),
+          booking_date: '2026-11-18',
+          value_date: '2026-11-17',
+          creditor: { name: 'Biedronka' },
+          debtor: { name: 'Jan Kowalski' },
+          remittance_information: ['Zakup kartą'],
+        }),
+        booked({
+          entry_reference: 'E2',
+          ...pln('5000.00'),
+          credit_debit_indicator: 'CRDT',
+          value_date: '2026-11-19',
+          creditor: { name: 'Jan Kowalski' },
+          debtor: { name: 'ACME Sp. z o.o.' },
+          remittance_information: ['Wynagrodzenie'],
+        }),
+        booked({ entry_reference: 'E3', ...pln('12.50'), status: 'PDNG', booking_date: '2026-11-20', creditor: { name: 'Lidl' } }),
+        booked({ transaction_id: 'T4', ...pln('20.00'), transaction_date: '2026-11-17', remittance_information: [' ', 'BLIK na telefon'] }),
+        booked({ entry_reference: 'E5', ...pln('1.00'), booking_date: '2026-09-30', creditor: { name: 'Before the start' } }),
+        booked({ ...pln('3.00'), credit_debit_indicator: 'CRDT', booking_date: '2026-11-16' }),
         { unexpected: true },
       ],
-      'rev-eur': [{ id: 'x', date: '2026-11-19', text: 'Uber', amount: -10, currency: 'EUR', state: 'Booked' }],
+      'pko-2': [booked({ entry_reference: 'X', ...pln('1.00'), booking_date: '2026-11-18' })],
+      'rev-eur': [
+        booked({
+          entry_reference: 'R1',
+          transaction_amount: { currency: 'EUR', amount: '10.00' },
+          booking_date: '2026-11-19',
+          creditor: { name: 'Uber' },
+        }),
+      ],
     };
+    requests = [];
     return { app, pko, euro, groceries };
   }
 
   it('imports booked transactions, unapproved, as one undoable "Bank sync", and only once', async () => {
-    const { app, pko, euro, groceries } = await linkedBank();
+    const { app, pko, euro, groceries } = await linkedBanks();
     const before = await snapshot(t.db);
 
     const res = await sync(app);
-    expect(await res.json()).toEqual({ imported: 3 });
-    // The first sync goes back 90 days, but not past the starting balance; every page is read.
-    const interval = '2026-10-01T00:00:00Z/2026-11-20T10:00:00.000Z';
-    expect(queried().map((r) => [r.path, r.body])).toEqual(
-      expect.arrayContaining([
-        ['/v1/accounts/pko-1/transactions/query', { interval, pageSize: 100 }],
-        ['/v1/accounts/pko-1/transactions/query', { interval, pageSize: 100, pagingToken: '2' }],
-        ['/v1/accounts/pko-1/transactions/query', { interval, pageSize: 100, pagingToken: '4' }],
-        ['/v1/accounts/rev-eur/transactions/query', { interval, pageSize: 100 }],
-      ]),
-    );
-    const flags = { cleared: 'cleared', approved: false };
+    expect(await res.json()).toEqual({ imported: 5, reconnectNeeded: [], failed: [] });
+    // The first sync goes back 90 days, but not past the starting balance; every page is read; pko-2 isn't linked.
+    const dates = { date_from: '2026-10-01', date_to: '2026-11-20' };
+    expect(listed().map((r) => [r.path, r.query])).toEqual([
+      ['/accounts/pko-1/transactions', dates],
+      ['/accounts/pko-1/transactions', { ...dates, continuation_key: '2' }],
+      ['/accounts/pko-1/transactions', { ...dates, continuation_key: '4' }],
+      ['/accounts/pko-1/transactions', { ...dates, continuation_key: '6' }],
+      ['/accounts/rev-eur/transactions', dates],
+    ]);
+    const unnamed = createHash('sha256').update('2026-11-16|300|').digest('hex');
+    const flags = { cleared: 'cleared', approved: false, fxRate: null };
     expect(await imported()).toEqual([
-      {
-        accountId: pko.id,
-        importId: 'pko-1:a',
-        date: '2026-11-18',
-        payee: 'Biedronka',
-        categoryId: groceries.id,
-        amount: -4599,
-        amountBase: -4599,
-        fxRate: null,
-        ...flags,
-      },
-      {
-        accountId: pko.id,
-        importId: 'pko-1:b',
-        date: '2026-11-19',
-        payee: 'Salary',
-        categoryId: null,
-        amount: 500_000,
-        amountBase: 500_000,
-        fxRate: null,
-        ...flags,
-      },
-      {
-        accountId: euro.id,
-        importId: 'rev-eur:x',
-        date: '2026-11-19',
-        payee: 'Uber',
-        categoryId: null,
-        amount: -1000,
-        amountBase: -4300,
-        fxRate: '4.300000',
-        ...flags,
-      },
+      { accountId: pko.id, importId: `pko-1:${unnamed}`, date: '2026-11-16', payee: 'Unknown', categoryId: null, amount: 300, amountBase: 300, ...flags },
+      { accountId: pko.id, importId: 'pko-1:T4', date: '2026-11-17', payee: 'BLIK na telefon', categoryId: null, amount: -2000, amountBase: -2000, ...flags },
+      { accountId: pko.id, importId: 'pko-1:E1', date: '2026-11-18', payee: 'Biedronka', categoryId: groceries.id, amount: -4599, amountBase: -4599, ...flags },
+      { accountId: pko.id, importId: 'pko-1:E2', date: '2026-11-19', payee: 'ACME Sp. z o.o.', categoryId: null, amount: 500_000, amountBase: 500_000, ...flags },
+      { accountId: euro.id, importId: 'rev-eur:R1', date: '2026-11-19', payee: 'Uber', categoryId: null, amount: -1000, amountBase: -4300, ...flags, fxRate: '4.300000' },
     ]);
     expect(await (await app.client.get('/api/undo')).json()).toEqual({ undo: { label: 'Bank sync' }, redo: null });
     const { accounts } = (await (await app.client.get('/api/accounts')).json()) as AccountListResponse;
     expect(accounts.map((a) => [a.name, a.unapprovedCount])).toEqual([
-      ['PKO', 2],
+      ['PKO', 4],
       ['Revolut', 1],
     ]);
     const after = await snapshot(t.db);
-    expect((await status(app)).accounts.map((a) => a.lastSyncedAt)).toEqual([
-      '2026-11-20T10:00:00.000Z',
-      '2026-11-20T10:00:00.000Z',
+    expect((await status(app)).connections.flatMap((c) => c.accounts.map((a) => [a.uid, a.lastSyncedAt]))).toEqual([
+      ['pko-1', '2026-11-20T10:00:00.000Z'],
+      ['pko-2', null],
+      ['rev-eur', '2026-11-20T10:00:00.000Z'],
     ]);
 
     // The next sync overlaps the last by 5 days and imports nothing new, so it adds no undo entry.
     requests = [];
-    app.clock.advance(HOUR / 2);
-    expect(await (await sync(app)).json()).toEqual({ imported: 0 });
-    expect(queried()[0]!.body).toMatchObject({ interval: '2026-11-15T00:00:00Z/2026-11-20T10:30:00.000Z' });
+    app.clock.advance(30 * MINUTE);
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, reconnectNeeded: [], failed: [] });
+    expect(listed()[0]!.query).toEqual({ date_from: '2026-11-15', date_to: '2026-11-20' });
     expect(await snapshot(t.db)).toEqual(after);
 
     expect((await app.client.post('/api/undo')).status).toBe(200);
     expect(await snapshot(t.db)).toEqual(before);
     expect((await app.client.post('/api/redo')).status).toBe(200);
     expect(await snapshot(t.db)).toEqual(after);
-  });
 
-  it('refreshes an expired access token and stores the new pair', async () => {
-    const { app } = await linkedBank();
-    app.clock.advance(2 * HOUR);
+    // A reconnect gives the bank account a new uid: what was imported under the old one isn't imported again.
+    sessions['pko-code'] = pkoSession('pko-session-2', ['pko-1b', 'pko-2b']);
+    expect(await connect(app, 'PKO BP', 'pko-code')).toBe('/settings');
+    bankTransactions['pko-1b'] = bankTransactions['pko-1']!;
     requests = [];
-    expect(await (await sync(app)).json()).toEqual({ imported: 3 });
-    expect(requests[0]).toEqual({
-      method: 'POST',
-      path: '/v1/oauth/token',
-      authorization: BASIC,
-      body: { grant_type: 'refresh_token', refresh_token: 'refresh-1' },
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, reconnectNeeded: [], failed: [] });
+    expect(listed()[0]).toMatchObject({
+      path: '/accounts/pko-1b/transactions',
+      query: { date_from: '2026-11-15', date_to: '2026-11-20' },
     });
-    expect(queried().every((r) => r.authorization === 'Bearer access-2')).toBe(true);
-    expect(await t.db.select().from(bankConnection)).toMatchObject([
-      { accessToken: 'access-2', refreshToken: 'refresh-2', accessExpiresAt: new Date('2026-11-20T13:00:00Z') },
-    ]);
+    expect(await snapshot(t.db)).toEqual(after);
   });
 
-  it('marks the connection for a reconnect when the refresh is refused', async () => {
-    const { app } = await linkedBank();
-    app.clock.advance(2 * HOUR);
-    refuseRefresh = true;
-    const res = await sync(app);
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'bank_reconnect_needed' });
-    expect(await status(app)).toMatchObject({ connected: true, status: 'reconnect_needed' });
-    expect(await imported()).toEqual([]);
+  it('skips a bank whose session has expired or that fails, and asks for a reconnect', async () => {
+    const { app, euro } = await linkedBanks();
+    expired.add('rev-session');
+    failing.add('pko-session');
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, reconnectNeeded: ['Revolut'], failed: ['PKO BP'] });
+    expect((await status(app)).connections.map((c) => [c.bank, c.status])).toEqual([
+      ['PKO BP', 'active'],
+      ['Revolut', 'reconnect_needed'],
+    ]);
 
+    failing.clear();
     requests = [];
-    expect((await sync(app)).status).toBe(409);
-    expect(requests).toEqual([]);
-    refuseRefresh = false;
-    expect(await connect(app)).toBe('/settings');
-    expect(await status(app)).toMatchObject({ status: 'active' });
+    expect(await (await sync(app)).json()).toEqual({ imported: 4, reconnectNeeded: ['Revolut'], failed: [] });
+    expect(listed().every((r) => r.path.startsWith('/accounts/pko-1/'))).toBe(true);
+
+    expired.clear();
+    expect(await connect(app, 'Revolut', 'rev-code')).toBe('/settings');
+    expect(await connectionOf(app, 'Revolut')).toMatchObject({
+      status: 'active',
+      accounts: [{ uid: 'rev-eur', accountId: euro.id }],
+    });
+
+    // Past its valid_until, a session isn't even tried.
+    await t.db
+      .update(bankConnection)
+      .set({ validUntil: new Date('2026-11-20T09:59:59Z') })
+      .where(eq(bankConnection.aspspName, 'PKO BP'));
+    expect((await connectionOf(app, 'PKO BP')).status).toBe('reconnect_needed');
+    requests = [];
+    expect(await (await sync(app)).json()).toEqual({ imported: 1, reconnectNeeded: ['PKO BP'], failed: [] });
+    expect(listed().map((r) => r.path)).toEqual(['/accounts/rev-eur/transactions']);
   });
 });

@@ -395,31 +395,36 @@ export const undoEntry = pgTable('undo_entry', {
   createdAt: instant('created_at').defaultNow().notNull(),
 });
 
-// ---------------------------------------------------------------- bank sync (Mastercard Open Banking / Aiia)
+// ---------------------------------------------------------------- bank sync (Enable Banking)
 
 /**
- * The one Aiia consent. Its tokens are stored in plain text: this is a single-user, self-hosted app, and the database
- * already holds everything the tokens can read (protect the database and its backups accordingly).
+ * One Enable Banking session per bank (ASPSP). There are no tokens: the API is called with a JWT signed by the
+ * application's key, and the session lasts until `valid_until`, after which the bank has to be reconnected.
  */
-export const bankConnection = pgTable('bank_connection', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  accessToken: text('access_token').notNull(),
-  refreshToken: text('refresh_token').notNull(),
-  accessExpiresAt: instant('access_expires_at').notNull(),
-  status: bankConnectionStatus('status').notNull().default('active'),
-  createdAt: instant('created_at').defaultNow().notNull(),
-});
+export const bankConnection = pgTable(
+  'bank_connection',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: text('session_id').notNull(),
+    aspspName: text('aspsp_name').notNull(),
+    aspspCountry: text('aspsp_country').notNull(),
+    validUntil: instant('valid_until').notNull(),
+    status: bankConnectionStatus('status').notNull().default('active'),
+    createdAt: instant('created_at').defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex('bank_connection_aspsp').on(t.aspspName, t.aspspCountry)],
+);
 
-/** A bank account the consent covers; `accountId` links it to the Budget Track account it syncs into. */
+/** A bank account the session covers; `accountId` links it to the Budget Track account it syncs into. */
 export const bankAccount = pgTable('bank_account', {
-  /** Aiia's account id. */
-  id: text('id').primaryKey(),
+  /** Enable Banking's account uid, valid for its session only. */
+  uid: text('uid').primaryKey(),
   connectionId: uuid('connection_id')
     .notNull()
     .references(() => bankConnection.id),
   name: text('name').notNull(),
-  currency: text('currency'),
-  providerName: text('provider_name'),
+  iban: text('iban'),
+  currency: text('currency').notNull(),
   // Not recorded for undo, so deleting the account (or undoing its creation) may simply unlink it.
   accountId: uuid('account_id').references(() => account.id, { onDelete: 'set null' }),
   lastSyncedAt: instant('last_synced_at'),

@@ -1,34 +1,50 @@
 import { z } from 'zod';
 import { idSchema } from './common';
 
-/** A bank account of the connection (Mastercard Open Banking / Aiia). */
+/** A bank account of a connection (Enable Banking). */
 export interface BankAccountDto {
-  /** Aiia's account id. */
-  id: string;
+  /** Enable Banking's account uid (valid for its connection's session only). */
+  uid: string;
   name: string;
-  currency: string | null;
-  /** The bank, e.g. "Revolut". */
-  providerName: string | null;
+  iban: string | null;
+  currency: string;
   /** The account it syncs into; null = not linked. */
   accountId: string | null;
   lastSyncedAt: string | null;
 }
 
-/** GET /api/bank/status (and the answer of the other bank routes, except sync). */
-export interface BankStatus {
-  /** AIIA_CLIENT_ID and AIIA_CLIENT_SECRET are set; without them the app hides bank connections. */
-  configured: boolean;
-  connected: boolean;
-  status: 'active' | 'reconnect_needed' | null;
+/** One bank's session: it lasts until `validUntil`, then the bank has to be reconnected. */
+export interface BankConnectionDto {
+  id: string;
+  /** The bank (Enable Banking's ASPSP name), e.g. "PKO BP". */
+  bank: string;
+  status: 'active' | 'reconnect_needed';
+  validUntil: string;
   accounts: BankAccountDto[];
 }
 
-export const bankAccountParamSchema = z.object({ id: z.string().min(1).max(500) });
+/** GET /api/bank/status (and the answer of the link and disconnect routes). */
+export interface BankStatus {
+  /** ENABLE_BANKING_APP_ID and its key file are set; without them the app hides bank connections. */
+  configured: boolean;
+  connections: BankConnectionDto[];
+}
 
-/** PUT /api/bank/accounts/:id/link: an account in the bank account's currency, or null to unlink. */
+/** GET /api/bank/aspsps: the Polish banks a connection can be made to. */
+export interface BankListResponse {
+  aspsps: { name: string }[];
+}
+
+export const bankAccountParamSchema = z.object({ uid: z.string().min(1).max(500) });
+
+/** PUT /api/bank/accounts/:uid/link: an account in the bank account's currency, or null to unlink. */
 export const linkBankAccountRequestSchema = z.object({ accountId: idSchema.nullable() });
 
-/** POST /api/bank/sync: how many transactions were imported (one undo entry, "Bank sync"). */
+/** POST /api/bank/sync: how many transactions were imported (one undo entry, "Bank sync") and which banks were skipped. */
 export interface BankSyncResponse {
   imported: number;
+  /** Banks whose session has expired: reconnect them in Settings. */
+  reconnectNeeded: string[];
+  /** Banks that couldn't be reached this time. */
+  failed: string[];
 }
