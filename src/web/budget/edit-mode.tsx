@@ -61,7 +61,7 @@ function Sortable({ id, label, children }: { id: string; label: string; children
       {...listeners}
       aria-label={`Reorder ${label}`}
       disabled={!online}
-      className="flex min-h-11 w-10 shrink-0 cursor-grab touch-none items-center justify-center text-gray-400 disabled:cursor-not-allowed"
+      className="flex min-h-11 w-10 shrink-0 cursor-grab touch-none items-center justify-center text-muted disabled:cursor-not-allowed"
     >
       <GripIcon className="size-5" />
     </button>
@@ -70,7 +70,7 @@ function Sortable({ id, label, children }: { id: string; label: string; children
     <li
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cx('relative bg-white', isDragging && 'z-10 shadow-lg')}
+      className={cx('relative bg-surface', isDragging && 'z-10 shadow-lg')}
     >
       {children(handle)}
     </li>
@@ -91,7 +91,7 @@ interface GroupBlockProps {
 }
 
 function Badge({ children }: { children: ReactNode }) {
-  return <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600">{children}</span>;
+  return <span className="rounded-full bg-zero px-2 py-0.5 text-xs font-medium text-muted">{children}</span>;
 }
 
 /** A group in edit mode: its handle, name and Add category, then its categories (hidden ones too), sortable. */
@@ -104,14 +104,14 @@ function GroupBlock({ group, handle, onEdit }: GroupBlockProps) {
     reorder.run,
   );
   return (
-    <section aria-label={group.name} className="border-b border-gray-200">
-      <div className="flex items-center bg-gray-50 pr-2">
+    <section aria-label={group.name} className="border-b border-line">
+      <div className="flex items-center bg-raised pr-2">
         {handle}
         <button
           type="button"
           aria-haspopup="dialog"
           onClick={() => onEdit({ type: 'group', group })}
-          className="flex min-h-11 flex-1 items-center gap-2 text-left text-sm font-semibold text-gray-700"
+          className="flex min-h-11 flex-1 items-center gap-2 text-left text-sm font-semibold text-gray-200"
         >
           <span className="truncate">{group.name}</span>
           {group.hidden && <Badge>Hidden</Badge>}
@@ -130,7 +130,7 @@ function GroupBlock({ group, handle, onEdit }: GroupBlockProps) {
       <FormError message={reorder.error} />
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={categories.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-          <ul aria-label={`Categories in ${group.name}`} aria-busy={reorder.busy || undefined} className="divide-y divide-gray-100">
+          <ul aria-label={`Categories in ${group.name}`} aria-busy={reorder.busy || undefined} className="divide-y divide-line">
             {categories.map((category) => (
               <Sortable key={category.id} id={category.id} label={category.name}>
                 {(categoryHandle) => (
@@ -173,11 +173,11 @@ export function BudgetEditor({ view }: { view: BudgetMonthDto }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="px-4 text-sm text-gray-500">Drag the handles to reorder. Tap a group or category to change it.</p>
+      <p className="px-4 text-sm text-muted">Drag the handles to reorder. Tap a group or category to change it.</p>
       <FormError message={reorder.error} />
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
-          <ul aria-label="Groups" aria-busy={reorder.busy || undefined} className="border-t border-gray-200">
+          <ul aria-label="Groups" aria-busy={reorder.busy || undefined} className="border-t border-line">
             {groups.map((group) => (
               <Sortable key={group.id} id={group.id} label={group.name}>
                 {(handle) => <GroupBlock group={group} handle={handle} onEdit={setEditing} />}

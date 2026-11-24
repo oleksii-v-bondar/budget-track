@@ -8,7 +8,7 @@ export function OfflineBanner() {
   return (
     <div
       role="status"
-      className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-yellow-100 px-4 py-2 text-sm font-medium text-yellow-900"
+      className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-yellow-400/15 px-4 py-2 text-sm font-medium text-yellow-200"
     >
       <OfflineIcon className="size-4" />
       You're offline. Changes are paused until you're back online.

@@ -94,12 +94,12 @@ export function AddAccountForm({ onDone }: { onDone: (account: AccountDto) => vo
   if (step === 'type') {
     return (
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-gray-500">Step 1 of {steps.length}</p>
+        <p className="text-sm text-muted">Step 1 of {steps.length}</p>
         <h3 className="text-lg font-semibold">{STEP_TITLES.type}</h3>
         {TYPE_SECTIONS.map((section) => (
           <section key={section.title} aria-label={section.title}>
-            <h4 className="pb-1 text-xs font-semibold tracking-wide text-gray-500 uppercase">{section.title}</h4>
-            <div className="divide-y divide-gray-200 rounded-xl ring-1 ring-gray-200">
+            <h4 className="pb-1 text-xs font-semibold tracking-wide text-muted uppercase">{section.title}</h4>
+            <div className="divide-y divide-line rounded-xl ring-1 ring-line">
               {section.types.map((type) => (
                 <button
                   key={type}
@@ -108,10 +108,10 @@ export function AddAccountForm({ onDone }: { onDone: (account: AccountDto) => vo
                     set({ type });
                     goTo('name');
                   }}
-                  className="flex min-h-12 w-full items-center justify-between px-4 text-left hover:bg-gray-50"
+                  className="flex min-h-12 w-full items-center justify-between px-4 text-left hover:bg-white/5"
                 >
                   {ACCOUNT_TYPE_LABELS[type]}
-                  <ChevronRightIcon className="text-gray-400" />
+                  <ChevronRightIcon className="text-muted" />
                 </button>
               ))}
             </div>
@@ -126,7 +126,7 @@ export function AddAccountForm({ onDone }: { onDone: (account: AccountDto) => vo
   const last = index === steps.length - 1;
   return (
     <form noValidate onSubmit={submit} className="flex flex-col gap-4">
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         Step {index + 1} of {steps.length} · {ACCOUNT_TYPE_LABELS[type]}
       </p>
       <h3 className="text-lg font-semibold">{STEP_TITLES[step]}</h3>

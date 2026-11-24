@@ -6,7 +6,7 @@ import { AutoAssignList } from './auto-assign';
 
 function Line({ label, amount, total }: { label: string; amount: number; total?: boolean }) {
   return (
-    <div className={cx('flex justify-between gap-4 py-1.5', total && 'border-t border-gray-200 pt-2 font-semibold')}>
+    <div className={cx('flex justify-between gap-4 py-1.5', total && 'border-t border-line pt-2 font-semibold')}>
       <dt>{label}</dt>
       <dd className="tabular-nums">{formatMoney(amount)}</dd>
     </div>
@@ -19,7 +19,7 @@ export function RtaSheetContent({ view, onDone }: { view: BudgetMonthDto; onDone
   const headingId = useId();
   return (
     <div className="flex flex-col gap-6">
-      <dl className="text-gray-700">
+      <dl className="text-gray-200">
         <Line label="Left over from last month" amount={rta.leftoverPrev} />
         <Line label="Income this month" amount={rta.income} />
         <Line label="Assigned this month" amount={-rta.assignedThisMonth} />

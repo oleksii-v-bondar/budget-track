@@ -23,7 +23,7 @@ export function StatusIcons({ transaction }: { transaction: TransactionDto }) {
           <FlagIcon className="size-4" fill="currentColor" />
         </span>
       )}
-      {!approved && <span role="img" aria-label="Unapproved" className="size-2.5 rounded-full bg-blue-500" />}
+      {!approved && <span role="img" aria-label="Unapproved" className="size-2.5 rounded-full bg-brand" />}
       {cleared === 'reconciled' ? (
         <span role="img" aria-label="Reconciled" className="text-brand">
           <LockIcon className="size-4" />
@@ -58,10 +58,10 @@ export function TransactionRow({ transaction, onBudget, showAccount }: Transacti
     <div className="flex items-start gap-3 px-4 py-2.5">
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium">{payeeLabel(transaction)}</span>
-        {details && <span className="block truncate text-sm text-gray-500">{details}</span>}
+        {details && <span className="block truncate text-sm text-muted">{details}</span>}
       </span>
       <span className="flex flex-col items-end gap-1">
-        <span className={cx('tabular-nums whitespace-nowrap', transaction.amount > 0 && 'text-green-700')}>
+        <span className={cx('tabular-nums whitespace-nowrap', transaction.amount > 0 && 'text-lime')}>
           {formatMoney(transaction.amount, transaction.currency)}
         </span>
         <StatusIcons transaction={transaction} />

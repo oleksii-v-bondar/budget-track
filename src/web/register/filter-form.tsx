@@ -93,7 +93,7 @@ export function FilterForm({
         <AmountField label="Amount from" value={values.minAmount} onChange={(minAmount) => set({ minAmount })} error={errors.minAmount} />
         <AmountField label="Amount to" value={values.maxAmount} onChange={(maxAmount) => set({ maxAmount })} error={errors.maxAmount} />
       </div>
-      <p className="-mt-2 text-sm text-gray-500">Amounts are in each account's currency; outflows are negative.</p>
+      <p className="-mt-2 text-sm text-muted">Amounts are in each account's currency; outflows are negative.</p>
       <SelectField label="Category" value={values.categoryId} onChange={(e) => set({ categoryId: e.target.value })}>
         <option value="">Any category</option>
         {rta && <option value={rta.id}>{RTA_LABEL}</option>}

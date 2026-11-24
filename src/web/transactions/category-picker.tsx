@@ -51,7 +51,7 @@ export function CategoryPicker({ groups, month, value, allowNone, onPick, onCanc
         }
       }}
       className={cx(
-        'flex min-h-12 cursor-pointer items-center justify-between gap-3 px-4 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none',
+        'flex min-h-12 cursor-pointer items-center justify-between gap-3 px-4 hover:bg-white/5 focus:bg-white/5 focus:outline-none',
         id === value && 'font-semibold text-brand',
       )}
     >
@@ -61,7 +61,7 @@ export function CategoryPicker({ groups, month, value, allowNone, onPick, onCanc
   );
   const group = (key: string, title: string, items: ReactNode[]) => (
     <li key={key} role="presentation">
-      <p className="bg-gray-100 px-4 py-1 text-xs font-semibold tracking-wide text-gray-500 uppercase" aria-hidden="true">
+      <p className="bg-raised px-4 py-1 text-xs font-semibold tracking-wide text-muted uppercase" aria-hidden="true">
         {title}
       </p>
       <ul role="group" aria-label={title}>
@@ -78,9 +78,9 @@ export function CategoryPicker({ groups, month, value, allowNone, onPick, onCanc
         placeholder="Search categories"
         value={search}
         onChange={(event) => setSearch(event.target.value)}
-        className="min-h-11 rounded-xl border border-gray-300 bg-gray-50 px-3 text-base outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
+        className="min-h-11 rounded-xl border border-line bg-raised px-3 text-base outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
       />
-      <ul role="listbox" aria-label="Categories" className="-mx-4 divide-y divide-gray-100">
+      <ul role="listbox" aria-label="Categories" className="-mx-4 divide-y divide-line">
         {allowNone && value !== null && query === '' && option(null, 'No category', undefined)}
         {rta &&
           visible({ ...rta, name: RTA_LABEL }) &&

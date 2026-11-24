@@ -34,7 +34,7 @@ export function AutoAssignList({ month, onDone }: AutoAssignListProps) {
   return (
     <div className="flex flex-col gap-2">
       <FormError message={errors.form} />
-      <ul className="divide-y divide-gray-100 overflow-hidden rounded-xl border border-gray-200">
+      <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
         {AUTO_ASSIGN_STRATEGIES.map((strategy) => (
           <li key={strategy}>
             <button
@@ -42,10 +42,10 @@ export function AutoAssignList({ month, onDone }: AutoAssignListProps) {
               disabled={!online || run.isPending}
               aria-busy={(run.isPending && run.variables === strategy) || undefined}
               onClick={() => run.mutate(strategy, { onSuccess: onDone })}
-              className="flex min-h-14 w-full flex-col justify-center px-4 py-2 text-left hover:bg-gray-50 disabled:text-gray-400"
+              className="flex min-h-14 w-full flex-col justify-center px-4 py-2 text-left hover:bg-white/5 disabled:text-muted"
             >
               <span className="font-semibold">{STRATEGIES[strategy].label}</span>
-              <span className="text-sm text-gray-500">{STRATEGIES[strategy].description}</span>
+              <span className="text-sm text-muted">{STRATEGIES[strategy].description}</span>
             </button>
           </li>
         ))}

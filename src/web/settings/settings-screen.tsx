@@ -1,34 +1,26 @@
-import { useMutation } from '@tanstack/react-query';
-import { authApi, useLeaveApp } from '../auth/auth-api';
-import { errorMessage } from '../lib/commands';
+import { useSignOut } from '../auth/auth-api';
 import { useOnline } from '../lib/online';
+import { BackLink, ScreenHeader } from '../shell/screen-header';
 import { ChevronRightIcon } from '../ui/icons';
-import { useToast } from '../ui/toast';
 import { BankSection } from './bank-section';
 
 /** Settings: bank connections and signing out. */
 export function SettingsScreen() {
   const online = useOnline();
-  const toast = useToast();
-  const leaveApp = useLeaveApp();
-  const signOut = useMutation({
-    mutationFn: authApi.logout,
-    onSuccess: () => leaveApp(),
-    onError: (error) => toast.show({ tone: 'error', message: errorMessage(error) }),
-  });
-
+  const signOut = useSignOut();
   return (
     <>
+      <ScreenHeader title="Settings" left={<BackLink to="/home" label="Home" />} />
       <BankSection />
-      <div className="mt-6 border-y border-gray-200">
+      <div className="mx-4 mt-6 overflow-hidden rounded-2xl bg-surface">
         <button
           type="button"
-          className="flex min-h-14 w-full items-center justify-between px-4 text-left text-base hover:bg-gray-50 disabled:text-gray-400"
+          className="flex min-h-14 w-full items-center justify-between px-4 text-left text-base hover:bg-white/5 disabled:text-muted"
           disabled={!online}
           onClick={() => signOut.mutate()}
         >
           Sign out
-          <ChevronRightIcon className="text-gray-400" />
+          <ChevronRightIcon className="text-muted" />
         </button>
       </div>
     </>

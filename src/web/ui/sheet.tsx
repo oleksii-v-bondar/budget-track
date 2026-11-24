@@ -68,24 +68,24 @@ export function Sheet({ open, onClose, title, children }: SheetProps) {
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-40 flex flex-col justify-end">
-      <div className="absolute inset-0 bg-black/40" data-testid="sheet-backdrop" onClick={() => close.current()} />
+      <div className="absolute inset-0 bg-black/60" data-testid="sheet-backdrop" onClick={() => close.current()} />
       <div
         ref={panel}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="relative mx-auto flex max-h-[90dvh] w-full max-w-[480px] flex-col rounded-t-2xl bg-white shadow-xl outline-none"
+        className="relative mx-auto flex max-h-[90dvh] w-full max-w-[480px] flex-col rounded-t-3xl bg-surface shadow-xl ring-1 ring-line outline-none"
       >
-        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-2">
-          <h2 id={titleId} className="text-lg font-semibold">
+        <div className="flex items-center justify-between border-b border-line px-4 py-2">
+          <h2 id={titleId} className="text-lg font-bold">
             {title}
           </h2>
           <button
             type="button"
             aria-label="Close"
             onClick={() => close.current()}
-            className="-mr-2 rounded-full p-2 text-gray-500 hover:bg-gray-100"
+            className="-mr-2 rounded-full p-2 text-muted hover:bg-white/10"
           >
             <CloseIcon />
           </button>

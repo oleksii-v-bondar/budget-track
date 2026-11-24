@@ -1,19 +1,32 @@
 @import 'tailwindcss';
 
-/* Design tokens for the component kit in src/web/ui (YNAB-like: calm greys, green for money that's fine). */
+/*
+ * Design tokens (dark only, like YNAB's iOS app): a near-black page, navy surfaces with thin dividers, lime for money
+ * that's fine and indigo (`brand`) for links, the active tab and primary buttons.
+ */
 @theme {
-  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-  --color-brand: #15803d;
-  --color-brand-dark: #166534;
-  --color-brand-light: #dcfce7;
+  --font-sans: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --color-brand: #6c6ff7;
+  --color-brand-dark: #5558e3;
+  --color-brand-light: #262a5e;
+  --color-lime: #8bc34a;
+  --color-lime-dark: #4f7a2a;
+  --color-page: #0a0c16;
+  --color-header: #070913;
+  --color-surface: #141a33;
+  --color-raised: #1c2238;
+  --color-line: #232a45;
+  --color-zero: #3a4055;
+  --color-muted: #9aa0b4;
 }
 
 @layer base {
   html {
+    color-scheme: dark;
     -webkit-tap-highlight-color: transparent;
   }
 
   body {
-    @apply bg-gray-100 text-gray-900 antialiased;
+    @apply bg-page text-white antialiased;
   }
 }

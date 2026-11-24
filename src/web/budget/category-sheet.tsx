@@ -43,26 +43,26 @@ function Summary({ month, category }: { month: string; category: BudgetCategoryD
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm text-gray-600">Available in {formatMonth(month)}</span>
+        <span className="text-sm text-muted">Available in {formatMonth(month)}</span>
         <Pill tone={category.pill} className="text-base">
           {formatMoney(category.available)}
         </Pill>
       </div>
-      <dl className="grid grid-cols-3 gap-2 rounded-xl bg-gray-50 px-3 py-2 text-center text-sm">
+      <dl className="grid grid-cols-3 gap-2 rounded-xl bg-raised px-3 py-2 text-center text-sm">
         {[
           ['Carried over', category.carry],
           ['Assigned', category.assigned],
           ['Activity', category.activity],
         ].map(([label, amount]) => (
           <div key={label}>
-            <dt className="text-gray-500">{label}</dt>
+            <dt className="text-muted">{label}</dt>
             <dd className="font-semibold tabular-nums">{formatMoney(amount as number)}</dd>
           </div>
         ))}
       </dl>
       {hint && <p className={cx('text-sm', HINT_TONES[hint.tone])}>{hint.text}</p>}
       {need !== null && (
-        <p className="text-sm font-medium text-gray-700">
+        <p className="text-sm font-medium text-gray-200">
           {need > 0 ? `Need ${formatMoney(need)} to pay in full` : 'Enough to pay the card in full'}
         </p>
       )}
@@ -102,7 +102,7 @@ function HideButton({ category, onDone }: Omit<PanelProps, 'month'>) {
   );
   const errors = formErrorsOf(hide.error, []);
   return (
-    <div className="flex flex-col gap-2 border-t border-gray-200 pt-3">
+    <div className="flex flex-col gap-2 border-t border-line pt-3">
       <FormError message={errors.form} />
       <Button variant="ghost" block mutating busy={hide.isPending} onClick={() => hide.mutate(!category.hidden, { onSuccess: onDone })}>
         {category.hidden ? 'Unhide category' : 'Hide category'}

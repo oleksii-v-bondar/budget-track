@@ -1,8 +1,10 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import type { LoginRequest } from '../../shared/auth';
 import { api, unwrap } from '../lib/api';
+import { errorMessage } from '../lib/commands';
 import { forgetSession, setAuthStatus } from '../lib/query';
+import { useToast } from '../ui/toast';
 
 /** The auth endpoints. Neither is an undoable command. */
 export const authApi = {
@@ -10,11 +12,11 @@ export const authApi = {
   logout: () => unwrap(api.api.auth.logout.$post()),
 };
 
-/** Records a new session (after sign-in), then opens `href` (default: the budget). */
+/** Records a new session (after sign-in), then opens `href` (default: Home). */
 export function useEnterApp() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  return (href = '/budget') => {
+  return (href = '/home') => {
     setAuthStatus(queryClient, { authenticated: true });
     return navigate({ href });
   };
@@ -28,4 +30,15 @@ export function useLeaveApp() {
     forgetSession(queryClient);
     return navigate({ to: '/login' });
   };
+}
+
+/** Sign out (Settings and the "…" menu); a failure shows a toast. */
+export function useSignOut() {
+  const toast = useToast();
+  const leaveApp = useLeaveApp();
+  return useMutation({
+    mutationFn: authApi.logout,
+    onSuccess: () => leaveApp(),
+    onError: (error) => toast.show({ tone: 'error', message: errorMessage(error) }),
+  });
 }

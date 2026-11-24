@@ -84,7 +84,7 @@ describe('register', () => {
   it('names the account of each row in All accounts', async () => {
     fakeApi(registerRoutes({ first: registerPage([kiosk, valuation]) }));
     renderApp('/transactions');
-    expect(await screen.findByRole('heading', { name: 'All accounts' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Spending' })).toBeInTheDocument();
     expect(await screen.findByText('Checking · Uncategorized')).toBeInTheDocument();
     expect(screen.getByText('House')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Balances' })).toBeNull();

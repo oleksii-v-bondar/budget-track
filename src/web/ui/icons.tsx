@@ -139,3 +139,80 @@ export const LockIcon = (props: IconProps) => (
     <path d="M8 11V7a4 4 0 0 1 8 0v4" />
   </Icon>
 );
+
+export const HomeIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M3 11 12 3l9 8" />
+    <path d="M5 9.5V21h5v-6h4v6h5V9.5" />
+  </Icon>
+);
+
+/** The Plan tab: a jar of money. */
+export const PlanIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M7 3h10M8 3v2.5L5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-3-2.5V3" />
+    <path d="M9 17v-3a3 3 0 0 1 6 0v3" />
+  </Icon>
+);
+
+/** The Spending tab: a banknote. */
+export const SpendingIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="2" y="6" width="20" height="12" rx="2" />
+    <circle cx="12" cy="12" r="2.5" />
+    <path d="M6 9v.01M18 15v.01" />
+  </Icon>
+);
+
+/** The Reflect tab and the Income vs. Spending card: bars. */
+export const ReflectIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6 20v-7M12 20V5M18 20v-10M3 20h18" />
+  </Icon>
+);
+
+export const MoreIcon = (props: IconProps) => (
+  <Icon {...props} fill="currentColor" stroke="none">
+    <circle cx="5" cy="12" r="2" />
+    <circle cx="12" cy="12" r="2" />
+    <circle cx="19" cy="12" r="2" />
+  </Icon>
+);
+
+export const SearchIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m20 20-4-4" />
+  </Icon>
+);
+
+/** Filter: three lines, shorter towards the bottom. */
+export const FilterIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M4 7h16M7 12h10M10 17h4" />
+  </Icon>
+);
+
+/** Edit mode: lines and a pencil. */
+export const EditIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M3 7h7M3 12h5M3 17h4" />
+    <path d="m14 19-3 1 1-3 7.5-7.5a1.4 1.4 0 0 1 2 2Z" />
+  </Icon>
+);
+
+/** The Spending Breakdown card: a pie with a slice taken out. */
+export const PieIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M12 3a9 9 0 1 0 9 9h-9Z" fill="currentColor" />
+    <path d="M15 3.5A9 9 0 0 1 20.5 9H15Z" fill="currentColor" />
+  </Icon>
+);
+
+/** "Category Needed": a box with a tick. */
+export const CategoryNeededIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="4" y="4" width="16" height="16" rx="3" />
+    <path d="m8.5 12.5 2.5 2.5 4.5-5" />
+  </Icon>
+);

@@ -9,7 +9,7 @@ export function needsConfirmation(error: unknown): boolean {
 /** Asks before resending with `confirmReconciled: true`. */
 export function ConfirmReconciled({ onConfirm, busy }: { onConfirm: () => void; busy: boolean }) {
   return (
-    <div role="alert" className="flex flex-col gap-3 rounded-xl bg-yellow-50 p-3 text-yellow-900">
+    <div role="alert" className="flex flex-col gap-3 rounded-xl bg-yellow-400/10 p-3 text-yellow-200">
       <p>This changes reconciled transactions, which already match your bank statement. Change them anyway?</p>
       <Button variant="danger" mutating busy={busy} onClick={onConfirm}>
         Change anyway

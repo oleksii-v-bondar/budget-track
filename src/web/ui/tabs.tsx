@@ -37,7 +37,7 @@ export function Tabs<T extends string>({ label, value, tabs, onChange, children 
         role="tablist"
         aria-label={label}
         onKeyDown={onKeyDown}
-        className="-mx-4 flex gap-1 overflow-x-auto border-b border-gray-200 px-4"
+        className="-mx-4 flex gap-1 overflow-x-auto border-b border-line px-4"
       >
         {tabs.map((tab) => {
           const selected = tab.value === value;
@@ -53,7 +53,7 @@ export function Tabs<T extends string>({ label, value, tabs, onChange, children 
               onClick={() => onChange(tab.value)}
               className={cx(
                 '-mb-px min-h-11 shrink-0 border-b-2 px-3 text-sm font-semibold whitespace-nowrap',
-                selected ? 'border-brand text-brand' : 'border-transparent text-gray-500',
+                selected ? 'border-brand text-brand' : 'border-transparent text-muted',
               )}
             >
               {tab.label}

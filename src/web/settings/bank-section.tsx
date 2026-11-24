@@ -36,7 +36,7 @@ function ConnectLink({ bank, className, children }: { bank: string; className: s
   const online = useOnline();
   if (!online) {
     return (
-      <span aria-disabled="true" title="You're offline" className={cx(className, 'cursor-not-allowed text-gray-400')}>
+      <span aria-disabled="true" title="You're offline" className={cx(className, 'cursor-not-allowed text-muted')}>
         {children}
       </span>
     );
@@ -77,30 +77,30 @@ function BankPicker({ connected }: { connected: Set<string> }) {
         placeholder="Search banks"
         value={search}
         onChange={(event) => setSearch(event.target.value)}
-        className="min-h-11 rounded-xl border border-gray-300 bg-gray-50 px-3 text-base outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
+        className="min-h-11 rounded-xl border border-line bg-raised px-3 text-base outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
       />
       {banks.isPending ? (
         <Loading label="Loading banks…" />
       ) : banks.isError ? (
         <LoadError error={banks.error} onRetry={() => void banks.refetch()} />
       ) : matches.length === 0 ? (
-        <p className="py-6 text-center text-gray-500">No bank matches “{search.trim()}”.</p>
+        <p className="py-6 text-center text-muted">No bank matches “{search.trim()}”.</p>
       ) : (
-        <ul aria-label="Banks" className="-mx-4 divide-y divide-gray-100">
+        <ul aria-label="Banks" className="-mx-4 divide-y divide-line">
           {matches.map((bank) => (
             <li key={bank.name}>
               <ConnectLink
                 bank={bank.name}
-                className="flex min-h-12 items-center justify-between gap-3 px-4 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+                className="flex min-h-12 items-center justify-between gap-3 px-4 hover:bg-white/5 focus:bg-white/5 focus:outline-none"
               >
                 <span className="min-w-0 truncate">{bank.name}</span>
-                {connected.has(bank.name) && <span className="text-sm text-gray-500">Connected</span>}
+                {connected.has(bank.name) && <span className="text-sm text-muted">Connected</span>}
               </ConnectLink>
             </li>
           ))}
         </ul>
       )}
-      <p className="text-sm text-gray-500">You sign in at your bank; Budget Track only reads your transactions.</p>
+      <p className="text-sm text-muted">You sign in at your bank; Budget Track only reads your transactions.</p>
     </div>
   );
 }
@@ -170,7 +170,7 @@ export function BankSection() {
     <article
       key={c.id}
       aria-labelledby={`bank-${c.id}`}
-      className="flex flex-col gap-3 rounded-xl border border-gray-200 p-3"
+      className="flex flex-col gap-3 rounded-xl bg-raised p-3"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 id={`bank-${c.id}`} className="min-w-0 truncate font-semibold">
@@ -180,10 +180,10 @@ export function BankSection() {
           {c.status === 'active' ? 'Active' : 'Reconnect needed'}
         </Pill>
       </div>
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         {c.status === 'active' ? `Valid until ${dateOf(c.validUntil)}` : 'The consent has ended: reconnect to keep syncing.'}
       </p>
-      {c.accounts.length === 0 && <p className="text-sm text-gray-600">The bank shared no accounts.</p>}
+      {c.accounts.length === 0 && <p className="text-sm text-muted">The bank shared no accounts.</p>}
       {c.accounts.map((bank) => (
         <SelectField
           key={bank.uid}
@@ -204,7 +204,7 @@ export function BankSection() {
       <div className="flex gap-2">
         <ConnectLink
           bank={c.bank}
-          className="inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-base font-semibold text-brand ring-1 ring-gray-300 hover:bg-gray-50"
+          className="inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-base font-semibold text-brand ring-1 ring-line hover:bg-white/5"
         >
           Reconnect
         </ConnectLink>
@@ -222,18 +222,18 @@ export function BankSection() {
 
   return (
     <section aria-labelledby="bank-heading" className="mt-6">
-      <h2 id="bank-heading" className="px-4 pb-1 text-xs font-semibold tracking-wide text-gray-500 uppercase">
+      <h2 id="bank-heading" className="px-8 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
         Bank connections
       </h2>
-      <div className="flex flex-col gap-4 border-y border-gray-200 bg-white p-4">
+      <div className="mx-4 flex flex-col gap-4 rounded-2xl bg-surface p-4">
         {connections.length === 0 ? (
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-muted">
             Import transactions from PKO BP, Revolut and other Polish banks through Enable Banking.
           </p>
         ) : (
           <>
             {connections.map(connection)}
-            <p className="text-sm text-gray-600">New transactions sync every 6 hours.</p>
+            <p className="text-sm text-muted">New transactions sync every 6 hours.</p>
             <Button
               mutating
               busy={sync.isPending}

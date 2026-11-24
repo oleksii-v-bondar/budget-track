@@ -77,10 +77,10 @@ export function BulkActions({ transactions, accounts, groups, payees, onDone }: 
   );
 
   if (step === 'menu') {
-    const item = 'flex min-h-12 w-full items-center px-4 text-left hover:bg-gray-50 disabled:text-gray-400';
+    const item = 'flex min-h-12 w-full items-center px-4 text-left hover:bg-white/5 disabled:text-muted';
     return (
       <div className="flex flex-col gap-3">
-        <ul className="divide-y divide-gray-200 rounded-xl ring-1 ring-gray-200">
+        <ul className="divide-y divide-line rounded-xl ring-1 ring-line">
           {(
             [
               ['Categorize', () => choose('categorize')],
@@ -153,7 +153,7 @@ export function BulkActions({ transactions, accounts, groups, payees, onDone }: 
       )}
       {step === 'moveAccount' &&
         (targets.length === 0 ? (
-          <p className="text-gray-600">
+          <p className="text-muted">
             {currencies.size > 1
               ? 'Select transactions in one currency to move them.'
               : 'There is no open account in this currency to move them to.'}
@@ -171,7 +171,7 @@ export function BulkActions({ transactions, accounts, groups, payees, onDone }: 
           </SelectField>
         ))}
       {step === 'delete' && (
-        <p className="text-gray-600">
+        <p className="text-muted">
           Delete {plural(transactions.length)}? A transfer goes from both accounts. You can undo it.
         </p>
       )}

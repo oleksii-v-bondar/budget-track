@@ -6,8 +6,8 @@ export function NotFoundScreen() {
   return (
     <div className="mx-auto max-w-[480px] px-4 py-12 text-center">
       <p className="text-lg font-semibold">Page not found</p>
-      <Link to="/budget" className="text-brand underline">
-        Go to the budget
+      <Link to="/home" className="text-brand underline">
+        Go to Home
       </Link>
     </div>
   );
@@ -19,7 +19,7 @@ export function ErrorScreen({ error }: ErrorComponentProps) {
   return (
     <div className="mx-auto flex max-w-[480px] flex-col items-center gap-4 px-4 py-12 text-center">
       <h1 className="text-lg font-semibold">This page didn't load</h1>
-      <p className="text-gray-600">{errorMessage(error)}</p>
+      <p className="text-muted">{errorMessage(error)}</p>
       <Button onClick={() => void router.invalidate()}>Try again</Button>
     </div>
   );

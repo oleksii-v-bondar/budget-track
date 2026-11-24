@@ -14,9 +14,11 @@ import { useState } from 'react';
 import { AccountsScreen } from './accounts/accounts-screen';
 import { LoginScreen } from './auth/login-screen';
 import { BudgetScreen } from './budget/budget-screen';
+import { HomeScreen } from './home/home-screen';
 import { thisMonth } from './lib/format';
 import { authStatusQuery } from './lib/query';
 import { filtersFromSearch } from './register/filters';
+import { ReflectScreen } from './reflect/reflect-screen';
 import { RegisterScreen } from './register/register-screen';
 import { SettingsScreen } from './settings/settings-screen';
 import { AppShell, AuthLayout } from './shell/app-shell';
@@ -31,10 +33,6 @@ export interface RouterContext {
 declare module '@tanstack/react-router' {
   interface Register {
     router: ReturnType<typeof createAppRouter>;
-  }
-  interface StaticDataRouteOption {
-    /** Shown in the app shell's header. */
-    title?: string;
   }
 }
 
@@ -66,12 +64,12 @@ const loginRoute = createRoute({
   },
   beforeLoad: async ({ context }) => {
     const status = await context.queryClient.ensureQueryData(authStatusQuery);
-    if (status.authenticated) throw redirect({ to: '/budget' });
+    if (status.authenticated) throw redirect({ to: '/home' });
   },
   component: LoginScreen,
 });
 
-// Everything else needs a session and lives in the app shell. A later phase adds its screens here.
+// Everything else needs a session and lives in the app shell.
 const appLayout = createRoute({
   getParentRoute: () => rootRoute,
   id: 'app',
@@ -106,7 +104,6 @@ function AllAccountsRegister() {
 const budgetRoute = createRoute({
   getParentRoute: () => appLayout,
   path: 'budget',
-  staticData: { title: 'Budget' },
   validateSearch: (search: Record<string, unknown>): { month?: string } =>
     typeof search.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(search.month) ? { month: search.month } : {},
   component: BudgetRoute,
@@ -123,46 +120,43 @@ const appRoutes = [
     getParentRoute: () => appLayout,
     path: '/',
     beforeLoad: () => {
-      throw redirect({ to: '/budget' });
+      throw redirect({ to: '/home' });
     },
   }),
+  createRoute({ getParentRoute: () => appLayout, path: 'home', component: HomeScreen }),
   budgetRoute,
   createRoute({
     getParentRoute: () => appLayout,
     path: 'accounts',
-    staticData: { title: 'Accounts' },
     component: AccountsScreen,
   }),
   createRoute({
     getParentRoute: () => appLayout,
     path: 'accounts/$accountId',
-    staticData: { title: 'Account' },
     validateSearch: filtersFromSearch,
     component: AccountRegister,
   }),
   createRoute({
     getParentRoute: () => appLayout,
     path: 'transactions',
-    staticData: { title: 'All accounts' },
     validateSearch: filtersFromSearch,
     component: AllAccountsRegister,
   }),
   createRoute({
     getParentRoute: () => appLayout,
     path: 'transactions/new',
-    staticData: { title: 'New transaction' },
     validateSearch: prefillFromSearch,
     component: NewTransactionScreen,
   }),
   createRoute({
     getParentRoute: () => appLayout,
     path: 'settings',
-    staticData: { title: 'Settings' },
     // ?bank=error: the bank's consent flow failed (see /api/bank/callback).
     validateSearch: (search: Record<string, unknown>): { bank?: 'error' } =>
       search.bank === 'error' ? { bank: 'error' } : {},
     component: SettingsScreen,
   }),
+  createRoute({ getParentRoute: () => appLayout, path: 'reflect', component: ReflectScreen }),
 ] as const;
 
 const routeTree = rootRoute.addChildren([

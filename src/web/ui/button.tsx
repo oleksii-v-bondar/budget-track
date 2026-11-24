@@ -15,10 +15,10 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-brand text-white hover:bg-brand-dark disabled:bg-gray-300',
-  secondary: 'bg-white text-gray-900 ring-1 ring-gray-300 hover:bg-gray-50 disabled:text-gray-400',
-  ghost: 'text-brand hover:bg-brand-light disabled:text-gray-400 disabled:hover:bg-transparent',
-  danger: 'bg-red-600 text-white hover:bg-red-700 disabled:bg-gray-300',
+  primary: 'bg-brand text-white hover:bg-brand-dark disabled:bg-zero disabled:text-muted',
+  secondary: 'bg-raised text-white ring-1 ring-line hover:bg-white/10 disabled:text-muted',
+  ghost: 'text-brand hover:bg-brand-light disabled:text-muted disabled:hover:bg-transparent',
+  danger: 'bg-red-600 text-white hover:bg-red-700 disabled:bg-zero disabled:text-muted',
 };
 
 /** The kit's button. It is `type="button"` unless told otherwise, so only an explicit submit button submits a form. */
@@ -43,7 +43,7 @@ export function Button({
       aria-busy={busy || undefined}
       title={offline ? "You're offline" : title}
       className={cx(
-        'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-base font-semibold transition-colors',
+        'inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-base font-semibold transition-colors',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed',
         VARIANTS[variant],
         block && 'w-full',

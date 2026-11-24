@@ -4,7 +4,7 @@ import { Button } from './button';
 /** What a screen shows while its first data loads. */
 export function Loading({ label = 'Loading…' }: { label?: string }) {
   return (
-    <p aria-busy="true" className="px-4 py-12 text-center text-gray-500">
+    <p aria-busy="true" className="px-4 py-12 text-center text-muted">
       {label}
     </p>
   );
@@ -14,7 +14,7 @@ export function Loading({ label = 'Loading…' }: { label?: string }) {
 export function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   return (
     <div role="alert" className="flex flex-col items-center gap-3 px-4 py-12 text-center">
-      <p className="text-gray-700">{errorMessage(error)}</p>
+      <p className="text-gray-200">{errorMessage(error)}</p>
       <Button variant="secondary" onClick={onRetry}>
         Try again
       </Button>

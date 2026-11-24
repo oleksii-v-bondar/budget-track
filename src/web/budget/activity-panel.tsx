@@ -44,11 +44,11 @@ export function ActivityPanel({ month, category }: { month: string; category: Bu
     getNextPageParam: (page) => page.nextCursor,
   });
 
-  if (register.isPending) return <p className="py-4 text-center text-gray-500">Loading the transactions…</p>;
+  if (register.isPending) return <p className="py-4 text-center text-muted">Loading the transactions…</p>;
   if (register.isError) {
     return (
       <div className="flex flex-col items-center gap-3 py-4 text-center">
-        <p className="text-gray-700">{errorMessage(register.error)}</p>
+        <p className="text-gray-200">{errorMessage(register.error)}</p>
         <Button variant="secondary" onClick={() => void register.refetch()}>
           Try again
         </Button>
@@ -57,27 +57,27 @@ export function ActivityPanel({ month, category }: { month: string; category: Bu
   }
   const transactions = register.data.pages.flatMap((page) => page.transactions);
   if (transactions.length === 0) {
-    return <p className="py-4 text-center text-gray-500">No transactions in {formatMonth(month)}.</p>;
+    return <p className="py-4 text-center text-muted">No transactions in {formatMonth(month)}.</p>;
   }
   return (
     <div className="flex flex-col gap-3">
       {'accountId' in filter && (
-        <p className="text-sm text-gray-500">Spending and payments on this card in {formatMonth(month)}.</p>
+        <p className="text-sm text-muted">Spending and payments on this card in {formatMonth(month)}.</p>
       )}
-      <ul aria-label="Transactions" className="divide-y divide-gray-100">
+      <ul aria-label="Transactions" className="divide-y divide-line">
         {transactions.map((transaction) => {
           const amount = amountIn(transaction, filter);
           return (
             <li key={transaction.id} className="flex items-center gap-3 py-2">
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium">{transaction.payeeName ?? 'No payee'}</p>
-                <p className="truncate text-xs text-gray-500">
+                <p className="truncate text-xs text-muted">
                   {[formatDate(transaction.date), transaction.accountName, transaction.isSplit && 'Split', transaction.memo]
                     .filter(Boolean)
                     .join(' · ')}
                 </p>
               </div>
-              <span className={cx('tabular-nums', amount > 0 ? 'text-green-700' : 'text-gray-900')}>{formatMoney(amount)}</span>
+              <span className={cx('tabular-nums', amount > 0 ? 'text-lime' : 'text-white')}>{formatMoney(amount)}</span>
             </li>
           );
         })}

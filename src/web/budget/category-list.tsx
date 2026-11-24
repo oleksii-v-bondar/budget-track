@@ -12,7 +12,7 @@ const BAR_TONES: Record<PillTone, string> = {
   green: 'bg-green-500',
   yellow: 'bg-yellow-400',
   red: 'bg-red-500',
-  grey: 'bg-gray-400',
+  grey: 'bg-zero',
 };
 
 /** How far a target is funded (spec §6 progress), as a thin bar under the category's name. */
@@ -25,7 +25,7 @@ function TargetProgress({ progress, tone }: { progress: number; tone: PillTone }
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={percent}
-      className="mt-1 h-1 overflow-hidden rounded-full bg-gray-200"
+      className="mt-1 h-1 overflow-hidden rounded-full bg-zero"
     >
       <div className={cx('h-full rounded-full', BAR_TONES[tone])} style={{ width: `${percent}%` }} />
     </div>
@@ -51,11 +51,11 @@ function CategoryRow({ category, groupName, onOpen }: CategoryRowProps) {
       data-testid={`category-${category.id}`}
       aria-haspopup="dialog"
       onClick={() => onOpen(category.id)}
-      className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-50"
+      className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-white/5"
     >
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">{category.name}</p>
-        {groupName && <p className="truncate text-xs text-gray-500">{groupName}</p>}
+        {groupName && <p className="truncate text-xs text-muted">{groupName}</p>}
         {hint && <p className={cx('truncate text-xs', HINT_TONES[hint.tone])}>{hint.text}</p>}
         {category.targetEvaluation && <TargetProgress progress={category.targetEvaluation.progress} tone={category.pill} />}
       </div>
@@ -73,27 +73,27 @@ interface GroupSectionProps {
 
 function GroupSection({ group, collapsed, onToggle, onOpen }: GroupSectionProps) {
   return (
-    <section aria-label={group.name} className="border-b border-gray-200">
+    <section aria-label={group.name} className="border-b border-line">
       <h3>
         <button
           type="button"
           aria-expanded={!collapsed}
           onClick={onToggle}
-          className="flex min-h-11 w-full items-center gap-2 bg-gray-50 px-4 text-left text-sm font-semibold text-gray-700"
+          className="flex min-h-11 w-full items-center gap-2 bg-raised px-4 text-left text-sm font-semibold text-gray-200"
         >
           <ChevronDownIcon className={cx('size-4 shrink-0 transition-transform', collapsed && '-rotate-90')} />
           <span className="flex-1 truncate">{group.name}</span>
-          <span className="font-normal text-gray-500 tabular-nums">{formatMoney(totalAvailable(group.categories))}</span>
+          <span className="font-normal text-muted tabular-nums">{formatMoney(totalAvailable(group.categories))}</span>
         </button>
       </h3>
       {!collapsed && (
-        <ul className="divide-y divide-gray-100">
+        <ul className="divide-y divide-line">
           {group.categories.map((category) => (
             <li key={category.id}>
               <CategoryRow category={category} onOpen={onOpen} />
             </li>
           ))}
-          {group.categories.length === 0 && <li className="px-4 py-2.5 text-sm text-gray-500">No categories yet.</li>}
+          {group.categories.length === 0 && <li className="px-4 py-2.5 text-sm text-muted">No categories yet.</li>}
         </ul>
       )}
     </section>
@@ -104,20 +104,20 @@ function GroupSection({ group, collapsed, onToggle, onOpen }: GroupSectionProps)
 function HiddenSection({ hidden, onOpen }: { hidden: HiddenCategory[]; onOpen: OnOpen }) {
   const [open, setOpen] = useState(false);
   return (
-    <section aria-label="Hidden categories" className="border-b border-gray-200">
+    <section aria-label="Hidden categories" className="border-b border-line">
       <h3>
         <button
           type="button"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          className="flex min-h-11 w-full items-center gap-2 px-4 text-left text-sm font-semibold text-gray-500"
+          className="flex min-h-11 w-full items-center gap-2 px-4 text-left text-sm font-semibold text-muted"
         >
           <ChevronDownIcon className={cx('size-4 shrink-0 transition-transform', !open && '-rotate-90')} />
           <span className="flex-1">Hidden categories ({hidden.length})</span>
         </button>
       </h3>
       {open && (
-        <ul className="divide-y divide-gray-100">
+        <ul className="divide-y divide-line">
           {hidden.map(({ category, groupName }) => (
             <li key={category.id}>
               <CategoryRow category={category} groupName={groupName} onOpen={onOpen} />
@@ -135,12 +135,12 @@ export function CategoryList({ view, filter, onOpen }: { view: BudgetMonthDto; f
   const collapsed = useCollapsedGroups();
   return (
     <div>
-      <div className="flex justify-between border-b border-gray-200 px-4 py-1.5 text-xs font-semibold tracking-wide text-gray-500 uppercase">
+      <div className="flex justify-between border-b border-line px-4 py-1.5 text-xs font-semibold tracking-wide text-muted uppercase">
         <span>Category</span>
         <span>Available</span>
       </div>
       {uncategorized && (
-        <section aria-label="Uncategorized" className="border-b border-gray-200">
+        <section aria-label="Uncategorized" className="border-b border-line">
           <CategoryRow category={uncategorized} onOpen={onOpen} />
         </section>
       )}
@@ -154,7 +154,7 @@ export function CategoryList({ view, filter, onOpen }: { view: BudgetMonthDto; f
         />
       ))}
       {groups.length === 0 && !uncategorized && (
-        <p className="px-4 py-8 text-center text-gray-500">{EMPTY_FILTER_MESSAGES[filter]}</p>
+        <p className="px-4 py-8 text-center text-muted">{EMPTY_FILTER_MESSAGES[filter]}</p>
       )}
       {hidden.length > 0 && <HiddenSection hidden={hidden} onOpen={onOpen} />}
     </div>

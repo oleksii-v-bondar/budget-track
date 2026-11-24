@@ -37,7 +37,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext value={api}>
       {children}
-      <div className="pointer-events-none fixed inset-x-0 bottom-20 z-50 mx-auto flex max-w-[480px] flex-col gap-2 px-3">
+      <div className="pointer-events-none fixed inset-x-0 bottom-[calc(9.5rem+env(safe-area-inset-bottom))] z-50 mx-auto flex max-w-[480px] flex-col gap-2 px-3">
         {toasts.map((toast) => (
           <ToastItem key={toast.id} toast={toast} onDismiss={dismiss} />
         ))}
@@ -58,14 +58,14 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       role={tone === 'error' ? 'alert' : 'status'}
       className={cx(
         'flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-white shadow-lg',
-        tone === 'error' ? 'bg-red-700' : 'bg-gray-900',
+        tone === 'error' ? 'bg-red-700' : 'bg-raised ring-1 ring-line',
       )}
     >
       <span className="flex-1">{toast.message}</span>
       {toast.action && (
         <button
           type="button"
-          className="pointer-events-auto font-semibold text-green-300 uppercase"
+          className="pointer-events-auto font-semibold text-brand uppercase"
           onClick={() => {
             onDismiss(id);
             toast.action!.onClick();

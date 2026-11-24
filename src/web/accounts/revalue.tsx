@@ -12,7 +12,7 @@ import { FormError, TextField } from '../ui/field';
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex justify-between gap-3">
-      <dt className="text-gray-600">{label}</dt>
+      <dt className="text-muted">{label}</dt>
       <dd className="text-right font-medium tabular-nums">{children}</dd>
     </div>
   );

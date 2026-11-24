@@ -13,11 +13,11 @@ describe('route guards', () => {
     expect(history.location.search).toBe('?redirect=%2Fsettings');
   });
 
-  it('send a signed-in owner from the sign-in page and / to the budget', async () => {
+  it('send a signed-in owner from the sign-in page and / to Home', async () => {
     fakeApi(SIGNED_IN);
     for (const path of ['/', '/login']) {
       const { history, unmount } = renderApp(path);
-      await waitFor(() => expect(history.location.pathname).toBe('/budget'));
+      await waitFor(() => expect(history.location.pathname).toBe('/home'));
       unmount();
     }
   });
@@ -40,40 +40,64 @@ describe('route guards', () => {
   });
 });
 
+/** Opens the "…" menu of the screen's top bar. */
+async function openMenu() {
+  await userEvent.click(await screen.findByRole('button', { name: 'More' }));
+  return screen.getByRole('menu', { name: 'More' });
+}
+
 describe('app shell', () => {
-  it('shows the screen title, Undo/Redo and the bottom navigation', async () => {
+  it('shows the tab bar, and Undo/Redo in the "…" menu', async () => {
     fakeApi(SIGNED_IN);
     renderApp('/budget');
-    expect(await screen.findByRole('heading', { name: 'Budget' })).toBeInTheDocument();
-    const nav = screen.getByRole('navigation', { name: 'Main' });
-    expect(within(nav).getAllByRole('link').map((link) => link.textContent || link.getAttribute('aria-label'))).toEqual([
-      'Budget',
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    expect(within(nav).getAllByRole('link').map((link) => link.textContent)).toEqual([
+      'Home',
+      'Plan',
+      'Spending',
       'Accounts',
-      'New transaction',
-      'Settings',
+      'Reflect',
     ]);
-    expect(within(nav).getByRole('link', { name: 'Budget' })).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
+    expect(within(nav).getByRole('link', { name: 'Plan' })).toHaveAttribute('aria-current', 'page');
+    const menu = await openMenu();
+    expect(within(menu).getByRole('menuitem', { name: 'Undo' })).toBeDisabled();
+    expect(within(menu).getByRole('menuitem', { name: 'Redo' })).toBeDisabled();
   });
 
-  it('reaches Settings from the bottom navigation', async () => {
+  it('reaches Settings from the "…" menu', async () => {
     fakeApi(SIGNED_IN);
     renderApp('/budget');
-    await userEvent.click(await screen.findByRole('link', { name: 'Settings' }));
+    await userEvent.click(within(await openMenu()).getByRole('menuitem', { name: 'Settings' }));
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('link', { name: 'Budget' })).not.toHaveAttribute('aria-current');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(within(screen.getByRole('navigation', { name: 'Main' })).queryByRole('link', { current: 'page' })).toBeNull();
   });
 
-  it('undoes and redoes from the header, naming the command', async () => {
+  it('closes the "…" menu with Escape', async () => {
+    fakeApi(SIGNED_IN);
+    renderApp('/home');
+    await openMenu();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.getByRole('button', { name: 'More' })).toHaveFocus();
+  });
+
+  it('opens a new transaction in a sheet from "+ Transaction"', async () => {
+    fakeApi(SIGNED_IN);
+    renderApp('/home');
+    await userEvent.click(await screen.findByRole('button', { name: 'New transaction' }));
+    expect(screen.getByRole('dialog', { name: 'New transaction' })).toBeInTheDocument();
+  });
+
+  it('undoes and redoes from the "…" menu, naming the command', async () => {
     const { requests } = fakeApi({
       ...SIGNED_IN,
       'GET /api/undo': { body: { undo: { label: 'Create payee "Lidl"' }, redo: null } },
       'POST /api/undo': { body: { undo: null, redo: { label: 'Create payee "Lidl"' }, undone: { label: 'Create payee "Lidl"' } } },
     });
     renderApp('/budget');
-    await userEvent.click(await screen.findByRole('button', { name: 'Undo Create payee "Lidl"' }));
+    const menu = await openMenu();
+    await userEvent.click(await within(menu).findByRole('menuitem', { name: 'Undo Create payee "Lidl"' }));
     expect(await screen.findByRole('status')).toHaveTextContent('Undone: Create payee "Lidl"');
     expect(requests.filter((r) => r.method === 'POST').map((r) => r.path)).toEqual(['/api/undo']);
     expect(requests.find((r) => r.method === 'POST')!.headers.get('X-Requested-With')).toBe('budget-track');
@@ -86,7 +110,7 @@ describe('app shell', () => {
       'POST /api/undo': json({ code: 'undo_conflict', message: "Can't undo: data changed since." }, 409),
     });
     renderApp('/budget');
-    await userEvent.click(await screen.findByRole('button', { name: 'Undo Move money' }));
+    await userEvent.click(await within(await openMenu()).findByRole('menuitem', { name: 'Undo Move money' }));
     expect(await screen.findByRole('alert')).toHaveTextContent("Can't undo: data changed since.");
   });
 
@@ -102,9 +126,10 @@ describe('app shell', () => {
       },
     });
     renderApp('/budget');
-    await userEvent.click(await screen.findByRole('button', { name: 'Undo Move money' }));
+    await userEvent.click(await within(await openMenu()).findByRole('menuitem', { name: 'Undo Move money' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Nothing to undo.');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled());
+    const menu = await openMenu();
+    await waitFor(() => expect(within(menu).getByRole('menuitem', { name: 'Undo' })).toBeDisabled());
   });
 
   it('shows the offline banner and disables Undo while offline', async () => {
@@ -112,7 +137,9 @@ describe('app shell', () => {
     fakeApi({ ...SIGNED_IN, 'GET /api/undo': { body: { undo: { label: 'Move money' }, redo: null } } });
     renderApp('/budget');
     expect(await screen.findByText(/You're offline/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Undo Move money' })).toBeDisabled());
+    const menu = await openMenu();
+    await waitFor(() => expect(within(menu).getByRole('menuitem', { name: 'Undo Move money' })).toBeDisabled());
+    expect(within(menu).getByRole('menuitem', { name: 'Sign out' })).toBeDisabled();
   });
 });
 
@@ -127,10 +154,10 @@ describe('error screen', () => {
       'GET /api/auth/status': () =>
         ++statusCalls === 1 ? new Response('<h1>Not Found</h1>', { status: 404 }) : SIGNED_IN['GET /api/auth/status'],
     });
-    renderApp('/budget');
+    renderApp('/home');
     expect(await screen.findByRole('heading', { name: "This page didn't load" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    expect(await screen.findByRole('heading', { name: 'Budget' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
     expect(statusCalls).toBe(2);
   });
 });

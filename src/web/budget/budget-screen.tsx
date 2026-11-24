@@ -5,6 +5,7 @@ import type { BudgetMonthDto } from '../../shared/api/budget';
 import { api, ApiError, unwrap } from '../lib/api';
 import { errorMessage } from '../lib/commands';
 import { formatMoney, formatMonth } from '../lib/format';
+import { ScreenHeader } from '../shell/screen-header';
 import { Button } from '../ui/button';
 import { cx } from '../ui/cx';
 import { NoteIcon } from '../ui/icons';
@@ -23,7 +24,7 @@ import { findCategory, type RtaTone, rtaTone } from './view-model';
 const BANNER_TONES: Record<RtaTone, string> = {
   green: 'bg-brand text-white',
   red: 'bg-red-600 text-white',
-  grey: 'bg-gray-200 text-gray-800',
+  grey: 'bg-zero text-gray-100',
 };
 
 /** Spec §11: Ready to Assign, green above 0, red below, grey at 0; tapping it opens the breakdown. */
@@ -51,13 +52,13 @@ function MonthNote({ month, note, onOpen }: { month: string; note: string | null
       type="button"
       aria-haspopup="dialog"
       onClick={onOpen}
-      className="mx-4 flex items-start gap-2 rounded-xl px-2 py-1.5 text-left text-sm text-gray-600 hover:bg-gray-50"
+      className="mx-4 flex items-start gap-2 rounded-xl px-2 py-1.5 text-left text-sm text-muted hover:bg-white/5"
     >
-      <NoteIcon className="size-5 shrink-0 text-gray-400" />
+      <NoteIcon className="size-5 shrink-0 text-muted" />
       {note ? (
         <span className="line-clamp-2 whitespace-pre-line">{note}</span>
       ) : (
-        <span className="text-gray-500">Add a note for {formatMonth(month)}</span>
+        <span className="text-muted">Add a note for {formatMonth(month)}</span>
       )}
     </button>
   );
@@ -67,9 +68,9 @@ function BudgetSkeleton() {
   return (
     <div aria-busy="true" className="flex flex-col gap-3 px-4 pt-2">
       <span className="sr-only">Loading the budget…</span>
-      <div className="h-16 animate-pulse rounded-2xl bg-gray-200" />
+      <div className="h-16 animate-pulse rounded-2xl bg-zero" />
       {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="h-10 animate-pulse rounded-xl bg-gray-100" />
+        <div key={i} className="h-10 animate-pulse rounded-xl bg-raised" />
       ))}
     </div>
   );
@@ -79,7 +80,7 @@ function LoadError({ error, onRetry, onThisMonth }: { error: unknown; onRetry: (
   const outOfRange = error instanceof ApiError && error.code === 'month_out_of_range';
   return (
     <div className="flex flex-col items-center gap-3 px-4 py-12 text-center">
-      <p className="text-gray-700">{errorMessage(error)}</p>
+      <p className="text-gray-200">{errorMessage(error)}</p>
       {outOfRange ? (
         <Button onClick={onThisMonth}>Go to this month</Button>
       ) : (
@@ -117,6 +118,7 @@ export function BudgetScreen({ month }: { month: string }) {
 
   return (
     <div className="pb-4">
+      <ScreenHeader />
       <MonthSwitcher month={month} bounds={view} onChange={goTo} />
       {view && editing ? (
         <div className="flex flex-col gap-3">

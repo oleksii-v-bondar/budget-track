@@ -72,11 +72,11 @@ export function AmountKeypad({ value, currency = 'PLN', onDone, doneLabel = 'Don
 
   return (
     <div className="flex flex-col gap-3" onKeyDown={onKeyDown}>
-      <div className="rounded-xl bg-gray-100 px-4 py-3 text-right" aria-live="polite">
+      <div className="rounded-xl bg-raised px-4 py-3 text-right" aria-live="polite">
         <div className="min-h-8 text-2xl font-semibold tabular-nums break-all" data-testid="keypad-expression">
           {formatExpression(expression) || '0'}
         </div>
-        <div className={cx('text-sm tabular-nums', result.ok ? 'text-gray-600' : 'text-red-600')} data-testid="keypad-result">
+        <div className={cx('text-sm tabular-nums', result.ok ? 'text-muted' : 'text-red-400')} data-testid="keypad-result">
           {result.ok ? `= ${formatMoney(result.value, currency)}` : result.error}
         </div>
       </div>
@@ -88,8 +88,8 @@ export function AmountKeypad({ value, currency = 'PLN', onDone, doneLabel = 'Don
             aria-label={name}
             onClick={() => press(key)}
             className={cx(
-              'flex min-h-12 items-center justify-center rounded-xl text-xl font-semibold active:bg-gray-300',
-              /[+−×÷]/.test(key) ? 'bg-gray-200 text-brand' : 'bg-gray-100 text-gray-900',
+              'flex min-h-12 items-center justify-center rounded-xl text-xl font-semibold active:bg-white/15',
+              /[+−×÷]/.test(key) ? 'bg-zero text-brand' : 'bg-raised text-white',
             )}
           >
             {key === 'Backspace' ? <BackspaceIcon /> : key}

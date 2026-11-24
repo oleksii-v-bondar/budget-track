@@ -80,7 +80,7 @@ const capitalized = (word: string) => `${word[0]!.toUpperCase()}${word.slice(1)}
 function FlagPicker({ value, onChange }: { value: FlagColor | null; onChange: (flag: FlagColor | null) => void }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-sm font-medium text-gray-700">Flag</span>
+      <span className="text-sm font-medium text-gray-200">Flag</span>
       <div role="radiogroup" aria-label="Flag" className="flex flex-wrap gap-2">
         {[null, ...FLAG_COLORS].map((flag) => (
           <button
@@ -91,9 +91,9 @@ function FlagPicker({ value, onChange }: { value: FlagColor | null; onChange: (f
             aria-label={flag ? `${capitalized(flag)} flag` : 'No flag'}
             onClick={() => onChange(flag)}
             className={cx(
-              'flex size-10 items-center justify-center rounded-full ring-1 ring-gray-200',
-              value === flag && 'ring-2 ring-gray-900',
-              flag ? FLAG_CLASSES[flag] : 'text-gray-400',
+              'flex size-10 items-center justify-center rounded-full ring-1 ring-line',
+              value === flag && 'ring-2 ring-white',
+              flag ? FLAG_CLASSES[flag] : 'text-muted',
             )}
           >
             <FlagIcon className="size-5" fill={flag ? 'currentColor' : 'none'} />
@@ -239,7 +239,7 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
     <>
       <form noValidate onSubmit={submit} hidden={picking !== null} className="flex flex-col gap-4">
         {locked ? (
-          <p className="rounded-xl bg-gray-100 p-3 text-sm text-gray-700">
+          <p className="rounded-xl bg-raised p-3 text-sm text-gray-200">
             {transaction?.transfer?.splitLineId
               ? `This is one line of a split in ${transaction.transfer.accountName}. Change its amount, date or category on the split.`
               : 'An FX revaluation keeps its amounts; you can change its memo, flag and cleared state.'}
@@ -263,12 +263,12 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
                 onClick={() => setKeypad((open) => !open)}
                 className={cx(
                   'rounded-xl px-3 py-1 text-3xl font-semibold tabular-nums',
-                  values.direction === 'inflow' ? 'text-green-700' : 'text-gray-900',
+                  values.direction === 'inflow' ? 'text-lime' : 'text-white',
                 )}
               >
                 {formatMoney(signed, currency)}
               </button>
-              {errors.amount && <p className="text-sm text-red-600">{errors.amount}</p>}
+              {errors.amount && <p className="text-sm text-red-400">{errors.amount}</p>}
             </div>
             {keypad && (
               <AmountKeypad
@@ -304,7 +304,7 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
             ) : rule !== 'none' ? (
               <div className="flex flex-col gap-1">
                 <span className="flex items-end justify-between">
-                  <span className="text-sm font-medium text-gray-700">Category</span>
+                  <span className="text-sm font-medium text-gray-200">Category</span>
                   {!target && <SplitButton onSplit={split} />}
                 </span>
                 <button
@@ -313,17 +313,17 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
                   aria-invalid={errors.categoryId ? true : undefined}
                   onClick={() => setPicking('main')}
                   className={cx(
-                    'flex min-h-11 items-center rounded-xl border bg-white px-3 text-left text-base',
-                    errors.categoryId ? 'border-red-500' : 'border-gray-300',
-                    !categoryName && 'text-gray-500',
+                    'flex min-h-11 items-center rounded-xl border bg-surface px-3 text-left text-base',
+                    errors.categoryId ? 'border-red-500' : 'border-line',
+                    !categoryName && 'text-muted',
                   )}
                 >
                   {categoryName ?? (rule === 'optional' ? 'Uncategorized' : 'Choose a category')}
                 </button>
-                {errors.categoryId && <p className="text-sm text-red-600">{errors.categoryId}</p>}
+                {errors.categoryId && <p className="text-sm text-red-400">{errors.categoryId}</p>}
               </div>
             ) : target ? (
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-muted">
                 A transfer between two {isOnBudget(target) ? 'budget' : 'tracking'} accounts takes no category.
               </p>
             ) : (
@@ -355,7 +355,7 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
                   hint="What the other account receives or sends, in its currency."
                 />
                 {effective && (
-                  <p className="text-sm text-gray-600" data-testid="effective-rate">
+                  <p className="text-sm text-muted" data-testid="effective-rate">
                     Effective rate: {effective}
                   </p>
                 )}
@@ -410,7 +410,7 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
             mutating
             busy={remove.isPending}
             block
-            className="text-red-600"
+            className="text-red-400"
             onClick={() => {
               save.reset();
               remove.mutate(false, { onSuccess: done });
@@ -466,7 +466,7 @@ export function TransactionForm({ transaction, prefill, onDone }: TransactionFor
   }
   const context = { accounts: accounts.data.accounts, payees: payees.data.payees };
   if (!transaction && !context.accounts.some((a) => !a.closed)) {
-    return <p className="py-8 text-center text-gray-600">Add an account first: every transaction belongs to one.</p>;
+    return <p className="py-8 text-center text-muted">Add an account first: every transaction belongs to one.</p>;
   }
   const initial = transaction
     ? editValues(transaction, counterpart.data?.categoryId ?? transaction.categoryId)

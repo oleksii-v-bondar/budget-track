@@ -35,7 +35,7 @@ export function ReconcileForm({ account, onDone }: { account: AccountDto; onDone
 
   const last =
     lastReconciledAt === null || lastReconciledBalance === null ? null : (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         Last reconciled on {formatDate(lastReconciledAt.slice(0, 10))} at {money(lastReconciledBalance)}.
       </p>
     );
@@ -46,7 +46,7 @@ export function ReconcileForm({ account, onDone }: { account: AccountDto; onDone
         <p className="text-lg">
           Is your cleared balance <strong className="whitespace-nowrap">{money(clearedBalance)}</strong>?
         </p>
-        <p className="text-gray-600">Compare it with your bank. Yes marks every cleared transaction as reconciled.</p>
+        <p className="text-muted">Compare it with your bank. Yes marks every cleared transaction as reconciled.</p>
         {last}
         <FormError message={errors.form} />
         <div className="flex gap-3">
@@ -74,7 +74,7 @@ export function ReconcileForm({ account, onDone }: { account: AccountDto; onDone
   };
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-gray-600">Your cleared balance is {money(clearedBalance)}.</p>
+      <p className="text-muted">Your cleared balance is {money(clearedBalance)}.</p>
       <AmountField
         label="Statement balance"
         currency={currency}

@@ -160,7 +160,7 @@ function TargetEditor({ view, category, onDone }: TargetPanelProps) {
           )}
           <div className="flex flex-col gap-1">
             <SegmentedControl label="Each time" value={form.mode} options={MODES} onChange={(mode) => set({ mode })} />
-            <p className="text-sm text-gray-500">{MODE_HINTS[form.mode]}</p>
+            <p className="text-sm text-muted">{MODE_HINTS[form.mode]}</p>
           </div>
         </>
       )}
@@ -226,12 +226,12 @@ export function TargetPanel({ view, category, onDone }: TargetPanelProps) {
     <div className="flex flex-col gap-3">
       <p className="font-medium">{describeTarget(target)}</p>
       {evaluation ? (
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted">
           Needed in {formatMonth(view.month)}: {formatMoney(evaluation.need)}
           {snoozed && ' (snoozed)'}
         </p>
       ) : (
-        <p className="text-sm text-gray-600">It starts in {formatMonth(target.startMonth)}.</p>
+        <p className="text-sm text-muted">It starts in {formatMonth(target.startMonth)}.</p>
       )}
       <FormError message={errors.form} />
       <div className="grid grid-cols-2 gap-2">
@@ -247,7 +247,7 @@ export function TargetPanel({ view, category, onDone }: TargetPanelProps) {
           {snoozed ? 'Unsnooze' : 'Snooze this month'}
         </Button>
       </div>
-      <Button variant="ghost" className="text-red-600" mutating busy={busy('delete')} onClick={() => change.mutate('delete', { onSuccess: onDone })}>
+      <Button variant="ghost" className="text-red-400" mutating busy={busy('delete')} onClick={() => change.mutate('delete', { onSuccess: onDone })}>
         Delete target
       </Button>
     </div>

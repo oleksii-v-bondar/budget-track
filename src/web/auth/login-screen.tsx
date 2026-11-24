@@ -21,7 +21,7 @@ export function LoginScreen() {
   };
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4 rounded-2xl bg-white p-5 shadow-sm" noValidate>
+    <form onSubmit={submit} className="flex flex-col gap-4 rounded-2xl bg-surface p-5 shadow-sm" noValidate>
       <h1 className="text-xl font-semibold">Sign in</h1>
       <TextField
         label="Username"

@@ -5,10 +5,10 @@ import { cx } from './cx';
 export type PillTone = 'green' | 'yellow' | 'red' | 'grey';
 
 const TONES: Record<PillTone, string> = {
-  green: 'bg-green-200 text-green-900',
-  yellow: 'bg-yellow-200 text-yellow-900',
-  red: 'bg-red-200 text-red-900',
-  grey: 'bg-gray-200 text-gray-700',
+  green: 'bg-lime text-page',
+  yellow: 'bg-yellow-400 text-page',
+  red: 'bg-red-500 text-white',
+  grey: 'bg-zero text-muted',
 };
 
 /** A rounded amount badge, like the Available pills of the budget. */
@@ -16,7 +16,7 @@ export function Pill({ tone, children, className }: { tone: PillTone; children: 
   return (
     <span
       data-tone={tone}
-      className={cx('inline-flex rounded-full px-2.5 py-0.5 text-sm font-semibold tabular-nums whitespace-nowrap', TONES[tone], className)}
+      className={cx('inline-flex rounded-full px-3 py-0.5 text-base font-semibold tabular-nums whitespace-nowrap', TONES[tone], className)}
     >
       {children}
     </span>

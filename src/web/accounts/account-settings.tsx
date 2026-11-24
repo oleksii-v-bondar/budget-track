@@ -108,7 +108,7 @@ export function AccountSettings({ account, onDone, onDeleted }: { account: Accou
         </Button>
       </form>
 
-      <section aria-label="Close or delete" className="flex flex-col gap-3 border-t border-gray-200 pt-4">
+      <section aria-label="Close or delete" className="flex flex-col gap-3 border-t border-line pt-4">
         <FormError message={formErrorsOf(actionError, ['fxRate']).form} />
         {account.closed ? (
           <Button variant="secondary" mutating busy={reopen.isPending} block onClick={() => reopen.mutate(undefined, { onSuccess: onDone })}>
@@ -117,14 +117,14 @@ export function AccountSettings({ account, onDone, onDeleted }: { account: Accou
         ) : confirm === 'close' ? (
           account.balance.working === 0 ? (
             <>
-              <p className="text-gray-600">It moves to Closed accounts and takes no new transactions. You can reopen it.</p>
+              <p className="text-muted">It moves to Closed accounts and takes no new transactions. You can reopen it.</p>
               <Button variant="danger" mutating busy={close.isPending} block onClick={() => close.mutate(undefined, { onSuccess: onDone })}>
                 Close account
               </Button>
             </>
           ) : (
             <>
-              <p className="text-gray-600">
+              <p className="text-muted">
                 The balance is {formatMoney(account.balance.working, account.currency)}. An account closes only at 0: a
                 reconciliation adjustment of {formatMoney(-account.balance.working, account.currency)} can bring it
                 there (the cleared transactions become reconciled).
@@ -157,7 +157,7 @@ export function AccountSettings({ account, onDone, onDeleted }: { account: Accou
         )}
         {confirm === 'delete' ? (
           <>
-            <p className="text-gray-600">
+            <p className="text-muted">
               Only an account with nothing but its starting balance can be deleted; otherwise close it.
             </p>
             <Button variant="danger" mutating busy={remove.isPending} block onClick={() => remove.mutate(undefined, { onSuccess: onDeleted })}>
@@ -165,7 +165,7 @@ export function AccountSettings({ account, onDone, onDeleted }: { account: Accou
             </Button>
           </>
         ) : (
-          <Button variant="ghost" block className="text-red-600" onClick={() => setConfirm('delete')}>
+          <Button variant="ghost" block className="text-red-400" onClick={() => setConfirm('delete')}>
             Delete account
           </Button>
         )}

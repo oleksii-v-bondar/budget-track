@@ -21,9 +21,9 @@ export type TextAreaFieldProps = TextareaHTMLAttributes<HTMLTextAreaElement> & F
 
 const controlClass = (error: string | null | undefined) =>
   cx(
-    'min-h-11 rounded-xl border bg-white px-3 text-base text-gray-900 outline-none',
-    'focus:border-brand focus:ring-2 focus:ring-brand/30 disabled:bg-gray-100',
-    error ? 'border-red-500' : 'border-gray-300',
+    'min-h-11 rounded-xl border bg-raised px-3 text-base text-white outline-none placeholder:text-muted',
+    'focus:border-brand focus:ring-2 focus:ring-brand/30 disabled:opacity-60',
+    error ? 'border-red-500' : 'border-line',
   );
 
 /** The label above a control, its hint or error underneath, and the ids that tie them together. */
@@ -40,12 +40,12 @@ function useField({ label, error, hint }: FieldProps, id: string | undefined, cl
   };
   const frame = (child: ReactNode) => (
     <div className={cx('flex flex-col gap-1', className)}>
-      <label htmlFor={controlId} className="text-sm font-medium text-gray-700">
+      <label htmlFor={controlId} className="text-sm font-medium text-gray-200">
         {label}
       </label>
       {child}
       {note && (
-        <p id={noteId} className={cx('text-sm', error ? 'text-red-600' : 'text-gray-500')}>
+        <p id={noteId} className={cx('text-sm', error ? 'text-red-400' : 'text-muted')}>
           {note}
         </p>
       )}
@@ -80,7 +80,7 @@ export function TextAreaField({ label, error, hint, className, id, rows = 4, ...
 export function FormError({ message }: { message: string | null | undefined }) {
   if (!message) return null;
   return (
-    <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
+    <p role="alert" className="rounded-xl bg-red-500/15 px-3 py-2 text-sm text-red-300">
       {message}
     </p>
   );
@@ -110,7 +110,7 @@ export interface SegmentedControlProps<T extends string> {
 /** Two or three mutually exclusive choices side by side (e.g. Outflow / Inflow). */
 export function SegmentedControl<T extends string>({ label, value, options, onChange }: SegmentedControlProps<T>) {
   return (
-    <div role="radiogroup" aria-label={label} className="grid auto-cols-fr grid-flow-col gap-1 rounded-xl bg-gray-200 p-1">
+    <div role="radiogroup" aria-label={label} className="grid auto-cols-fr grid-flow-col gap-1 rounded-xl bg-raised p-1">
       {options.map((option) => (
         <button
           key={option.value}
@@ -120,7 +120,7 @@ export function SegmentedControl<T extends string>({ label, value, options, onCh
           onClick={() => onChange(option.value)}
           className={cx(
             'min-h-9 rounded-lg px-3 text-sm font-semibold',
-            option.value === value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600',
+            option.value === value ? 'bg-zero text-white' : 'text-muted',
           )}
         >
           {option.label}

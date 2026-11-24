@@ -91,7 +91,7 @@ export function PayeeField({
 
   return (
     <div className="relative flex flex-col gap-1">
-      <label htmlFor={id} className="text-sm font-medium text-gray-700">
+      <label htmlFor={id} className="text-sm font-medium text-gray-200">
         {label}
       </label>
       <input
@@ -112,13 +112,13 @@ export function PayeeField({
         onBlur={() => setOpen(false)}
         onKeyDown={onKeyDown}
         className={cx(
-          'min-h-11 rounded-xl border bg-white px-3 text-base text-gray-900 outline-none',
+          'min-h-11 rounded-xl border bg-surface px-3 text-base text-white outline-none',
           'focus:border-brand focus:ring-2 focus:ring-brand/30',
-          error ? 'border-red-500' : 'border-gray-300',
+          error ? 'border-red-500' : 'border-line',
         )}
       />
       {error && (
-        <p id={`${id}-error`} className="text-sm text-red-600">
+        <p id={`${id}-error`} className="text-sm text-red-400">
           {error}
         </p>
       )}
@@ -127,7 +127,7 @@ export function PayeeField({
           id={listId}
           role="listbox"
           aria-label={`${name} suggestions`}
-          className="absolute top-full z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl bg-white py-1 shadow-lg ring-1 ring-gray-200"
+          className="absolute top-full z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl bg-surface py-1 shadow-lg ring-1 ring-line"
         >
           {options.map((option, index) => (
             <li

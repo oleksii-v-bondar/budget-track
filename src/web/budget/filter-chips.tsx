@@ -21,12 +21,12 @@ export function FilterChips({ value, counts, onChange }: FilterChipsProps) {
             onClick={() => onChange(filter.value)}
             className={cx(
               'flex min-h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-semibold whitespace-nowrap',
-              pressed ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700',
+              pressed ? 'bg-gray-900 text-white' : 'bg-raised text-gray-200',
             )}
           >
             {filter.label}
             {filter.value !== 'all' && (
-              <span className={cx('tabular-nums', pressed ? 'text-gray-300' : 'text-gray-500')}>{counts[filter.value]}</span>
+              <span className={cx('tabular-nums', pressed ? 'text-gray-300' : 'text-muted')}>{counts[filter.value]}</span>
             )}
           </button>
         );

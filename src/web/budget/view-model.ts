@@ -16,10 +16,10 @@ export interface CategoryHint {
 
 /** Text colours of the hint tones. */
 export const HINT_TONES: Record<CategoryHint['tone'], string> = {
-  bad: 'text-red-700',
-  warn: 'text-yellow-800',
-  good: 'text-green-700',
-  muted: 'text-gray-500',
+  bad: 'text-red-300',
+  warn: 'text-yellow-300',
+  good: 'text-lime',
+  muted: 'text-muted',
 };
 
 /**

@@ -9,6 +9,7 @@ import { ReconcileForm } from '../accounts/reconcile';
 import { RevalueForm } from '../accounts/revalue';
 import { accountsQuery } from '../accounts/accounts-api';
 import { formatDate, formatMoney } from '../lib/format';
+import { BackLink, ScreenHeader } from '../shell/screen-header';
 import { categoriesQuery, payeesQuery } from '../transactions/lookups';
 import { TransactionForm } from '../transactions/transaction-form';
 import { Button } from '../ui/button';
@@ -26,8 +27,8 @@ import { TransactionRow } from './transaction-row';
 function Balance({ label, minor, currency }: { label: string; minor: number; currency: string }) {
   return (
     <div>
-      <dt className="text-xs text-gray-500">{label}</dt>
-      <dd className={cx('font-semibold tabular-nums whitespace-nowrap', minor < 0 && 'text-red-600')}>
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className={cx('font-semibold tabular-nums whitespace-nowrap', minor < 0 && 'text-red-400')}>
         {formatMoney(minor, currency)}
       </dd>
     </div>
@@ -36,7 +37,7 @@ function Balance({ label, minor, currency }: { label: string; minor: number; cur
 
 /** The register header's actions: compact, in one row that scrolls sideways on a narrow phone. */
 const HEADER_ACTION =
-  'inline-flex min-h-9 shrink-0 items-center rounded-full bg-gray-100 px-3 text-sm font-semibold text-gray-800 hover:bg-gray-200';
+  'inline-flex min-h-9 shrink-0 items-center rounded-full bg-raised px-3 text-sm font-semibold text-gray-100 hover:bg-white/10';
 const HEADER_PRIMARY =
   'inline-flex min-h-9 shrink-0 items-center rounded-full bg-brand px-3 text-sm font-semibold text-white hover:bg-brand-dark';
 
@@ -46,10 +47,10 @@ function RegisterHeader({ account, balance }: { account: AccountDto; balance: Ac
   const close = () => setOpen(null);
   const navigate = useNavigate();
   return (
-    <section aria-label="Balances" className="border-b border-gray-200 bg-white px-4 py-3">
+    <section aria-label="Balances" className="border-b border-line bg-surface px-4 py-3">
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="truncate text-xl font-semibold">{account.name}</h2>
-        <span className="shrink-0 text-sm text-gray-500">
+        <span className="shrink-0 text-sm text-muted">
           {ACCOUNT_TYPE_LABELS[account.type]}
           {account.closed && ' · Closed'}
         </span>
@@ -60,14 +61,14 @@ function RegisterHeader({ account, balance }: { account: AccountDto; balance: Ac
         <Balance label="Working" minor={balance.working} currency={account.currency} />
       </dl>
       {isForeign(account) && account.balanceAtLatestRate !== null && (
-        <p className="mt-1 text-right text-sm text-gray-500">≈ {formatMoney(account.balanceAtLatestRate)}</p>
+        <p className="mt-1 text-right text-sm text-muted">≈ {formatMoney(account.balanceAtLatestRate)}</p>
       )}
       {account.unapprovedCount > 0 && (
         <Link
           to="/accounts/$accountId"
           params={{ accountId: account.id }}
           search={{ unapproved: true }}
-          className="mt-2 block text-sm font-medium text-blue-600"
+          className="mt-2 block text-sm font-medium text-brand"
         >
           {account.unapprovedCount} to approve
         </Link>
@@ -132,7 +133,7 @@ function LoadMore({ onLoad, busy }: { onLoad: () => void; busy: boolean }) {
 
 /** Filters and Select beside the search box (the kit's Button is taller). */
 const TOOLBAR_BUTTON =
-  'min-h-10 shrink-0 rounded-xl bg-white px-3 text-sm font-semibold text-gray-900 ring-1 ring-gray-300 hover:bg-gray-50';
+  'min-h-10 shrink-0 rounded-xl bg-surface px-3 text-sm font-semibold text-white ring-1 ring-line hover:bg-white/5';
 
 /** Spec §10: search text (payee, memo, category) and the filter sheet, with the active filters as removable chips. */
 function RegisterToolbar({
@@ -153,7 +154,7 @@ function RegisterToolbar({
   const chips = filterChips(filters, lookups);
   const search = (q: string) => onFiltersChange({ ...filters, q: q.trim() === '' ? undefined : q.trim() });
   return (
-    <div className="flex flex-col gap-2 border-b border-gray-200 bg-white px-4 py-2">
+    <div className="flex flex-col gap-2 border-b border-line bg-surface px-4 py-2">
       <div className="flex gap-2">
         <form
           role="search"
@@ -172,7 +173,7 @@ function RegisterToolbar({
               setText(event.target.value);
               if (event.target.value === '' && filters.q) search('');
             }}
-            className="min-h-10 w-full rounded-xl border border-gray-300 bg-gray-50 px-3 text-base outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
+            className="min-h-10 w-full rounded-xl border border-line bg-raised px-3 text-base outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
           />
         </form>
         <button type="button" className={TOOLBAR_BUTTON} onClick={() => setOpen(true)}>
@@ -190,7 +191,7 @@ function RegisterToolbar({
                 type="button"
                 aria-label={`Remove the filter ${chip.label}`}
                 onClick={() => onFiltersChange({ ...filters, [chip.key]: undefined })}
-                className="flex min-h-8 items-center gap-1 rounded-full bg-brand-light px-3 text-sm font-medium text-brand-dark"
+                className="flex min-h-8 items-center gap-1 rounded-full bg-brand-light px-3 text-sm font-medium text-indigo-200"
               >
                 {chip.label}
                 <CloseIcon className="size-3.5" />
@@ -242,7 +243,7 @@ function BulkBar({
     <div
       role="toolbar"
       aria-label="Selected transactions"
-      className="fixed inset-x-0 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-20 mx-auto flex max-w-[480px] items-center gap-2 border-t border-gray-200 bg-white px-4 py-2 shadow-lg"
+      className="fixed inset-x-0 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-20 mx-auto flex max-w-[480px] items-center gap-2 border-t border-line bg-surface px-4 py-2 shadow-lg"
     >
       <span className="flex-1 font-medium">{n} selected</span>
       {n < loaded && (
@@ -283,8 +284,8 @@ interface RegisterListProps {
 function RegisterList({ transactions, accounts, showAccount, onOpen, selection }: RegisterListProps) {
   return groupByDate(transactions).map((day) => (
     <section key={day.date} aria-label={formatDate(day.date)}>
-      <h3 className="bg-gray-100 px-4 py-1 text-xs font-semibold text-gray-500">{formatDate(day.date)}</h3>
-      <ul className="divide-y divide-gray-100 bg-white">
+      <h3 className="bg-raised px-4 py-1 text-xs font-semibold text-muted">{formatDate(day.date)}</h3>
+      <ul className="divide-y divide-line bg-surface">
         {day.items.map((transaction) => {
           const owner = accounts.get(transaction.accountId);
           const row = (
@@ -304,7 +305,7 @@ function RegisterList({ transactions, accounts, showAccount, onOpen, selection }
                   <span className="min-w-0 flex-1">{row}</span>
                 </label>
               ) : (
-                <button type="button" className="block w-full text-left hover:bg-gray-50" onClick={() => onOpen(transaction)}>
+                <button type="button" className="block w-full text-left hover:bg-white/5" onClick={() => onOpen(transaction)}>
                   {row}
                 </button>
               )}
@@ -367,13 +368,14 @@ export function RegisterScreen({
   else if (register.isError) list = <LoadError error={register.error} onRetry={() => void register.refetch()} />;
   else if (transactions.length === 0) {
     list = (
-      <p className="px-4 py-12 text-center text-gray-500">
+      <p className="px-4 py-12 text-center text-muted">
         {filtered ? 'No transactions match.' : 'No transactions yet.'}
       </p>
     );
   }
   return (
     <div>
+      {account ? <ScreenHeader left={<BackLink to="/accounts" label="Accounts" />} /> : <ScreenHeader title="Spending" />}
       {account && <RegisterHeader account={account} balance={register.data?.pages[0]?.balances?.balance ?? account.balance} />}
       <RegisterToolbar filters={filters} onFiltersChange={onFiltersChange} onSelect={() => setSelected(new Set())} />
       {list ?? (

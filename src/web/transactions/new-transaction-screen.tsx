@@ -1,4 +1,5 @@
 import { useNavigate, useSearch } from '@tanstack/react-router';
+import { BackLink, ScreenHeader } from '../shell/screen-header';
 import type { Prefill } from './form-model';
 import { TransactionForm } from './transaction-form';
 
@@ -10,16 +11,19 @@ export function prefillFromSearch(search: Record<string, unknown>): Prefill {
   return typeof accountId === 'string' && UUID.test(accountId) ? { accountId } : {};
 }
 
-/** ＋ in the bottom navigation: a new transaction; once saved, its account's register. */
+/** A new transaction on a page of its own (`/transactions/new`); once saved, its account's register. */
 export function NewTransactionScreen() {
   const prefill = prefillFromSearch(useSearch({ strict: false }));
   const navigate = useNavigate();
   return (
-    <div className="px-4 py-4">
-      <TransactionForm
-        prefill={prefill}
-        onDone={(accountId) => void navigate({ to: '/accounts/$accountId', params: { accountId } })}
-      />
-    </div>
+    <>
+      <ScreenHeader title="New transaction" left={<BackLink to="/home" label="Home" />} />
+      <div className="px-4 py-2">
+        <TransactionForm
+          prefill={prefill}
+          onDone={(accountId) => void navigate({ to: '/accounts/$accountId', params: { accountId } })}
+        />
+      </div>
+    </>
   );
 }

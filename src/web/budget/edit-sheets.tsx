@@ -86,7 +86,7 @@ export function EditGroupForm({ group, onDone }: { group: BudgetGroupDto; onDone
           onDone={onDone}
         />
       ) : (
-        <p className="text-sm text-gray-600">The app keeps this group's name and categories in step with your accounts.</p>
+        <p className="text-sm text-muted">The app keeps this group's name and categories in step with your accounts.</p>
       )}
       <HideToggle
         hidden={group.hidden}
@@ -95,7 +95,7 @@ export function EditGroupForm({ group, onDone }: { group: BudgetGroupDto; onDone
         onDone={onDone}
       />
       {own && (
-        <div className="flex flex-col gap-2 border-t border-gray-200 pt-4">
+        <div className="flex flex-col gap-2 border-t border-line pt-4">
           <FormError message={removeErrors.form} />
           <Button
             variant="danger"
@@ -108,7 +108,7 @@ export function EditGroupForm({ group, onDone }: { group: BudgetGroupDto; onDone
             Delete group
           </Button>
           {group.categories.length > 0 && (
-            <p className="text-sm text-gray-500">Move or delete its categories first.</p>
+            <p className="text-sm text-muted">Move or delete its categories first.</p>
           )}
         </div>
       )}
@@ -177,7 +177,7 @@ function DeleteCategory({ view, category, onDone }: Omit<EditCategoryFormProps, 
     if (destination !== '') remove.mutate(destination, { onSuccess: onDone });
   };
   return (
-    <div className="flex flex-col gap-3 border-t border-gray-200 pt-4">
+    <div className="flex flex-col gap-3 border-t border-line pt-4">
       <CategoryPicker
         label="Move its money and transactions to"
         groups={view.groups}
@@ -210,7 +210,7 @@ export function EditCategoryForm(props: EditCategoryFormProps) {
       {own ? (
         <RenameMoveForm {...props} />
       ) : (
-        <p className="text-sm text-gray-600">This category follows its account: rename or delete the account instead.</p>
+        <p className="text-sm text-muted">This category follows its account: rename or delete the account instead.</p>
       )}
       <HideToggle
         hidden={category.hidden}
