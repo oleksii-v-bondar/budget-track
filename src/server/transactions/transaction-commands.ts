@@ -311,8 +311,8 @@ export async function editDraft(
  * PATCH /api/transactions/:id (spec §10 "Creating and editing", "Transfers"): the edited transaction is planned again
  * with every rule of a new one, then its rows are brought in line. Spec §9: a new date replaces an NBP rate with that
  * day's (from `context.defaults`); a manual rate stays until a new one is sent. `deletedIds` lists the transactions
- * the edit soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts). A new user payee for an
- * imported transaction becomes the payee of its bank text (`payee_alias`).
+ * the edit soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts). A new payee for an
+ * imported transaction (a user or transfer payee) becomes the payee of its bank text (`payee_alias`).
  */
 export async function updateTransaction(
   rec: ChangeRecorder,
@@ -347,8 +347,8 @@ export async function updateTransaction(
   if (draft.payeeId !== agg.main.payeeId || draft.categoryId !== agg.main.categoryId) {
     await rememberCategory(rec, plan);
   }
-  // A new payee for an import teaches the next imports with this bank text.
-  if (agg.main.importedPayee && plan.payee?.kind === 'user' && draft.payeeId !== agg.main.payeeId) {
+  // A new payee for an import teaches the next imports with this bank text; a transfer payee makes them transfers.
+  if (agg.main.importedPayee && plan.payee && plan.payee.kind !== 'system' && draft.payeeId !== agg.main.payeeId) {
     await learnPayeeAlias(rec, agg.main.importedPayee, plan.payee.id);
   }
   return { payeeName: plan.payee?.name ?? null, deletedIds };

@@ -445,6 +445,24 @@ export const bankAccount = pgTable('bank_account', {
   lastSyncedAt: instant('last_synced_at'),
 });
 
+/**
+ * Every bank transaction the sync imported or matched, so it is never imported again, whatever later happens to its
+ * row (a transfer pairing deletes it, the owner deletes or moves it). `import_id` is `<account id>:<bank reference>`:
+ * Enable Banking's account uids change with every session, the account doesn't. Recorded for undo.
+ */
+export const bankImport = pgTable(
+  'bank_import',
+  {
+    importId: text('import_id').primaryKey(),
+    /** The row that holds it: the import, the row it matched, or the transfer side that replaced it in a pairing. */
+    transactionId: uuid('transaction_id').references(() => transaction.id),
+    /** The category the import got from its payee: a row still in it wasn't categorized by the owner. */
+    autoCategoryId: uuid('auto_category_id'),
+    createdAt: instant('created_at').defaultNow().notNull(),
+  },
+  (t) => [index('bank_import_transaction_id').on(t.transactionId)],
+);
+
 // ---------------------------------------------------------------- ledger view (spec §4.6)
 
 /**

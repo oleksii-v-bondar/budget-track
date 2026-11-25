@@ -1,11 +1,11 @@
 import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { asc, eq, isNotNull } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AccountListResponse } from '../../shared/api/accounts';
 import type { AddToBudgetResponse, BankStatus } from '../../shared/api/bank';
-import { bankAccount, bankConnection, payee, payeeAlias, transaction } from '../db/schema';
+import { account, bankAccount, bankConnection, payee, payeeAlias, transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
@@ -435,7 +435,7 @@ describe('POST /api/bank/sync', () => {
     const before = await snapshot(t.db);
 
     const res = await sync(app);
-    expect(await res.json()).toEqual({ imported: 5, reconnectNeeded: [], failed: [] });
+    expect(await res.json()).toEqual({ imported: 5, matched: 0, paired: 0, reconnectNeeded: [], failed: [] });
     // The first sync goes back 90 days, but not past the starting balance; every page is read; pko-2 isn't linked.
     const dates = { date_from: '2026-10-01', date_to: '2026-11-20' };
     expect(listed().map((r) => [r.path, r.query])).toEqual([
@@ -470,7 +470,7 @@ describe('POST /api/bank/sync', () => {
     // The next sync overlaps the last by 5 days and imports nothing new, so it adds no undo entry.
     requests = [];
     app.clock.advance(30 * MINUTE);
-    expect(await (await sync(app)).json()).toEqual({ imported: 0, reconnectNeeded: [], failed: [] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, matched: 0, paired: 0, reconnectNeeded: [], failed: [] });
     expect(listed()[0]!.query).toEqual({ date_from: '2026-11-15', date_to: '2026-11-20' });
     expect(await snapshot(t.db)).toEqual(after);
 
@@ -484,7 +484,7 @@ describe('POST /api/bank/sync', () => {
     expect(await connect(app, 'PKO BP', 'pko-code')).toBe('/settings');
     bankTransactions['pko-1b'] = bankTransactions['pko-1']!;
     requests = [];
-    expect(await (await sync(app)).json()).toEqual({ imported: 0, reconnectNeeded: [], failed: [] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, matched: 0, paired: 0, reconnectNeeded: [], failed: [] });
     expect(listed()[0]).toMatchObject({
       path: '/accounts/pko-1b/transactions',
       query: { date_from: '2026-11-15', date_to: '2026-11-20' },
@@ -496,7 +496,7 @@ describe('POST /api/bank/sync', () => {
     const { app, euro } = await linkedBanks();
     expired.add('rev-session');
     failing.add('pko-session');
-    expect(await (await sync(app)).json()).toEqual({ imported: 0, reconnectNeeded: ['Revolut'], failed: ['PKO BP'] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, matched: 0, paired: 0, reconnectNeeded: ['Revolut'], failed: ['PKO BP'] });
     expect((await status(app)).connections.map((c) => [c.bank, c.status])).toEqual([
       ['PKO BP', 'active'],
       ['Revolut', 'reconnect_needed'],
@@ -504,7 +504,7 @@ describe('POST /api/bank/sync', () => {
 
     failing.clear();
     requests = [];
-    expect(await (await sync(app)).json()).toEqual({ imported: 4, reconnectNeeded: ['Revolut'], failed: [] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 4, matched: 0, paired: 0, reconnectNeeded: ['Revolut'], failed: [] });
     expect(listed().every((r) => r.path.startsWith('/accounts/pko-1/'))).toBe(true);
 
     expired.clear();
@@ -521,7 +521,7 @@ describe('POST /api/bank/sync', () => {
       .where(eq(bankConnection.aspspName, 'PKO BP'));
     expect((await connectionOf(app, 'PKO BP')).status).toBe('reconnect_needed');
     requests = [];
-    expect(await (await sync(app)).json()).toEqual({ imported: 1, reconnectNeeded: ['PKO BP'], failed: [] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 1, matched: 0, paired: 0, reconnectNeeded: ['PKO BP'], failed: [] });
     expect(listed().map((r) => r.path)).toEqual(['/accounts/rev-eur/transactions']);
   });
 });
@@ -602,6 +602,216 @@ describe('payee memory', () => {
     await t.db.insert(payeeAlias).values({ key: 'netia sa', payeeId: unused.id });
     expect((await app.client.send('DELETE', `/api/payees/${unused.id}`)).status).toBe(200);
     expect((await aliases()).map((a) => a.key)).toEqual(['p4', 'play', 'play mobile']);
+  });
+});
+
+describe('matching imports and pairing transfers', () => {
+  async function linkedAccounts() {
+    const app = await bankApp();
+    const pko = await createAccount(app.client, { name: 'PKO', startingDate: '2026-10-01' });
+    const revolut = await createAccount(app.client, { name: 'Revolut', startingDate: '2026-10-01' });
+    const euro = await createAccount(app.client, { name: 'Revolut EUR', currency: 'EUR', startingDate: '2026-10-01' });
+    const food = (await createGroup(app.client, 'Food')).id;
+    const groceries = await createCategory(app.client, food, 'Groceries');
+    const eatingOut = await createCategory(app.client, food, 'Eating out');
+    sessions['rev-code'] = {
+      ...REVOLUT_SESSION,
+      accounts: [
+        { uid: 'rev-pln', account_id: { iban: 'LT603250000000000099' }, name: 'Jan Kowalski', currency: 'PLN' },
+        REVOLUT_SESSION.accounts[0],
+      ],
+    };
+    await connect(app, 'PKO BP', 'pko-code');
+    await connect(app, 'Revolut', 'rev-code');
+    await link(app, 'pko-1', pko.id);
+    await link(app, 'rev-pln', revolut.id);
+    await link(app, 'rev-eur', euro.id);
+    bankTransactions = { 'pko-1': [], 'rev-pln': [], 'rev-eur': [] };
+    return { app, pko, revolut, euro, groceries, eatingOut };
+  }
+  const syncs = async (app: TestApp) => {
+    app.clock.advance(MINUTE);
+    return (await sync(app)).json();
+  };
+  const debit = (ref: string, amount: string, date: string, to: string) =>
+    booked({ entry_reference: ref, ...pln(amount), booking_date: date, creditor: { name: to } });
+  const credit = (ref: string, amount: string, date: string, from: string) =>
+    booked({ entry_reference: ref, ...pln(amount), credit_debit_indicator: 'CRDT', booking_date: date, debtor: { name: from } });
+  const importOf = async (importId: string) =>
+    (await t.db.select().from(transaction).where(eq(transaction.importId, importId)))[0]!;
+  const patch = ({ client }: TestApp, id: string, body: Record<string, unknown>) =>
+    client.send('PATCH', `/api/transactions/${id}`, body);
+
+  /** Every live transaction but the starting balances, as the registers show them. */
+  function live() {
+    return t.db
+      .select({
+        account: account.name,
+        date: transaction.date,
+        payee: payee.name,
+        amount: transaction.amount,
+        amountBase: transaction.amountBase,
+        categoryId: transaction.categoryId,
+        cleared: transaction.cleared,
+        approved: transaction.approved,
+        importId: transaction.importId,
+      })
+      .from(transaction)
+      .innerJoin(account, eq(account.id, transaction.accountId))
+      .leftJoin(payee, eq(payee.id, transaction.payeeId))
+      .where(and(isNull(transaction.deletedAt), eq(transaction.isStartingBalance, false)))
+      .orderBy(asc(transaction.date), asc(account.name), asc(transaction.amount));
+  }
+  const transfers = async () => (await live()).filter((row) => row.payee?.startsWith('Transfer : '));
+
+  it('matches an import to an entry made by hand within 4 days, the closest first, keeping its payee, category and approval', async () => {
+    const { app, pko, groceries } = await linkedAccounts();
+    for (const [date, payeeName] of [['2026-11-13', 'Too early'], ['2026-11-14', 'Lidl'], ['2026-11-17', 'Kiosk']] as const) {
+      await createTransaction(app.client, { accountId: pko.id, date, payeeName, categoryId: groceries.id, amount: -2500 });
+    }
+    bankTransactions['pko-1'] = ['E1', 'E2', 'E3'].map((ref) => debit(ref, '25.00', '2026-11-18', 'Żabka'));
+    const before = await snapshot(t.db);
+
+    expect(await syncs(app)).toEqual({ imported: 1, matched: 2, paired: 0, reconnectNeeded: [], failed: [] });
+    const entry = { account: 'PKO', amount: -2500, amountBase: -2500, categoryId: groceries.id, approved: true };
+    expect(await live()).toEqual([
+      { ...entry, date: '2026-11-13', payee: 'Too early', cleared: 'uncleared', importId: null },
+      { ...entry, date: '2026-11-14', payee: 'Lidl', cleared: 'cleared', importId: 'pko-1:E2' },
+      { ...entry, date: '2026-11-17', payee: 'Kiosk', cleared: 'cleared', importId: 'pko-1:E1' },
+      { ...entry, date: '2026-11-18', payee: 'Żabka', categoryId: null, cleared: 'cleared', approved: false, importId: 'pko-1:E3' },
+    ]);
+
+    const after = await snapshot(t.db);
+    expect((await app.client.post('/api/undo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(before);
+    expect((await app.client.post('/api/redo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(after);
+    expect(await syncs(app)).toMatchObject({ imported: 0, matched: 0, paired: 0 });
+    expect(await snapshot(t.db)).toEqual(after);
+  });
+
+  it('pairs a top-up from PKO to Revolut into one transfer, whichever side comes first, also a sync later', async () => {
+    const { app } = await linkedAccounts();
+    bankTransactions['pko-1'] = [debit('P1', '100.00', '2026-11-17', 'Revolut Ltd')];
+    bankTransactions['rev-pln'] = [credit('R1', '100.00', '2026-11-18', 'Jan Kowalski')];
+    const before = await snapshot(t.db);
+
+    expect(await syncs(app)).toEqual({ imported: 2, matched: 0, paired: 1, reconnectNeeded: [], failed: [] });
+    const side = { categoryId: null, cleared: 'cleared', approved: false };
+    expect(await live()).toEqual([
+      { ...side, account: 'PKO', date: '2026-11-18', payee: 'Transfer : Revolut', amount: -10_000, amountBase: -10_000, importId: 'pko-1:P1' },
+      { ...side, account: 'Revolut', date: '2026-11-18', payee: 'Transfer : PKO', amount: 10_000, amountBase: 10_000, importId: 'rev-pln:R1' },
+    ]);
+
+    // Revolut's side first, PKO's a sync later.
+    bankTransactions['rev-pln']!.push(credit('R2', '50.00', '2026-11-18', 'Jan Kowalski'));
+    expect(await syncs(app)).toMatchObject({ imported: 1, matched: 0, paired: 0 });
+    const single = await snapshot(t.db);
+    bankTransactions['pko-1']!.push(debit('P2', '50.00', '2026-11-19', 'Revolut Ltd'));
+    expect(await syncs(app)).toMatchObject({ imported: 1, matched: 0, paired: 1 });
+    expect((await live()).slice(2)).toEqual([
+      { ...side, account: 'PKO', date: '2026-11-19', payee: 'Transfer : Revolut', amount: -5000, amountBase: -5000, importId: 'pko-1:P2' },
+      { ...side, account: 'Revolut', date: '2026-11-19', payee: 'Transfer : PKO', amount: 5000, amountBase: 5000, importId: 'rev-pln:R2' },
+    ]);
+
+    // The rows a pairing deleted aren't imported again.
+    const paired = await snapshot(t.db);
+    expect(await syncs(app)).toMatchObject({ imported: 0, matched: 0, paired: 0 });
+    expect(await snapshot(t.db)).toEqual(paired);
+
+    expect((await app.client.post('/api/undo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(single);
+    expect((await app.client.post('/api/undo')).status).toBe(200);
+    expect((await app.client.post('/api/undo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(before);
+  });
+
+  it("pairs an exchange between Revolut's PLN and EUR pockets when their PLN amounts are within 2%", async () => {
+    const { app } = await linkedAccounts();
+    bankTransactions['rev-pln'] = [debit('X1', '430.00', '2026-11-18', 'Exchange'), debit('X2', '500.00', '2026-11-18', 'Exchange')];
+    // 99.00 EUR at NBP's 4.3 is 425.70 zł: 1% off 430.00 zł, 15% off 500.00 zł.
+    bankTransactions['rev-eur'] = [
+      booked({
+        entry_reference: 'X1',
+        transaction_amount: { currency: 'EUR', amount: '99.00' },
+        credit_debit_indicator: 'CRDT',
+        booking_date: '2026-11-18',
+        debtor: { name: 'Exchange' },
+      }),
+    ];
+
+    expect(await syncs(app)).toEqual({ imported: 3, matched: 0, paired: 1, reconnectNeeded: [], failed: [] });
+    const row = { date: '2026-11-18', categoryId: null, cleared: 'cleared', approved: false };
+    // Both native amounts stay; the PLN side gives the PLN amounts.
+    expect(await live()).toEqual([
+      { ...row, account: 'Revolut', payee: 'Exchange', amount: -50_000, amountBase: -50_000, importId: 'rev-pln:X2' },
+      { ...row, account: 'Revolut', payee: 'Transfer : Revolut EUR', amount: -43_000, amountBase: -43_000, importId: 'rev-pln:X1' },
+      { ...row, account: 'Revolut EUR', payee: 'Transfer : Revolut', amount: 9900, amountBase: 43_000, importId: 'rev-eur:X1' },
+    ]);
+  });
+
+  it('leaves the rows alone when the other side could be either of two', async () => {
+    const { app } = await linkedAccounts();
+    bankTransactions['pko-1'] = [debit('P1', '100.00', '2026-11-17', 'Revolut Ltd'), debit('P2', '100.00', '2026-11-18', 'Revolut Ltd')];
+    bankTransactions['rev-pln'] = [credit('R1', '100.00', '2026-11-18', 'Jan Kowalski')];
+    expect(await syncs(app)).toMatchObject({ imported: 3, matched: 0, paired: 0 });
+    expect(await transfers()).toEqual([]);
+  });
+
+  it("doesn't pair with a row the owner approved or categorized, only with one whose category came from its payee", async () => {
+    const { app, pko, groceries, eatingOut } = await linkedAccounts();
+    // Revolut Ltd's last category is Groceries.
+    await createTransaction(app.client, { accountId: pko.id, date: '2026-11-01', payeeName: 'Revolut Ltd', categoryId: groceries.id, amount: -100 });
+    bankTransactions['pko-1'] = ['100.00', '200.00', '300.00'].map((amount, i) => debit(`P${i + 1}`, amount, '2026-11-17', 'Revolut Ltd'));
+    expect(await syncs(app)).toMatchObject({ imported: 3, matched: 0, paired: 0 });
+    expect((await importOf('pko-1:P3')).categoryId).toBe(groceries.id);
+    expect((await patch(app, (await importOf('pko-1:P1')).id, { approved: true })).status).toBe(200);
+    expect((await patch(app, (await importOf('pko-1:P2')).id, { categoryId: eatingOut.id })).status).toBe(200);
+
+    bankTransactions['rev-pln'] = ['100.00', '200.00', '300.00'].map((amount, i) => credit(`R${i + 1}`, amount, '2026-11-18', 'Jan Kowalski'));
+    expect(await syncs(app)).toMatchObject({ imported: 3, matched: 0, paired: 1 });
+    expect((await transfers()).map((row) => [row.account, row.amount, row.categoryId])).toEqual([
+      ['PKO', -30_000, null],
+      ['Revolut', 30_000, null],
+    ]);
+  });
+
+  it("learns a transfer payee for a bank text: the next import is a transfer, and the bank's other side matches it", async () => {
+    const { app, revolut } = await linkedAccounts();
+    bankTransactions['pko-1'] = [debit('P1', '100.00', '2026-11-10', 'Jan Kowalski')];
+    expect(await syncs(app)).toMatchObject({ imported: 1 });
+    const [toRevolut] = await t.db.select().from(payee).where(eq(payee.transferAccountId, revolut.id));
+    expect((await patch(app, (await importOf('pko-1:P1')).id, { payeeId: toRevolut!.id, approved: true })).status).toBe(200);
+    expect(await t.db.select({ key: payeeAlias.key, payeeId: payeeAlias.payeeId }).from(payeeAlias)).toEqual([
+      { key: 'jan kowalski', payeeId: toRevolut!.id },
+    ]);
+
+    bankTransactions['pko-1']!.push(debit('P2', '200.00', '2026-11-18', 'Jan Kowalski'));
+    bankTransactions['rev-pln'] = [
+      credit('R1', '100.00', '2026-11-11', 'Jan Kowalski'),
+      credit('R2', '200.00', '2026-11-19', 'Jan Kowalski'),
+      // In Revolut, the alias would be a transfer to itself: the bank's text names the payee instead.
+      credit('R3', '5.00', '2026-11-19', 'Jan Kowalski'),
+    ];
+    expect(await syncs(app)).toMatchObject({ imported: 2, matched: 2, paired: 0 });
+    const row = { categoryId: null, cleared: 'cleared' };
+    expect(await live()).toEqual([
+      { ...row, account: 'PKO', date: '2026-11-10', payee: 'Transfer : Revolut', amount: -10_000, amountBase: -10_000, approved: true, importId: 'pko-1:P1' },
+      { ...row, account: 'Revolut', date: '2026-11-10', payee: 'Transfer : PKO', amount: 10_000, amountBase: 10_000, approved: true, importId: 'rev-pln:R1' },
+      { ...row, account: 'PKO', date: '2026-11-18', payee: 'Transfer : Revolut', amount: -20_000, amountBase: -20_000, approved: false, importId: 'pko-1:P2' },
+      { ...row, account: 'Revolut', date: '2026-11-18', payee: 'Transfer : PKO', amount: 20_000, amountBase: 20_000, approved: false, importId: 'rev-pln:R2' },
+      { ...row, account: 'Revolut', date: '2026-11-19', payee: 'Jan Kowalski', amount: 500, amountBase: 500, approved: false, importId: 'rev-pln:R3' },
+    ]);
+
+    // The other side came first: the learned transfer's new side replaces it.
+    bankTransactions['rev-pln']!.push(credit('R4', '300.00', '2026-11-19', 'Top-up'));
+    expect(await syncs(app)).toMatchObject({ imported: 1, matched: 0, paired: 0 });
+    bankTransactions['pko-1']!.push(debit('P3', '300.00', '2026-11-20', 'Jan Kowalski'));
+    expect(await syncs(app)).toMatchObject({ imported: 1, matched: 0, paired: 1 });
+    expect((await live()).slice(5)).toEqual([
+      { ...row, account: 'PKO', date: '2026-11-20', payee: 'Transfer : Revolut', amount: -30_000, amountBase: -30_000, approved: false, importId: 'pko-1:P3' },
+      { ...row, account: 'Revolut', date: '2026-11-20', payee: 'Transfer : PKO', amount: 30_000, amountBase: 30_000, approved: false, importId: 'rev-pln:R4' },
+    ]);
   });
 });
 

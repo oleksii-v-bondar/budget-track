@@ -5,6 +5,7 @@ import {
   account,
   appUser,
   assignment,
+  bankImport,
   category,
   categoryGroup,
   loanInterestOverride,
@@ -34,6 +35,7 @@ export const RECORDED_TABLES = {
   transaction,
   subtransaction,
   loan_interest_override: loanInterestOverride,
+  bank_import: bankImport,
 } as const;
 
 export type RecordedTableName = keyof typeof RECORDED_TABLES;

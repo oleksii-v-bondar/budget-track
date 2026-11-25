@@ -1,9 +1,10 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { asc, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../test/db';
 import { runMigrations } from './migrate';
-import { undoEntry } from './schema';
+import { bankImport, undoEntry } from './schema';
 
 // Scratch space inside the (git-ignored) node_modules cache.
 const SCRATCH = join('node_modules', '.cache', 'budget-track-tests');
@@ -36,6 +37,16 @@ async function withExtraMigration(): Promise<string> {
   return folder;
 }
 
+/** drizzle/ as it was when `tag` was the latest migration. */
+async function migrationsUpTo(tag: string): Promise<string> {
+  await cp('drizzle', folder, { recursive: true });
+  const journalPath = join(folder, 'meta', '_journal.json');
+  const journal = JSON.parse(await readFile(journalPath, 'utf8')) as Journal;
+  journal.entries = journal.entries.slice(0, journal.entries.findIndex((e) => e.tag === tag) + 1);
+  await writeFile(journalPath, JSON.stringify(journal));
+  return folder;
+}
+
 const labels = async () => (await t.db.select({ label: undoEntry.label }).from(undoEntry)).map((e) => e.label);
 
 describe('runMigrations', () => {
@@ -48,5 +59,35 @@ describe('runMigrations', () => {
 
     await runMigrations(t.db, await withExtraMigration());
     expect(await labels()).toEqual([]);
+  });
+
+  it('records every bank import made before bank_import existed, by account and bank reference', async () => {
+    await runMigrations(t.db, await migrationsUpTo('0011_payee_memory'));
+    const insert = async (query: ReturnType<typeof sql>) => (await t.db.execute<{ id: string }>(query)).map((r) => r.id);
+    const [pko] = await insert(sql`insert into account (name, type) values ('PKO', 'checking') returning id`);
+    const [group] = await insert(sql`insert into category_group (name) values ('Food') returning id`);
+    const [food] = await insert(sql`insert into category (group_id, name) values (${group}, 'Groceries') returning id`);
+    // An import from an earlier session's account uid, deleted, and an entry made by hand.
+    const rows = await insert(sql`
+      insert into "transaction" (account_id, date, amount, amount_base, import_id, category_id, deleted_at)
+      values (${pko}, '2026-11-18', -4599, -4599, 'pko-1:E1', ${food}, null),
+             (${pko}, '2026-11-19', -100, -100, 'pko-old:E2', null, now()),
+             (${pko}, '2026-11-19', -200, -200, null, null, null)
+      returning id`);
+
+    await runMigrations(t.db, 'drizzle');
+    expect(
+      await t.db
+        .select({
+          importId: bankImport.importId,
+          transactionId: bankImport.transactionId,
+          autoCategoryId: bankImport.autoCategoryId,
+        })
+        .from(bankImport)
+        .orderBy(asc(bankImport.importId)),
+    ).toEqual([
+      { importId: `${pko}:E1`, transactionId: rows[0], autoCategoryId: food },
+      { importId: `${pko}:E2`, transactionId: rows[1], autoCategoryId: null },
+    ]);
   });
 });

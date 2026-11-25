@@ -105,7 +105,7 @@ describe('bank connections', () => {
       'GET /api/bank/status': { body: connected },
       'GET /api/accounts': { body: { accounts: [pko, savings, euro] } },
       'PUT /api/bank/accounts/:uid/link': { body: connected },
-      'POST /api/bank/sync': { body: { imported: 2, reconnectNeeded: ['Revolut'], failed: [] } },
+      'POST /api/bank/sync': { body: { imported: 12, matched: 3, paired: 1, reconnectNeeded: ['Revolut'], failed: [] } },
       'POST /api/undo': { body: { undone: { label: 'Bank sync' }, undo: null, redo: { label: 'Bank sync' } } },
       'DELETE /api/bank/connections/:id': { body: { configured: true, connections: [pkoBank] } },
     });
@@ -136,7 +136,7 @@ describe('bank connections', () => {
 
     await user.click(screen.getByRole('button', { name: 'Sync now' }));
     const toast = await screen.findByRole('status');
-    await waitFor(() => expect(toast).toHaveTextContent('Imported 2 transactions. Reconnect Revolut to sync it.'));
+    await waitFor(() => expect(toast).toHaveTextContent('12 new, 3 matched, 1 transfer. Reconnect Revolut to sync it.'));
     await user.click(within(toast).getByRole('button', { name: 'Undo' }));
     await user.click(within(revolutCard).getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => expect(screen.queryByRole('article', { name: 'Revolut' })).not.toBeInTheDocument());

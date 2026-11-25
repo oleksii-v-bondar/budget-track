@@ -152,18 +152,35 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   the key or a JWT. Tests run against a `node:http` stub on port 0 that verifies the JWT with the public key of a
   `generateKeyPairSync` pair.
 - One `bank_connection` per bank (unique ASPSP name + country); a reconnect replaces it and carries account links over
-  by IBAN + currency. Account uids change with every session, so the dedupe compares the part of `import_id` after
-  `<uid>:` per account. A session past `valid_until`, or a 401/403/422 `EXPIRED_SESSION` / `REVOKED_SESSION` /
+  by IBAN + currency. A session past `valid_until`, or a 401/403/422 `EXPIRED_SESSION` / `REVOKED_SESSION` /
   `CLOSED_SESSION`, sets `reconnect_needed`; the sync skips that bank and reports it.
 - A sync quotes NBP rates first, then imports through `createTransaction` in one `runCommand` ("Bank sync") and marks
   the rows `approved = false` with `import_id = <uid>:<entry_reference ?? transaction_id ?? sha256>`; `last_synced_at`
   is written after the command (not recorded for undo). `bank_connection` / `bank_account` aren't recorded tables.
+- De-duplication: `bank_import` (a recorded table) holds every bank transaction ever imported or matched, keyed
+  `<account id>:<ref>` (the import id after `<uid>:`, as account uids change with every session), with the row that
+  holds it now. The sync skips what it holds, so matching and pairing may delete or move rows freely.
+  `transaction.import_id` stays for display and debugging (unique per account, deleted rows included).
+- Per bank transaction, in this order (`bank-sync.ts`; the sync reports `{ imported, matched, paired }`):
+  1. `matchExisting` (YNAB-like): a live row of the account with the same amount, ±4 days, that no `bank_import` holds
+     (an entry made by hand, a transfer's other side, an entered schedule), the closest date first, takes the import
+     and is cleared; payee, category, date and approval stay.
+  2. `importNew`: a new unapproved, cleared row. A `payee_alias` to a transfer payee makes it a transfer (its side in
+     the other account unapproved too) when that is another open account in the same currency on the same side of
+     the budget; otherwise the alias is ignored. Its `bank_import` stores the category the payee gave it
+     (`auto_category_id`).
+  3. `pairTransfer`: a new row pairs with exactly one imported row in another account (a learned transfer's: its
+     account) that is plain, unapproved, uncategorized or still in its `auto_category_id`, of the opposite sign: same
+     currency, the opposite amount ±3 days; else PLN amounts within 2%, ±1 day. A plain row becomes a transfer through
+     the planner and `syncPlan` (`transferAmount` = the other native amount; no category unless budget↔tracking, which
+     takes the budget side's or doesn't pair); the transfer's side replaces the candidate: the candidate is
+     soft-deleted and its `import_id` and `bank_import` move to that side, unapproved.
 - Payee memory (YNAB-like): `bank/payee-match.ts` turns a bank text into a comparison key (`payeeKey`: no diacritics,
   card masks, numbers, boilerplate, legal forms or trailing cities: "ZAKUP PRZY UŻYCIU KARTY … BIEDRONKA 1234" →
   "biedronka") and a name for a new payee (`payeeDisplayName`). An import's payee is a learned `payee_alias` (key →
   payee), else a live user payee whose name has the key, else a similar one (`bestMatch`), else a new one; it gets that
   payee's `last_category_id`. Imports keep the bank text in `transaction.imported_payee`; giving such a transaction
-  another user payee (edit, bulk, review) upserts the alias in the same command, so undo removes it. Merging a payee
+  another user or transfer payee (edit, bulk, review) upserts the alias in the same command, so undo removes it. Merging a payee
   re-points its aliases (and adds its name's key), renaming adds the old name's key, deleting drops its aliases.
 - The session cookie is SameSite=Lax so the bank's redirect back to `/api/bank/callback` carries it; the callback
   checks the state cookie `/api/bank/connect` set. The web app reaches `/connect` with plain links (top-level

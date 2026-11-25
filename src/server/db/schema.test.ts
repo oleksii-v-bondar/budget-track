@@ -33,6 +33,7 @@ describe('migrations', () => {
       'assignment',
       'bank_account',
       'bank_connection',
+      'bank_import',
       'category',
       'category_group',
       'fx_rate',

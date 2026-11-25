@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lt, ne, notExists, or, sql } from 'drizzle-orm';
 import type { AccountType } from '../../shared/accounts';
 import { BASE_CURRENCY, createAccountRequestSchema } from '../../shared/api/accounts';
 import type { BankStatus, BankSyncResponse } from '../../shared/api/bank';
@@ -10,12 +10,15 @@ import { todayIn } from '../clock';
 import type { ChangeRecorder } from '../commands/recorder';
 import { runCommand } from '../commands/run-command';
 import type { EnableBankingConfig } from '../config';
-import { account, bankAccount, bankConnection, payee, payeeAlias, transaction } from '../db/schema';
+import { account, bankAccount, bankConnection, bankImport, payee, payeeAlias, transaction } from '../db/schema';
 import type { AppDeps } from '../http/app';
 import { AppError, DomainError } from '../http/errors';
 import { createPayee, findUserPayeeByName, isUserPayee } from '../payees/payee-commands';
-import type { DefaultRates } from '../transactions/plan';
+import { draftOf, loadAggregate } from '../transactions/aggregate';
+import { type DefaultRates, planTransaction } from '../transactions/plan';
+import { findAccount, onBudget } from '../transactions/rules';
 import { createTransaction } from '../transactions/transaction-commands';
+import { syncPlan } from '../transactions/write';
 import {
   type BankTransaction,
   type EnableBankingClient,
@@ -33,6 +36,13 @@ const CONSENT_MARGIN_MS = 10 * 60 * 1000;
 /** The first sync of an account looks back this far; later ones overlap the last by a few days for late bookings. */
 const FIRST_SYNC_DAYS = 90;
 const OVERLAP_DAYS = 5;
+/** An import matches a row already there in its account with the same amount, dated this many days apart at most. */
+const MATCH_DAYS = 4;
+/** The two sides of a transfer: same currency, the opposite amount this many days apart at most… */
+const PAIR_DAYS = 3;
+/** …between currencies, PLN amounts within this many percent, this many days apart at most. */
+const PAIR_FX_PERCENT = 2;
+const PAIR_FX_DAYS = 1;
 const AUTO_SYNC_EVERY_MS = 6 * 60 * 60 * 1000;
 const AUTO_SYNC_FIRST_MS = 60 * 1000;
 /** The balance "Add to budget" starts from: booked, else expected, else available, else whichever the bank sends. */
@@ -339,16 +349,23 @@ export async function addToBudget(deps: AppDeps, uid: string): Promise<{ name: s
 
 /**
  * The payee of an import (YNAB-like), by the `payeeKey` of its bank text: the payee a learned alias names, else a payee
- * whose name has the same key or a similar one (`bestMatch`), else a new payee named after the text.
+ * whose name has the same key or a similar one (`bestMatch`), else a new payee named after the text. An alias to a
+ * transfer payee makes the import a transfer, when the bank says all it needs (`learnedTransferFits`).
  */
-async function payeeOfImport(rec: ChangeRecorder, text: string): Promise<{ id: string; lastCategoryId: string | null }> {
+async function payeeOfImport(
+  rec: ChangeRecorder,
+  text: string,
+  accountId: string,
+): Promise<{ id: string; lastCategoryId: string | null }> {
   const key = payeeKey(text);
   const [alias] = await rec.tx
-    .select({ id: payee.id, lastCategoryId: payee.lastCategoryId })
+    .select({ id: payee.id, lastCategoryId: payee.lastCategoryId, transferAccountId: payee.transferAccountId })
     .from(payeeAlias)
     .innerJoin(payee, eq(payee.id, payeeAlias.payeeId))
-    .where(and(eq(payeeAlias.key, key), isUserPayee));
-  if (alias) return alias;
+    .where(and(eq(payeeAlias.key, key), isNull(payee.deletedAt), isNull(payee.systemKind)));
+  if (alias && (!alias.transferAccountId || (await learnedTransferFits(rec, accountId, alias.transferAccountId)))) {
+    return alias;
+  }
   // ponytail: reads every live payee per import; fine for one user's hundreds, cache per sync if it ever isn't.
   const payees = await rec.tx
     .select({
@@ -366,12 +383,176 @@ async function payeeOfImport(rec: ChangeRecorder, text: string): Promise<{ id: s
 }
 
 /**
+ * A learned transfer is created only when the bank says everything it needs: another open account in the same currency
+ * (no second amount) on the same side of the budget (no category).
+ */
+async function learnedTransferFits(rec: ChangeRecorder, accountId: string, otherId: string): Promise<boolean> {
+  if (otherId === accountId) return false;
+  const here = await findAccount(rec.tx, accountId);
+  const there = await findAccount(rec.tx, otherId);
+  return (
+    !!here && !!there && !there.closed && here.currency === there.currency && onBudget(here) === onBudget(there)
+  );
+}
+
+type TxnRow = typeof transaction.$inferSelect;
+
+/** Days between a row's date and `date`, in SQL. */
+const daysFrom = (date: IsoDate) => sql<number>`abs(${transaction.date} - ${date}::date)`;
+
+/**
+ * YNAB-like matching: the live transaction of the account with the import's amount, dated within 4 days, that no import
+ * holds yet (an entry made by hand, a transfer's other side, an entered schedule), the closest date first. It takes
+ * the bank's id and is cleared; its payee, category, date and approval stay. Returns its id, null when there is none.
+ */
+async function matchExisting(rec: ChangeRecorder, accountId: string, i: Import): Promise<string | null> {
+  const days = daysFrom(i.date);
+  const held = rec.tx.select({ id: bankImport.importId }).from(bankImport).where(eq(bankImport.transactionId, transaction.id));
+  const [found] = await rec.tx
+    .select({ id: transaction.id, cleared: transaction.cleared })
+    .from(transaction)
+    .where(
+      and(
+        eq(transaction.accountId, accountId),
+        eq(transaction.amount, i.amount),
+        isNull(transaction.deletedAt),
+        eq(transaction.isStartingBalance, false),
+        sql`${days} <= ${MATCH_DAYS}`,
+        notExists(held),
+      ),
+    )
+    .orderBy(days, asc(transaction.createdAt))
+    .limit(1);
+  if (!found) return null;
+  await rec.update(transaction, eq(transaction.id, found.id), {
+    cleared: found.cleared === 'uncleared' ? 'cleared' : undefined,
+    importId: i.importId,
+    importedPayee: i.payeeName,
+  });
+  return found.id;
+}
+
+/**
+ * A new row for an import: unapproved and cleared, the counterparty's payee (`payeeOfImport`) with its last category.
+ * A learned transfer's other side waits, unapproved, for its own bank's copy to match it.
+ */
+async function importNew(
+  rec: ChangeRecorder,
+  { accountId, onBudget: budget }: { accountId: string; onBudget: boolean },
+  i: Import,
+  today: IsoDate,
+): Promise<TxnRow> {
+  const match = await payeeOfImport(rec, i.payeeName, accountId);
+  const input = {
+    accountId,
+    date: i.date,
+    payeeId: match.id,
+    categoryId: budget ? match.lastCategoryId : null,
+    memo: '',
+    amount: i.amount,
+    cleared: 'cleared' as const,
+    flag: null,
+  };
+  const saved = await createTransaction(rec, input, today, i.defaults);
+  const [row] = await rec.update(transaction, eq(transaction.id, saved.id), {
+    approved: false,
+    importId: i.importId,
+    importedPayee: i.payeeName,
+  });
+  if (row!.transferTxnId) await rec.update(transaction, eq(transaction.id, row!.transferTxnId), { approved: false });
+  return row!;
+}
+
+/**
+ * Pairs a new import with the other side of a transfer between the owner's accounts, imported into another account
+ * (a learned transfer's: into its account): a plain, unapproved import, uncategorized or still in the category its
+ * payee gave it, of the opposite sign (same currency: the opposite amount within 3 days; between currencies: PLN
+ * amounts within 2% and 1 day). Only a single candidate pairs. A plain import becomes a transfer to that account (both
+ * native amounts kept, no category between two budget accounts); the transfer's side there replaces the candidate:
+ * the candidate is deleted and its bank import moves to that side, which stays unapproved. Returns whether it paired.
+ */
+async function pairTransfer(rec: ChangeRecorder, x: TxnRow, now: Date): Promise<boolean> {
+  if (x.amount === 0) return false;
+  const days = daysFrom(x.date);
+  const found = await rec.tx
+    .select({ y: transaction, importId: bankImport.importId, currency: account.currency, days })
+    .from(transaction)
+    .innerJoin(bankImport, eq(bankImport.transactionId, transaction.id))
+    .innerJoin(account, eq(account.id, transaction.accountId))
+    .where(
+      and(
+        x.transferAccountId ? eq(transaction.accountId, x.transferAccountId) : ne(transaction.accountId, x.accountId),
+        eq(account.closed, false),
+        isNull(transaction.deletedAt),
+        isNull(transaction.transferTxnId),
+        eq(transaction.isSplit, false),
+        eq(transaction.approved, false),
+        or(isNull(transaction.categoryId), eq(transaction.categoryId, bankImport.autoCategoryId)),
+        x.amount < 0 ? gt(transaction.amount, 0) : lt(transaction.amount, 0),
+        sql`${days} <= ${PAIR_DAYS}`,
+      ),
+    );
+  const here = (await findAccount(rec.tx, x.accountId))!;
+  const base = (row: TxnRow) => Math.abs(row.amountBase);
+  const candidates = found.filter(({ y, currency, days: apart }) =>
+    currency === here.currency
+      ? y.amount === -x.amount
+      : apart <= PAIR_FX_DAYS && Math.abs(base(y) - base(x)) * 100 <= PAIR_FX_PERCENT * Math.max(base(y), base(x)),
+  );
+  if (candidates.length !== 1) return false;
+  const { y, importId } = candidates[0]!;
+  const sideId = x.transferTxnId ?? (await makeTransfer(rec, x, y, now));
+  if (sideId === null) return false;
+  // The import id moves to the transfer's side (unique per account, deleted rows included).
+  await rec.update(transaction, eq(transaction.id, y.id), { deletedAt: now, importId: null });
+  await rec.update(transaction, eq(transaction.id, sideId), {
+    cleared: y.cleared,
+    approved: false,
+    importId: y.importId,
+    importedPayee: y.importedPayee,
+  });
+  await rec.update(bankImport, eq(bankImport.importId, importId), { transactionId: sideId });
+  return true;
+}
+
+/**
+ * Makes import `x` a transfer to the account of `y` with the planner's rules, keeping both native amounts; returns its
+ * new side there. Null when the transfer needs a category neither has (between a budget and a tracking account).
+ */
+async function makeTransfer(rec: ChangeRecorder, x: TxnRow, y: TxnRow, now: Date): Promise<string | null> {
+  const here = (await findAccount(rec.tx, x.accountId))!;
+  const there = (await findAccount(rec.tx, y.accountId))!;
+  const mixed = onBudget(here) !== onBudget(there);
+  const categoryId = mixed ? (onBudget(here) ? x.categoryId : y.categoryId) : null;
+  if (mixed && categoryId === null) return null;
+  const agg = await loadAggregate(rec.tx, x.id);
+  const draft = {
+    ...draftOf(agg),
+    payeeId: there.transferPayeeId,
+    categoryId,
+    transferAmount: here.currency === there.currency ? null : y.amount,
+  };
+  // The rates both imports were booked at, should the sending side need one.
+  const rates = new Map<string, string>();
+  if (x.fxRate) rates.set(here.currency, x.fxRate);
+  if (y.fxRate) rates.set(there.currency, y.fxRate);
+  const plan = await planTransaction(rec.tx, draft, { defaults: { date: x.date, rates } });
+  await syncPlan(rec, agg, plan, now, false);
+  const [row] = await rec.tx
+    .select({ sideId: transaction.transferTxnId })
+    .from(transaction)
+    .where(eq(transaction.id, x.id));
+  return row!.sideId!;
+}
+
+/**
  * Imports the booked transactions of every linked bank account of the active connections as one undoable command
- * ("Bank sync"): unapproved and cleared, the counterparty's payee (`payeeOfImport`) with its last category (YNAB-like).
- * The import id (`<uid>:<entry reference>`) skips what was imported before, deleted or not, also from an earlier
- * session of the same bank account. Transactions dated before the account's starting balance (already in it) or after
- * today are left out. A connection whose session has expired becomes `reconnect_needed` and is skipped; one that
- * fails otherwise is skipped this time. With a `uid`, only that bank account is synced.
+ * ("Bank sync"). A bank transaction recorded in `bank_import` before is skipped, whatever became of its row, also when
+ * it comes from an earlier session of the same bank account. Otherwise it matches a row already there
+ * (`matchExisting`), or becomes a new row (`importNew`) that may pair with its other side into a transfer
+ * (`pairTransfer`). Transactions dated before the account's starting balance (already in it) or after today are left
+ * out. A connection whose session has expired becomes `reconnect_needed` and is skipped; one that fails otherwise is
+ * skipped this time. With a `uid`, only that bank account is synced.
  */
 async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
   const client = bankClient(deps);
@@ -446,54 +627,39 @@ async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
     fetched.push(...fromConnection);
   }
 
-  const imported = await runCommand(deps, 'Bank sync', async (rec) => {
-    let count = 0;
-    for (const { accountId, onBudget, imports } of fetched) {
-      const refs = imports.map((i) => refOf(i.importId));
-      const known = refs.length
-        ? await rec.tx
-            .select({ importId: transaction.importId })
-            .from(transaction)
-            .where(
-              and(
-                eq(transaction.accountId, accountId),
-                inArray(sql`substr(${transaction.importId}, strpos(${transaction.importId}, ':') + 1)`, refs),
-              ),
-            )
+  const counts = await runCommand(deps, 'Bank sync', async (rec) => {
+    const result = { imported: 0, matched: 0, paired: 0 };
+    for (const target of fetched) {
+      const keyOf = (i: Import) => `${target.accountId}:${refOf(i.importId)}`;
+      const keys = target.imports.map(keyOf);
+      const known = keys.length
+        ? await rec.tx.select({ key: bankImport.importId }).from(bankImport).where(inArray(bankImport.importId, keys))
         : [];
-      const seen = new Set(known.map((row) => refOf(row.importId!)));
-      for (const i of imports) {
-        const ref = refOf(i.importId);
-        if (seen.has(ref)) continue;
-        seen.add(ref);
-        const match = await payeeOfImport(rec, i.payeeName);
-        const input = {
-          accountId,
-          date: i.date,
-          payeeId: match.id,
-          categoryId: onBudget ? match.lastCategoryId : null,
-          memo: '',
-          amount: i.amount,
-          cleared: 'cleared' as const,
-          flag: null,
-        };
-        const saved = await createTransaction(rec, input, today, i.defaults);
-        await rec.update(transaction, eq(transaction.id, saved.id), {
-          approved: false,
-          importId: i.importId,
-          importedPayee: i.payeeName,
-        });
-        count++;
+      const seen = new Set(known.map((row) => row.key));
+      for (const i of target.imports) {
+        const key = keyOf(i);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const matched = await matchExisting(rec, target.accountId, i);
+        if (matched) {
+          await rec.insert(bankImport, { importId: key, transactionId: matched });
+          result.matched++;
+          continue;
+        }
+        const row = await importNew(rec, target, i, today);
+        await rec.insert(bankImport, { importId: key, transactionId: row.id, autoCategoryId: row.categoryId });
+        result.imported++;
+        if (await pairTransfer(rec, row, now)) result.paired++;
       }
     }
-    return count;
+    return result;
   });
   // Outside the command, so a sync that imports nothing adds no undo entry.
   const synced = fetched.filter((f) => f.complete).map((f) => f.uid);
   if (synced.length > 0) {
     await deps.db.update(bankAccount).set({ lastSyncedAt: now }).where(inArray(bankAccount.uid, synced));
   }
-  return { imported, reconnectNeeded, failed };
+  return { ...counts, reconnectNeeded, failed };
 }
 
 let running: Promise<BankSyncResponse> | null = null;
