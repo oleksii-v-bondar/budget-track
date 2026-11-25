@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Deploys Budget Track on the Oracle VM next to progress-dashboard (deploy/oracle/README.md). Idempotent: safe to
-# re-run on every deploy. Run as root from anywhere inside the app directory (normally /opt/budget-track):
+# Deploys Budget Track on the Oracle VM next to progress-dashboard (deploy/oracle/README.md). Idempotent: run it after
+# every `git pull`. Run as root from the app directory (normally /opt/budget-track):
 #
-#   sudo DOMAIN=budget-track.duckdns.org APP_USERNAME=... APP_PASSWORD=... bash deploy/oracle/deploy.sh
+#   sudo bash deploy/oracle/deploy.sh
 #
-# Optional env: ENABLE_BANKING_APP_ID, ENABLE_BANKING_KEY (the .pem contents). Values given here are written to
-# .env / secrets/; values left empty keep what is already there.
+# On the first run it asks for the sign-in (APP_USERNAME / APP_PASSWORD) and the Enable Banking application id, and
+# stores them in .env. The Enable Banking key is read from secrets/enablebanking.pem. Optional env: DOMAIN (default
+# budget-track.duckdns.org); APP_USERNAME, APP_PASSWORD, ENABLE_BANKING_APP_ID to set or change those values.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,18 +33,30 @@ set_kv DOMAIN "$DOMAIN"
 [ -n "${APP_USERNAME:-}" ] && set_kv APP_USERNAME "$APP_USERNAME"
 [ -n "${APP_PASSWORD:-}" ] && set_kv APP_PASSWORD "$APP_PASSWORD"
 [ -n "${ENABLE_BANKING_APP_ID:-}" ] && set_kv ENABLE_BANKING_APP_ID "$ENABLE_BANKING_APP_ID"
-for key in APP_USERNAME APP_PASSWORD; do
-  grep -q "^${key}=." .env || { echo "error: $key is not set (pass it in the environment once)" >&2; exit 1; }
-done
+ask() { # ask KEY PROMPT [secret]: prompt for a value missing from .env (first run)
+  local key="$1" prompt="$2" value=""
+  grep -q "^${key}=." .env && return 0
+  [ -t 0 ] || { echo "error: $key is not set; run interactively or pass $key=..." >&2; exit 1; }
+  if [ "${3:-}" = secret ]; then read -rsp "$prompt: " value; echo; else read -rp "$prompt: " value; fi
+  [ -n "$value" ] || { echo "error: $key is required" >&2; exit 1; }
+  set_kv "$key" "$value"
+}
+ask APP_USERNAME "Sign-in username"
+ask APP_PASSWORD "Sign-in password (use a strong one: the app is on the internet)" secret
+if ! grep -q '^ENABLE_BANKING_APP_ID=' .env && [ -t 0 ]; then
+  read -rp "Enable Banking application id (empty to skip bank connections): " value
+  set_kv ENABLE_BANKING_APP_ID "$value"
+fi
 
 # ── 2. Enable Banking key (read by the container's node user, uid 1000) ──────────────────────────────────────────
 mkdir -p secrets
-if [ -n "${ENABLE_BANKING_KEY:-}" ]; then
-  printf '%s\n' "$ENABLE_BANKING_KEY" > secrets/enablebanking.pem
-fi
 chown -R 1000:1000 secrets
 chmod 700 secrets
-[ -f secrets/enablebanking.pem ] && chmod 600 secrets/enablebanking.pem
+if [ -f secrets/enablebanking.pem ]; then
+  chmod 600 secrets/enablebanking.pem
+elif grep -q '^ENABLE_BANKING_APP_ID=.' .env; then
+  echo "warning: secrets/enablebanking.pem is missing; bank connections stay off until you copy it there" >&2
+fi
 
 # ── 3. Start the stack ──────────────────────────────────────────────────────────────────────────────────────────
 log "Starting the stack"

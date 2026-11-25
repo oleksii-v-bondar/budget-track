@@ -1,4 +1,4 @@
-# Budget Track on the Oracle VM, next to progress-dashboard (deploy/oracle/README.md).
+# Budget Track on the Oracle VM, next to progress-dashboard (deploy/oracle/README.md); started by deploy.sh.
 #
 # Binds no host ports: progress-dashboard's nginx owns 80/443. The app joins the shared external "edge" network as
 # "budget", and nginx proxies https://budget-track.duckdns.org to it. Its own Postgres keeps its data on the VM's

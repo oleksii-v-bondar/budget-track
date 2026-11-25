@@ -51,8 +51,8 @@ The ports are bound to 127.0.0.1 only. For remote access, put an HTTPS reverse p
 
 ## Deploy to Oracle Cloud
 
-It runs on the Oracle VM next to progress-dashboard at https://budget-track.duckdns.org, deployed by GitHub Actions on
-every push to `main`. See [deploy/oracle/README.md](deploy/oracle/README.md).
+It runs on the Oracle VM next to progress-dashboard at https://budget-track.duckdns.org, deployed by hand on the VM
+(`git pull && sudo bash deploy/oracle/deploy.sh`). See [deploy/oracle/README.md](deploy/oracle/README.md).
 
 ## Bank connections (Enable Banking)
 
