@@ -1,0 +1,54 @@
+# Budget Track on the Oracle VM, next to progress-dashboard (deploy/oracle/README.md).
+#
+# Binds no host ports: progress-dashboard's nginx owns 80/443. The app joins the shared external "edge" network as
+# "budget", and nginx proxies https://budget-track.duckdns.org to it. Its own Postgres keeps its data on the VM's
+# block volume (/data). The project name is pinned, so nothing collides with the other apps on the box.
+#
+# Run from the app directory (/opt/budget-track):
+#   docker compose -f deploy/oracle/docker-compose.yml --env-file .env up -d --build
+
+name: budget-track
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: budget
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: budget
+    volumes:
+      - /data/budget-track/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U budget -d budget']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: ../..
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://budget:${POSTGRES_PASSWORD}@db:5432/budget
+      APP_USERNAME: ${APP_USERNAME:?set APP_USERNAME in .env}
+      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in .env}
+      COOKIE_SECURE: 'true'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ENABLE_BANKING_APP_ID: ${ENABLE_BANKING_APP_ID:-}
+      BANK_REDIRECT_URI: https://${DOMAIN:?set DOMAIN in .env}/api/bank/callback
+    volumes:
+      - ../../secrets:/app/secrets:ro
+    networks:
+      default: {}
+      edge:
+        aliases:
+          - budget
+
+networks:
+  # Shared with progress-dashboard's nginx, which reaches this app as "budget".
+  edge:
+    external: true

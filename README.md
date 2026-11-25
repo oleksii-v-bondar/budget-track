@@ -49,6 +49,11 @@ your system keychain as trusted. Plain http://localhost:3000 also works (set `AP
 
 The ports are bound to 127.0.0.1 only. For remote access, put an HTTPS reverse proxy with a real certificate in front.
 
+## Deploy to Oracle Cloud
+
+It runs on the Oracle VM next to progress-dashboard at https://budget-track.duckdns.org, deployed by GitHub Actions on
+every push to `main`. See [deploy/oracle/README.md](deploy/oracle/README.md).
+
 ## Bank connections (Enable Banking)
 
 Optional. Budget Track imports booked transactions through [Enable Banking](https://enablebanking.com), whose
