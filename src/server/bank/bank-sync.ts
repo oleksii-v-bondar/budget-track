@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { BASE_CURRENCY } from '../../shared/api/accounts';
+import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import type { AccountType } from '../../shared/accounts';
+import { BASE_CURRENCY, createAccountRequestSchema } from '../../shared/api/accounts';
 import type { BankStatus, BankSyncResponse } from '../../shared/api/bank';
 import { MAX_AMOUNT } from '../../shared/api/common';
-import { addDays, type IsoDate } from '../../engine';
+import { addDays, type IsoDate, monthOf } from '../../engine';
+import { createAccount } from '../accounts/account-commands';
 import { todayIn } from '../clock';
 import { runCommand } from '../commands/run-command';
 import type { EnableBankingConfig } from '../config';
@@ -31,6 +33,8 @@ const FIRST_SYNC_DAYS = 90;
 const OVERLAP_DAYS = 5;
 const AUTO_SYNC_EVERY_MS = 6 * 60 * 60 * 1000;
 const AUTO_SYNC_FIRST_MS = 60 * 1000;
+/** The balance "Add to budget" starts from: booked, else expected, else available, else whichever the bank sends. */
+const BALANCE_TYPES = ['ITBD', 'CLBD', 'XPCD', 'ITAV'];
 
 const unavailable = () =>
   new AppError(502, 'bank_unavailable', "Can't reach the bank connection service. Try again later.");
@@ -99,12 +103,13 @@ export async function startConnect(deps: AppDeps, bank: string, state: string): 
 
 /**
  * The end of the consent flow: stores the session and its accounts. A bank connected before is replaced (its old
- * session is deleted), and its accounts keep their links where the IBAN and currency match.
+ * session is deleted), and its accounts keep their links where the IBAN and currency match. The others are added to
+ * the budget; one that can't be stays unlinked, for Settings.
  */
 export async function completeConnect(deps: AppDeps, code: string): Promise<void> {
   const client = bankClient(deps);
   const session = await client.createSession(code);
-  const replaced = await deps.db.transaction(async (tx) => {
+  const { replaced, connectionId } = await deps.db.transaction(async (tx) => {
     const old = await tx
       .select()
       .from(bankConnection)
@@ -136,16 +141,26 @@ export async function completeConnect(deps: AppDeps, code: string): Promise<void
             name: a.name,
             iban: a.iban,
             currency: a.currency,
+            cashAccountType: a.cashAccountType,
             accountId: link?.accountId ?? null,
             lastSyncedAt: link?.lastSyncedAt ?? null,
           };
         }),
       );
     }
-    return old;
+    return { replaced: old, connectionId: connection!.id };
   });
   for (const { sessionId } of replaced) {
     if (sessionId !== session.sessionId) await closeSession(deps, client, sessionId);
+  }
+  const unlinked = await deps.db
+    .select({ uid: bankAccount.uid })
+    .from(bankAccount)
+    .where(and(eq(bankAccount.connectionId, connectionId), isNull(bankAccount.accountId)));
+  for (const { uid } of unlinked) {
+    await addToBudget(deps, uid).catch((err: unknown) => {
+      deps.logger.warn({ err, uid }, 'adding a bank account to the budget failed');
+    });
   }
 }
 
@@ -221,15 +236,114 @@ function importOf(uid: string, t: BankTransaction, hashes: Map<string, number>) 
   return { importId: `${uid}:${ref}`, date, amount, payeeName };
 }
 
+/** The booked transactions of a list the sync imports into an account in `currency` opened on `start`. */
+function bookedImports(
+  deps: AppDeps,
+  uid: string,
+  list: BankTransaction[],
+  { start, today, currency }: { start: IsoDate; today: IsoDate; currency: string },
+) {
+  const hashes = new Map<string, number>();
+  return list.flatMap((t) => {
+    if (t.status !== 'BOOK') return [];
+    const item = importOf(uid, t, hashes);
+    if (!item || item.date < start || item.date > today) return [];
+    if (t.transaction_amount.currency.toUpperCase() !== currency || !(Math.abs(item.amount) <= MAX_AMOUNT)) {
+      deps.logger.warn({ uid, importId: item.importId }, 'skipped a bank transaction');
+      return [];
+    }
+    return [item];
+  });
+}
+
+/** By Enable Banking's cash account type: a card account is a credit card, a savings account savings, else checking. */
+const accountTypeOf = (cashAccountType: string | null): AccountType =>
+  cashAccountType === 'CARD' ? 'credit_card' : cashAccountType === 'SVGS' ? 'savings' : 'checking';
+
+/**
+ * The name "Add to budget" gives a bank account's account: the bank's (not the account's `name`, which may be its
+ * holder's), with the currency when the connection has other accounts, and the IBAN's last 4 digits when one of them
+ * is in the same currency; " 2", " 3"… keeps it unique.
+ */
+async function accountNameOf(deps: AppDeps, bank: typeof bankAccount.$inferSelect, bankName: string): Promise<string> {
+  const others = await deps.db
+    .select({ currency: bankAccount.currency })
+    .from(bankAccount)
+    .where(and(eq(bankAccount.connectionId, bank.connectionId), ne(bankAccount.uid, bank.uid)));
+  let name = others.length > 0 ? `${bankName} ${bank.currency}` : bankName;
+  if (bank.iban && others.some((o) => o.currency === bank.currency)) name += ` ••${bank.iban.slice(-4)}`;
+  const taken = new Set((await deps.db.select({ name: account.name }).from(account)).map((a) => a.name.toLowerCase()));
+  let unique = name;
+  for (let n = 2; taken.has(unique.toLowerCase()); n++) unique = `${name} ${n}`;
+  return unique;
+}
+
+/**
+ * "Add to budget" (YNAB-like): creates the account an unlinked bank account syncs into, links it and syncs it. The
+ * starting balance, dated the 1st of this month, is the bank's balance less this month's booked transactions, which
+ * the sync then imports unapproved, for review. Two undo entries: the account's creation and the sync.
+ */
+export async function addToBudget(deps: AppDeps, uid: string): Promise<{ name: string }> {
+  const [found] = await deps.db
+    .select({ bank: bankAccount, bankName: bankConnection.aspspName })
+    .from(bankAccount)
+    .innerJoin(bankConnection, eq(bankConnection.id, bankAccount.connectionId))
+    .where(eq(bankAccount.uid, uid));
+  if (!found) throw new AppError(404, 'not_found', 'Bank account not found.');
+  const { bank, bankName } = found;
+  const linked = () => new AppError(409, 'bank_account_linked', 'This bank account is already linked to an account.');
+  if (bank.accountId) throw linked();
+  const client = bankClient(deps);
+  const today = todayIn(deps.config.timeZone, deps.clock.now());
+  const start = `${monthOf(today)}-01`;
+  let balance: number;
+  let month: number;
+  try {
+    const balances = (await client.balances(uid)).filter((b) => b.currency === bank.currency);
+    const picked = BALANCE_TYPES.map((type) => balances.find((b) => b.type === type)).find(Boolean) ?? balances[0];
+    if (!picked) throw new EnableBankingError(0, null, `Enable Banking sent no ${bank.currency} balance`);
+    balance = Math.round(Number(picked.amount) * 100);
+    const list = await client.transactions(uid, start, today);
+    const imports = bookedImports(deps, uid, list, { start, today, currency: bank.currency });
+    // Each transaction once, as the sync imports it.
+    month = [...new Map(imports.map((i) => [i.importId, i.amount])).values()].reduce((sum, amount) => sum + amount, 0);
+  } catch (err) {
+    if (!(err instanceof EnableBankingError)) throw err;
+    deps.logger.warn({ err, bank: bankName }, 'Enable Banking failed to give a starting balance');
+    throw unavailable();
+  }
+  const input = createAccountRequestSchema.parse({
+    name: await accountNameOf(deps, bank, bankName),
+    type: accountTypeOf(bank.cashAccountType),
+    currency: bank.currency,
+    startingBalance: balance - month,
+    startingDate: start,
+  });
+  // Spec §9: the NBP rate is quoted before the command, outside its transaction.
+  const nbp = input.currency === BASE_CURRENCY ? null : await deps.fx.quote(input.currency, start);
+  await runCommand(deps, `Create account "${input.name}"`, async (rec) => {
+    const [current] = await rec.tx
+      .select({ accountId: bankAccount.accountId })
+      .from(bankAccount)
+      .where(eq(bankAccount.uid, uid));
+    if (current?.accountId) throw linked();
+    const { id } = await createAccount(rec, input, today, nbp);
+    // eslint-disable-next-line no-restricted-syntax -- bank_account isn't recorded: undoing the account unlinks it.
+    await rec.tx.update(bankAccount).set({ accountId: id, lastSyncedAt: null }).where(eq(bankAccount.uid, uid));
+  });
+  await runSync(deps, uid);
+  return { name: input.name };
+}
+
 /**
  * Imports the booked transactions of every linked bank account of the active connections as one undoable command
  * ("Bank sync"): unapproved and cleared, the counterparty as the payee with that payee's last category (YNAB-like).
  * The import id (`<uid>:<entry reference>`) skips what was imported before, deleted or not, also from an earlier
  * session of the same bank account. Transactions dated before the account's starting balance (already in it) or after
  * today are left out. A connection whose session has expired becomes `reconnect_needed` and is skipped; one that
- * fails otherwise is skipped this time.
+ * fails otherwise is skipped this time. With a `uid`, only that bank account is synced.
  */
-async function runSync(deps: AppDeps): Promise<BankSyncResponse> {
+async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
   const client = bankClient(deps);
   const connections = await deps.db.select().from(bankConnection).orderBy(bankConnection.aspspName);
   if (connections.length === 0) throw new AppError(409, 'bank_not_connected', 'Connect a bank first.');
@@ -243,7 +357,7 @@ async function runSync(deps: AppDeps): Promise<BankSyncResponse> {
       transaction,
       and(eq(transaction.accountId, account.id), eq(transaction.isStartingBalance, true), isNull(transaction.deletedAt)),
     )
-    .where(eq(account.closed, false));
+    .where(and(eq(account.closed, false), uid === undefined ? undefined : eq(bankAccount.uid, uid)));
 
   const reconnectNeeded: string[] = [];
   const failed: string[] = [];
@@ -255,6 +369,7 @@ async function runSync(deps: AppDeps): Promise<BankSyncResponse> {
 
   const fetched: { uid: string; accountId: string; onBudget: boolean; imports: Import[]; complete: boolean }[] = [];
   for (const connection of connections) {
+    if (uid !== undefined && !linked.some((l) => l.bank.connectionId === connection.id)) continue;
     if (connection.status !== 'active' || connection.validUntil <= now) {
       await needsReconnect(connection);
       continue;
@@ -276,15 +391,7 @@ async function runSync(deps: AppDeps): Promise<BankSyncResponse> {
         // A transaction without an NBP rate waits for the next sync, which starts from the last complete one.
         let complete = true;
         const rates = new Map<IsoDate, string | null>();
-        const hashes = new Map<string, number>();
-        for (const t of list) {
-          if (t.status !== 'BOOK') continue;
-          const item = importOf(bank.uid, t, hashes);
-          if (!item || item.date < start || item.date > today) continue;
-          if (t.transaction_amount.currency.toUpperCase() !== currency || !(Math.abs(item.amount) <= MAX_AMOUNT)) {
-            deps.logger.warn({ uid: bank.uid, importId: item.importId }, 'skipped a bank transaction');
-            continue;
-          }
+        for (const item of bookedImports(deps, bank.uid, list, { start, today, currency })) {
           const defaults: DefaultRates = { date: item.date, rates: new Map() };
           if (currency !== BASE_CURRENCY) {
             if (!rates.has(item.date)) rates.set(item.date, (await deps.fx.quote(currency, item.date))?.rate ?? null);

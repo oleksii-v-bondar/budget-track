@@ -425,6 +425,8 @@ export const bankAccount = pgTable('bank_account', {
   name: text('name').notNull(),
   iban: text('iban'),
   currency: text('currency').notNull(),
+  /** ISO 20022, e.g. CACC, CARD or SVGS: the type of the account "Add to budget" creates. */
+  cashAccountType: text('cash_account_type'),
   // Not recorded for undo, so deleting the account (or undoing its creation) may simply unlink it.
   accountId: uuid('account_id').references(() => account.id, { onDelete: 'set null' }),
   lastSyncedAt: instant('last_synced_at'),

@@ -64,6 +64,13 @@
       "when": 1795514790440,
       "tag": "0008_enable_banking",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795601306191,
+      "tag": "0009_bank_account_type",
+      "breakpoints": true
     }
   ]
 }

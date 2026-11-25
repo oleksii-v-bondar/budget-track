@@ -40,6 +40,15 @@ export const bankAccountParamSchema = z.object({ uid: z.string().min(1).max(500)
 /** PUT /api/bank/accounts/:uid/link: an account in the bank account's currency, or null to unlink. */
 export const linkBankAccountRequestSchema = z.object({ accountId: idSchema.nullable() });
 
+/**
+ * POST /api/bank/accounts/:uid/create-account ("Add to budget"): the name of the account created for the bank account
+ * (two undo entries: the account and its first sync), and the new status.
+ */
+export interface AddToBudgetResponse {
+  name: string;
+  status: BankStatus;
+}
+
 /** POST /api/bank/sync: how many transactions were imported (one undo entry, "Bank sync") and which banks were skipped. */
 export interface BankSyncResponse {
   imported: number;

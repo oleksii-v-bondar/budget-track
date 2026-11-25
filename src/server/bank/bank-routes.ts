@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import {
+  type AddToBudgetResponse,
   bankAccountParamSchema,
   type BankListResponse,
   type BankStatus,
@@ -13,6 +14,7 @@ import { type AuthedEnv, requireSession } from '../auth/sessions';
 import type { AppDeps } from '../http/app';
 import { validate } from '../http/validate';
 import {
+  addToBudget,
   bankStatus,
   completeConnect,
   disconnectBank,
@@ -71,6 +73,10 @@ export function bankRoutes(deps: AppDeps) {
           return c.json<BankStatus>(await bankStatus(deps));
         },
       )
+      .post('/accounts/:uid/create-account', validate('param', bankAccountParamSchema), async (c) => {
+        const { name } = await addToBudget(deps, c.req.valid('param').uid);
+        return c.json<AddToBudgetResponse>({ name, status: await bankStatus(deps) }, 201);
+      })
       .post('/sync', async (c) => c.json<BankSyncResponse>(await syncBank(deps)))
       .delete('/connections/:id', validate('param', idParamSchema), async (c) => {
         await disconnectBank(deps, c.req.valid('param').id);

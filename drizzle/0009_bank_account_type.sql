@@ -1,0 +1,1 @@
+ALTER TABLE "bank_account" ADD COLUMN "cash_account_type" text;

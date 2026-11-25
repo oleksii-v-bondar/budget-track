@@ -45,6 +45,15 @@ export interface SessionAccount {
   iban: string | null;
   name: string;
   currency: string;
+  /** ISO 20022 cash account type, e.g. CACC, CARD or SVGS. */
+  cashAccountType: string | null;
+}
+
+/** A balance of an account: its ISO 20022 type (e.g. ITBD) and its signed amount. */
+export interface Balance {
+  type: string;
+  amount: string;
+  currency: string;
 }
 
 export interface Session {
@@ -78,6 +87,7 @@ const accountSchema = z
     details: text,
     product: text,
     currency: z.string().min(1),
+    cash_account_type: text,
   })
   .transform((a): SessionAccount => {
     const iban = a.account_id?.iban?.replace(/\s+/g, '') || null;
@@ -86,8 +96,20 @@ const accountSchema = z
       iban,
       name: a.details?.trim() || a.product?.trim() || a.name?.trim() || iban || a.uid,
       currency: a.currency.toUpperCase(),
+      cashAccountType: a.cash_account_type || null,
     };
   });
+
+const balanceSchema = z
+  .looseObject({
+    balance_amount: z.looseObject({ currency: z.string(), amount: z.string().regex(/^[-+]?\d+(\.\d+)?$/) }),
+    balance_type: z.string(),
+  })
+  .transform((b): Balance => ({
+    type: b.balance_type,
+    amount: b.balance_amount.amount,
+    currency: b.balance_amount.currency.toUpperCase(),
+  }));
 
 const transactionSchema = z.looseObject({
   entry_reference: text,
@@ -115,6 +137,7 @@ const sessionResponse = z.looseObject({
   aspsp: z.looseObject({ name: z.string().min(1), country: z.string().min(1) }),
   access: z.looseObject({ valid_until: z.string().refine((at) => !Number.isNaN(Date.parse(at))) }),
 });
+const balanceList = z.looseObject({ balances: z.array(z.unknown()) });
 const transactionPage = z.looseObject({ transactions: z.array(z.unknown()), continuation_key: text });
 
 const keysOf = (value: unknown) => (typeof value === 'object' && value !== null ? Object.keys(value) : typeof value);
@@ -236,6 +259,11 @@ export function enableBankingClient(
         validUntil: new Date(session.access.valid_until),
         accounts: items(accountSchema, session.accounts, 'account'),
       };
+    },
+
+    async balances(uid: string): Promise<Balance[]> {
+      const body = await call('GET', `/accounts/${encodeURIComponent(uid)}/balances`);
+      return items(balanceSchema, parse(balanceList, body, 'balance list').balances, 'balance');
     },
 
     /** Every transaction of the account between two dates (inclusive), all pages. */

@@ -66,9 +66,15 @@ restricted production mode is free for your own accounts.
    can only read the accounts linked there).
 5. Restart: `docker compose up -d`. Without the app id or a readable key, Settings doesn't show bank connections.
 6. In the app: "…" → Settings → Bank connections → **Connect bank**, pick the bank and sign in there. Back in Settings,
-   **link** each bank account to a Budget Track account in the same currency, then **Sync now**.
+   each bank account is in Accounts, with this month's transactions to approve.
 
 How it works:
+- Connecting a bank adds each of its accounts to Budget Track (like YNAB): named after the bank ("Revolut"; with the
+  currency, and the IBAN's last 4 digits, when the bank shares several), a credit card for a card account, savings for
+  a savings account, else checking. Its starting balance, on the 1st of this month, is the bank's balance less this
+  month's booked transactions, which are then imported for review. An account that couldn't be added (e.g. the bank
+  didn't give its balance) has **Add to budget** in Settings; or **link** it to an account you made yourself, in the
+  same currency.
 - Each bank is its own connection. Its consent lasts as long as the bank allows, at most 180 days ("Valid until");
   then Settings shows "Reconnect needed". Reconnecting a bank replaces its connection and keeps the account links (by
   IBAN). Disconnect ends the consent; imported transactions stay.

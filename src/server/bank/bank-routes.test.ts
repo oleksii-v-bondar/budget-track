@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { asc, eq, isNotNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AccountListResponse } from '../../shared/api/accounts';
-import type { BankStatus } from '../../shared/api/bank';
+import type { AddToBudgetResponse, BankStatus } from '../../shared/api/bank';
 import { bankAccount, bankConnection, payee, transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
@@ -65,6 +65,8 @@ let sessions: Record<string, unknown>;
 let expired: Set<string>;
 let failing: Set<string>;
 let bankTransactions: Record<string, unknown[]>;
+/** Without balances, the bank fails to give them, so "Add to budget" fails and the account stays unlinked. */
+let bankBalances: Record<string, unknown[]>;
 let server: Server;
 let t: TestDatabase;
 
@@ -89,6 +91,7 @@ beforeEach(async () => {
   expired = new Set();
   failing = new Set();
   bankTransactions = {};
+  bankBalances = {};
   server = createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk: Buffer) => (raw += chunk.toString()));
@@ -116,6 +119,12 @@ beforeEach(async () => {
       if (req.method === 'DELETE' && deleted) {
         if (failing.has(deleted[1]!)) return reply(500, { code: 500, error: 'ASPSP_ERROR', message: 'Bank error' });
         return reply(200, { message: 'OK' });
+      }
+      const balances = /^\/accounts\/([^/]+)\/balances$/.exec(path);
+      if (req.method === 'GET' && balances) {
+        const found = bankBalances[decodeURIComponent(balances[1]!)];
+        if (!found) return reply(500, { code: 500, error: 'ASPSP_ERROR', message: 'Bank error' });
+        return reply(200, { balances: found });
       }
       const listed = /^\/accounts\/([^/]+)\/transactions$/.exec(path);
       if (req.method === 'GET' && listed) {
@@ -167,6 +176,30 @@ const link = ({ client }: TestApp, uid: string, accountId: string | null) =>
   client.send('PUT', `/api/bank/accounts/${uid}/link`, { accountId });
 const sync = ({ client }: TestApp) => client.post('/api/bank/sync');
 const listed = () => requests.filter((r) => r.path.endsWith('/transactions'));
+const addToBudget = ({ client }: TestApp, uid: string) => client.post(`/api/bank/accounts/${uid}/create-account`);
+const accountsOf = async ({ client }: TestApp) =>
+  ((await (await client.get('/api/accounts')).json()) as AccountListResponse).accounts;
+const startingBalances = () =>
+  t.db
+    .select({
+      accountId: transaction.accountId,
+      date: transaction.date,
+      amount: transaction.amount,
+      amountBase: transaction.amountBase,
+      fxRate: transaction.fxRate,
+    })
+    .from(transaction)
+    .where(eq(transaction.isStartingBalance, true))
+    .orderBy(asc(transaction.createdAt));
+
+const booked = (fields: Record<string, unknown>) => ({ status: 'BOOK', credit_debit_indicator: 'DBIT', ...fields });
+const pln = (amount: string) => ({ transaction_amount: { currency: 'PLN', amount } });
+const balance = (balance_type: string, amount: string, currency = 'PLN') => ({
+  name: balance_type,
+  balance_amount: { currency, amount },
+  balance_type,
+  reference_date: '2026-11-20',
+});
 
 function imported() {
   return t.db
@@ -247,7 +280,7 @@ describe('connecting a bank', () => {
 
     const back = await app.client.get(`/api/bank/callback?code=pko-code&state=${String(lastAuth()!.body!.state)}`);
     expect(back.headers.get('location')).toBe('/settings');
-    expect(requests.at(-1)).toMatchObject({ method: 'POST', path: '/sessions', body: { code: 'pko-code' } });
+    expect(requests.find((r) => r.path === '/sessions')).toMatchObject({ method: 'POST', body: { code: 'pko-code' } });
     const { connections } = await status(app);
     expect(connections).toEqual([
       {
@@ -316,7 +349,7 @@ describe('connecting a bank', () => {
     // The new session has new account uids; the link follows the IBAN.
     sessions['pko-code'] = pkoSession('pko-session-2', ['pko-1b', 'pko-2b']);
     expect(await connect(app, 'PKO BP', 'pko-code')).toBe('/settings');
-    expect(requests.at(-1)).toMatchObject({ method: 'DELETE', path: '/sessions/pko-session' });
+    expect(requests).toContainEqual(expect.objectContaining({ method: 'DELETE', path: '/sessions/pko-session' }));
     const second = await status(app);
     expect(second.connections.map((c) => [c.bank, c.accounts.map((a) => [a.uid, a.accountId])])).toEqual([
       ['PKO BP', [['pko-1b', pko.id], ['pko-2b', null]]],
@@ -340,9 +373,6 @@ describe('connecting a bank', () => {
 });
 
 describe('POST /api/bank/sync', () => {
-  const booked = (fields: Record<string, unknown>) => ({ status: 'BOOK', credit_debit_indicator: 'DBIT', ...fields });
-  const pln = (amount: string) => ({ transaction_amount: { currency: 'PLN', amount } });
-
   async function linkedBanks() {
     const app = await bankApp();
     const pko = await createAccount(app.client, { name: 'PKO', startingDate: '2026-10-01' });
@@ -493,5 +523,121 @@ describe('POST /api/bank/sync', () => {
     requests = [];
     expect(await (await sync(app)).json()).toEqual({ imported: 1, reconnectNeeded: ['PKO BP'], failed: [] });
     expect(listed().map((r) => r.path)).toEqual(['/accounts/rev-eur/transactions']);
+  });
+});
+
+describe('Add to budget', () => {
+  it("adds a connected bank's account: the bank balance less this month's transactions, which arrive unapproved", async () => {
+    const app = await bankApp();
+    // Revolut names the account after its holder: the account is named after the bank instead.
+    sessions['rev-code'] = {
+      ...REVOLUT_SESSION,
+      accounts: [
+        { uid: 'rev-pln', account_id: { iban: 'LT603250000000000099' }, name: 'Jan Kowalski', cash_account_type: 'CACC', currency: 'PLN' },
+      ],
+    };
+    // No interim booked balance: the closing booked one comes next.
+    bankBalances['rev-pln'] = [balance('ITAV', '1300.00'), balance('XPCD', '1200.00'), balance('CLBD', '1234.56')];
+    bankTransactions['rev-pln'] = [
+      booked({ entry_reference: 'R1', ...pln('45.99'), booking_date: '2026-11-18', creditor: { name: 'Biedronka' } }),
+      booked({ entry_reference: 'R2', ...pln('5000.00'), credit_debit_indicator: 'CRDT', booking_date: '2026-11-01', debtor: { name: 'ACME' } }),
+      booked({ entry_reference: 'R3', ...pln('12.50'), status: 'PDNG', booking_date: '2026-11-20', creditor: { name: 'Lidl' } }),
+      booked({ entry_reference: 'R4', ...pln('99.00'), booking_date: '2026-10-31', creditor: { name: 'Last month' } }),
+    ];
+
+    expect(await connect(app, 'Revolut', 'rev-code')).toBe('/settings');
+    const accounts = await accountsOf(app);
+    expect(accounts.map((a) => [a.name, a.type, a.currency, a.balance.working, a.unapprovedCount])).toEqual([
+      ['Revolut', 'checking', 'PLN', 123_456, 2],
+    ]);
+    // 1234.56 − (5000.00 − 45.99), on the 1st.
+    expect(await startingBalances()).toEqual([
+      { accountId: accounts[0]!.id, date: '2026-11-01', amount: -371_945, amountBase: -371_945, fxRate: null },
+    ]);
+    expect((await imported()).map((i) => [i.importId, i.date, i.amount, i.approved])).toEqual([
+      ['rev-pln:R2', '2026-11-01', 500_000, false],
+      ['rev-pln:R1', '2026-11-18', -4599, false],
+    ]);
+    expect((await connectionOf(app, 'Revolut')).accounts).toEqual([
+      expect.objectContaining({ uid: 'rev-pln', accountId: accounts[0]!.id, lastSyncedAt: '2026-11-20T10:00:00.000Z' }),
+    ]);
+    // This month only, for the starting balance and then the sync.
+    expect(requests.some((r) => r.path === '/accounts/rev-pln/balances')).toBe(true);
+    expect(new Set(listed().map((r) => `${r.query.date_from}..${r.query.date_to}`))).toEqual(
+      new Set(['2026-11-01..2026-11-20']),
+    );
+
+    // Two undo entries: the sync, then the account.
+    expect(await (await app.client.post('/api/undo')).json()).toMatchObject({ undone: { label: 'Bank sync' } });
+    expect(await (await app.client.post('/api/undo')).json()).toMatchObject({
+      undone: { label: 'Create account "Revolut"' },
+    });
+    expect((await connectionOf(app, 'Revolut')).accounts).toMatchObject([{ uid: 'rev-pln', accountId: null }]);
+  });
+
+  it('names accounts after the bank, with the currency and the IBAN when needed, and types them', async () => {
+    const app = await bankApp();
+    await createAccount(app.client, { name: 'pko bp eur' });
+    const owner = { name: 'Jan Kowalski', product: 'Konto' };
+    sessions['pko-code'] = {
+      ...pkoSession('pko-session', ['unused-1', 'unused-2']),
+      accounts: [
+        { uid: 'pko-card', account_id: { iban: 'PL00000000000000000000001111' }, ...owner, cash_account_type: 'CARD', currency: 'PLN' },
+        { uid: 'pko-svgs', account_id: { iban: 'PL00000000000000000000002222' }, ...owner, cash_account_type: 'SVGS', currency: 'PLN' },
+        { uid: 'pko-eur', account_id: { iban: 'PL00000000000000000000003333' }, ...owner, cash_account_type: 'OTHR', currency: 'EUR' },
+      ],
+    };
+    bankBalances = {
+      'pko-card': [balance('ITBD', '-250.00'), balance('CLBD', '-300.00')],
+      'pko-svgs': [balance('INFO', '10000.00')],
+      // A balance in another currency doesn't count.
+      'pko-eur': [balance('ITBD', '1.00', 'PLN'), balance('ITAV', '100.00', 'EUR')],
+    };
+    bankTransactions['pko-eur'] = [
+      booked({ entry_reference: 'E1', transaction_amount: { currency: 'EUR', amount: '10.00' }, booking_date: '2026-11-19', creditor: { name: 'Uber' } }),
+    ];
+
+    expect(await connect(app, 'PKO BP', 'pko-code')).toBe('/settings');
+    const accounts = await accountsOf(app);
+    expect(accounts.map((a) => [a.name, a.type, a.currency, a.balance.working, a.balanceBase.working])).toEqual([
+      ['pko bp eur', 'checking', 'PLN', 0, 0],
+      ['PKO BP PLN ••1111', 'credit_card', 'PLN', -25_000, -25_000],
+      ['PKO BP PLN ••2222', 'savings', 'PLN', 1_000_000, 1_000_000],
+      // The EUR starting balance at NBP's rate (the stub's 4.3), the import at its date's.
+      ['PKO BP EUR 2', 'checking', 'EUR', 10_000, 47_300 - 4300],
+    ]);
+    expect((await startingBalances()).at(-1)).toEqual({
+      accountId: accounts[3]!.id,
+      date: '2026-11-01',
+      amount: 11_000,
+      amountBase: 47_300,
+      fxRate: '4.300000',
+    });
+    const links = Object.fromEntries((await connectionOf(app, 'PKO BP')).accounts.map((a) => [a.uid, a.accountId]));
+    expect(links).toEqual({ 'pko-card': accounts[1]!.id, 'pko-svgs': accounts[2]!.id, 'pko-eur': accounts[3]!.id });
+  });
+
+  it("leaves a bank account unlinked when its balance can't be read; Settings adds it later", async () => {
+    const app = await bankApp();
+    expect(await connect(app, 'Revolut', 'rev-code')).toBe('/settings');
+    expect((await connectionOf(app, 'Revolut')).accounts).toMatchObject([{ uid: 'rev-eur', accountId: null }]);
+    expect(await accountsOf(app)).toEqual([]);
+
+    const failed = await addToBudget(app, 'rev-eur');
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toMatchObject({ code: 'bank_unavailable' });
+    expect(await accountsOf(app)).toEqual([]);
+
+    bankBalances['rev-eur'] = [balance('ITBD', '20.00', 'EUR')];
+    const added = await addToBudget(app, 'rev-eur');
+    expect(added.status).toBe(201);
+    const body = (await added.json()) as AddToBudgetResponse;
+    const accounts = await accountsOf(app);
+    expect(accounts.map((a) => [a.name, a.currency, a.balance.working])).toEqual([['Revolut', 'EUR', 2000]]);
+    expect(body).toEqual({ name: 'Revolut', status: await status(app) });
+    expect(body.status.connections[0]!.accounts[0]!.accountId).toBe(accounts[0]!.id);
+
+    expect(await (await addToBudget(app, 'rev-eur')).json()).toMatchObject({ code: 'bank_account_linked' });
+    expect((await addToBudget(app, 'nope')).status).toBe(404);
   });
 });
