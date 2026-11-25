@@ -3,6 +3,7 @@ import { getTableConfig, type PgColumn, PgTimestamp } from 'drizzle-orm/pg-core'
 import type { Tx } from '../db/client';
 import {
   account,
+  appUser,
   assignment,
   category,
   categoryGroup,
@@ -18,6 +19,7 @@ import {
 
 /** Every table a user command may write, keyed by its SQL name; undo looks tables up here. */
 export const RECORDED_TABLES = {
+  app_user: appUser,
   account,
   category_group: categoryGroup,
   category,

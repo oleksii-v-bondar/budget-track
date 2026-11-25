@@ -5,6 +5,8 @@ import {
   type AutoAssignResponse,
   autoAssignRequestSchema,
   type BudgetMonthDto,
+  type BudgetSettingsDto,
+  budgetSettingsRequestSchema,
   type MonthNoteDto,
   monthNoteRequestSchema,
   monthParamSchema,
@@ -22,10 +24,11 @@ import { linkedForeignCurrencies } from '../targets/target-model';
 import { assertBudgetMonth, assignableCategory, assignedIn, moveMoney, setAssigned, setMonthNote } from './assignments';
 import { autoAssignMonth, STRATEGY_LABELS } from './auto-assign';
 import { loadBudgetMonth } from './budget-month';
+import { budgetSettings, setExpectedMonthlyIncome } from './budget-settings';
 
 /**
  * /api/budget/:month (spec §3, §5.4, §7, §11): the month view, assigning, moving money, auto-assign and the month
- * note; months are 'YYYY-MM'.
+ * note; months are 'YYYY-MM'. /api/budget/settings: the expected monthly income.
  */
 export function budgetRoutes(deps: AppDeps) {
   const today = () => todayIn(deps.config.timeZone, deps.clock.now());
@@ -35,6 +38,15 @@ export function budgetRoutes(deps: AppDeps) {
 
   return new Hono<AuthedEnv>()
     .use('*', requireSession(deps))
+    // Before '/:month', which would take "settings" for a month.
+    .get('/settings', async (c) => c.json<BudgetSettingsDto>(await budgetSettings(deps.db)))
+    .put('/settings', validate('json', budgetSettingsRequestSchema), async (c) => {
+      const { expectedMonthlyIncome } = c.req.valid('json');
+      await runCommand(deps, 'Set the expected monthly income', (rec) =>
+        setExpectedMonthlyIncome(rec, expectedMonthlyIncome),
+      );
+      return c.json<BudgetSettingsDto>({ expectedMonthlyIncome });
+    })
     .get('/:month', validate('param', monthParamSchema), async (c) => {
       const { month } = c.req.valid('param');
       const latest = await rates();

@@ -71,6 +71,13 @@
       "when": 1795601306191,
       "tag": "0009_bank_account_type",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795602829865,
+      "tag": "0010_expected_income",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "app_user" ADD COLUMN "expected_monthly_income" bigint;

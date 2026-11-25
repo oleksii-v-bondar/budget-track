@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { CategoryGroupKind, CategoryKind } from './categories';
-import { idSchema, moneySchema, monthSchema, noteSchema, positiveMoneySchema } from './common';
+import { boundedMoneySchema, idSchema, moneySchema, monthSchema, noteSchema, positiveMoneySchema } from './common';
 import type { TargetDto, TargetEvaluationDto } from './targets';
 
 export const monthParamSchema = z.object({ month: monthSchema });
@@ -21,6 +21,14 @@ export const moveMoneyRequestSchema = z
 export const monthNoteRequestSchema = z.object({ note: noteSchema });
 
 export type MoveMoneyRequest = z.infer<typeof moveMoneyRequestSchema>;
+
+/** PUT /api/budget/settings — the income the owner expects a month (the Edit Plan's yardstick); null unsets it. */
+export const budgetSettingsRequestSchema = z.object({
+  expectedMonthlyIncome: boundedMoneySchema.min(0, 'Enter 0 or more.').nullable(),
+});
+
+/** GET and PUT /api/budget/settings. */
+export type BudgetSettingsDto = z.infer<typeof budgetSettingsRequestSchema>;
 
 /** Spec §7 auto-assign strategies. */
 export const AUTO_ASSIGN_STRATEGIES = [

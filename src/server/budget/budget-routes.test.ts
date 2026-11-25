@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CategoryDto } from '../../shared/api/categories';
+import { SESSION_COOKIE } from '../auth/sessions';
 import { systemCategoryId } from '../db/lookups';
 import { assignment, category, monthNote } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
@@ -209,5 +210,58 @@ describe('PUT /api/budget/:month/note', () => {
 
     expect(await json(await put(''))).toEqual({ status: 200, body: { month: '2026-03', note: null } });
     expect(await t.db.select().from(monthNote)).toEqual([]);
+  });
+});
+
+describe('GET and PUT /api/budget/settings', () => {
+  const settings = async () => json(await ctx.client.get('/api/budget/settings'));
+  const put = (body: unknown) => ctx.client.send('PUT', '/api/budget/settings', body);
+
+  it('sets and clears the expected monthly income, each change undoable', async () => {
+    expect(await settings()).toEqual({ status: 200, body: { expectedMonthlyIncome: null } });
+    expect(await json(await put({ expectedMonthlyIncome: 1_290_000 }))).toEqual({
+      status: 200,
+      body: { expectedMonthlyIncome: 1_290_000 },
+    });
+    expect((await settings()).body).toEqual({ expectedMonthlyIncome: 1_290_000 });
+    expect((await json(await ctx.client.get('/api/undo'))).body).toMatchObject({
+      undo: { label: 'Set the expected monthly income' },
+    });
+
+    expect((await json(await put({ expectedMonthlyIncome: null }))).body).toEqual({ expectedMonthlyIncome: null });
+    expect((await settings()).body).toEqual({ expectedMonthlyIncome: null });
+    await ctx.client.post('/api/undo');
+    expect((await settings()).body).toEqual({ expectedMonthlyIncome: 1_290_000 });
+    await ctx.client.post('/api/undo');
+    expect((await settings()).body).toEqual({ expectedMonthlyIncome: null });
+  });
+
+  it('takes only whole, bounded amounts of 0 or more', async () => {
+    const fieldErrors = async (res: Response) =>
+      ((await res.json()) as { fieldErrors: Record<string, string[]> }).fieldErrors;
+    expect(await fieldErrors(await put({ expectedMonthlyIncome: -1 }))).toEqual({
+      expectedMonthlyIncome: ['Enter 0 or more.'],
+    });
+    expect(await fieldErrors(await put({ expectedMonthlyIncome: 12.5 }))).toEqual({
+      expectedMonthlyIncome: ['Enter a whole amount in minor units.'],
+    });
+    expect(await fieldErrors(await put({ expectedMonthlyIncome: 10_000_000_000_001 }))).toEqual({
+      expectedMonthlyIncome: ['Amount is too large.'],
+    });
+    expect((await put({})).status).toBe(400);
+    expect((await settings()).body).toEqual({ expectedMonthlyIncome: null });
+  });
+
+  it('needs a session and the CSRF header', async () => {
+    const anonymous = createTestApp(t.db).client;
+    expect((await anonymous.get('/api/budget/settings')).status).toBe(401);
+    expect((await anonymous.send('PUT', '/api/budget/settings', { expectedMonthlyIncome: 1 })).status).toBe(401);
+    const res = await ctx.app.request('/api/budget/settings', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', cookie: `${SESSION_COOKIE}=${ctx.client.cookie(SESSION_COOKIE)}` },
+      body: JSON.stringify({ expectedMonthlyIncome: 1 }),
+    });
+    expect(res.status).toBe(403);
+    expect((await settings()).body).toEqual({ expectedMonthlyIncome: null });
   });
 });

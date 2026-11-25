@@ -76,6 +76,8 @@ export const appUser = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     baseCurrency: text('base_currency').notNull().default('PLN'),
     budgetStartMonth: day('budget_start_month').notNull(),
+    /** What the owner expects to earn a month; the Edit Plan compares the month's targets with it. */
+    expectedMonthlyIncome: money('expected_monthly_income'),
     ...timestamps,
   },
   (t) => [

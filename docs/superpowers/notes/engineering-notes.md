@@ -75,7 +75,9 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - `refreshSession(c, deps)` (`src/server/auth/sessions.ts`) is the one way to read the session cookie: it slides the
   session, refreshes the cookie and clears a stale one; `requireSession` builds on it.
 - `app_user` holds only the budget's settings. `ensureBudget(db, month)` (`src/server/db/seed.ts`) creates it, and
-  seeds the budget, when it is missing; `main.ts` runs it after the migrations.
+  seeds the budget, when it is missing; `main.ts` runs it after the migrations. The owner edits one of them, the
+  expected monthly income (`GET`/`PUT /api/budget/settings`, `src/server/budget/budget-settings.ts`); setting it is an
+  undoable command, so `app_user` is a recorded table.
 - Advisory lock keys in use (a new lock needs a different key; list it here): `727274002`, user commands and
   undo/redo (`COMMAND_LOCK_KEY` in `src/server/commands/run-command.ts`).
 
