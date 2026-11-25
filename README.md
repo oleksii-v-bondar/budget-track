@@ -40,10 +40,14 @@ cp .env.example .env   # set APP_USERNAME, APP_PASSWORD and POSTGRES_PASSWORD
 docker compose up -d --build
 ```
 
-Then open http://localhost:3000 and sign in with `APP_USERNAME` and `APP_PASSWORD`. Set `APP_PORT` in `.env` if
-port 3000 is already taken.
+Then open **https://localhost:3443** and sign in with `APP_USERNAME` and `APP_PASSWORD`. A small Caddy container
+(`https` in `docker-compose.yml`) serves the app over HTTPS with a certificate from its own local CA. Your browser warns
+about it once; to trust it instead, run
+`docker compose cp https:/data/caddy/pki/authorities/local/root.crt ./secrets/local-https-root.crt` and add that file to
+your system keychain as trusted. Plain http://localhost:3000 also works (set `APP_PORT` if 3000 is taken, and
+`COOKIE_SECURE=false` to sign in over http).
 
-The port is bound to 127.0.0.1 only. For remote access, put an HTTPS reverse proxy (e.g. Caddy) in front.
+The ports are bound to 127.0.0.1 only. For remote access, put an HTTPS reverse proxy with a real certificate in front.
 
 ## Bank connections (Enable Banking)
 
@@ -52,9 +56,9 @@ restricted production mode is free for your own accounts.
 
 1. Sign up at https://enablebanking.com/sign-in/ (it emails you a sign-in link).
 2. In the Control Panel, register a **Production** application with the redirect URL
-   `http://localhost:3080/api/bank/callback` and let the browser generate the key: it downloads `<app-id>.pem`. The
-   redirect URL is this server's `/api/bank/callback` as your browser reaches it, so it assumes `APP_PORT=3080`;
-   otherwise set `BANK_REDIRECT_URI` in `.env` to the URL you registered.
+   `https://localhost:3443/api/bank/callback` (Enable Banking accepts only `https://` URLs) and let the browser
+   generate the key: it downloads `<app-id>.pem`. If you change `HTTPS_PORT` or host the app elsewhere, set
+   `BANK_REDIRECT_URI` in `.env` to the URL you registered.
 3. Save the key as `./secrets/enablebanking.pem` (`mkdir -p secrets`; `secrets/` is git-ignored and mounted read-only
    into the container at `/app/secrets`) and set `ENABLE_BANKING_APP_ID=<app-id>` in `.env`. On Linux the file must be
    readable by uid 1000, the container's `node` user.
@@ -131,4 +135,4 @@ docker rm -f $(docker ps -aq --filter label=org.testcontainers=true)
 | `WEB_DIR` | no | `dist/web` | Folder with the built web app (`npm run build:web`); without it only the API is served |
 | `ENABLE_BANKING_APP_ID` | no | | Enable Banking application id; bank connections are off without it |
 | `ENABLE_BANKING_KEY_FILE` | no | `./secrets/enablebanking.pem` | The application's private key (PEM); bank connections are off if it can't be read |
-| `BANK_REDIRECT_URI` | no | `http://localhost:3080/api/bank/callback` | This server's `/api/bank/callback`, registered as the application's redirect URL |
+| `BANK_REDIRECT_URI` | no | `https://localhost:3443/api/bank/callback` | This server's `/api/bank/callback`, registered as the application's redirect URL |

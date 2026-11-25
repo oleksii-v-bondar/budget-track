@@ -31,11 +31,25 @@ services:
       # Optional bank connections (README "Bank connections (Enable Banking)"): off while the app id is empty or
       # ./secrets/enablebanking.pem is missing (read as /app/secrets/enablebanking.pem, the default key file).
       ENABLE_BANKING_APP_ID: ${ENABLE_BANKING_APP_ID:-}
-      BANK_REDIRECT_URI: ${BANK_REDIRECT_URI:-http://localhost:${APP_PORT:-3000}/api/bank/callback}
+      BANK_REDIRECT_URI: ${BANK_REDIRECT_URI:-https://localhost:${HTTPS_PORT:-3443}/api/bank/callback}
     volumes:
       - ./secrets:/app/secrets:ro
     ports:
       - '127.0.0.1:${APP_PORT:-3000}:3000'
 
+  # HTTPS in front of the app (Enable Banking only accepts https:// redirect URLs). Caddy's own local CA signs a
+  # certificate for localhost; its data volume keeps that CA across restarts. Open https://localhost:3443.
+  https:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    command: caddy reverse-proxy --from https://localhost:443 --to app:3000 --internal-certs
+    volumes:
+      - caddy:/data
+    ports:
+      - '127.0.0.1:${HTTPS_PORT:-3443}:443'
+
 volumes:
   pgdata:
+  caddy:
