@@ -106,9 +106,9 @@ function BankPicker({ connected }: { connected: Set<string> }) {
 }
 
 /**
- * Settings → Bank connections (Enable Banking): connect banks, link each bank account to an account in its currency,
- * sync (one undoable "Bank sync"), reconnect when a bank's consent ends and disconnect. Hidden unless the server is
- * configured for it.
+ * Settings → Bank connections (Enable Banking): connect banks (which adds their accounts to the budget), add a bank
+ * account the connection couldn't add or link it to an account in its currency, sync (one undoable "Bank sync"),
+ * reconnect when a bank's consent ends and disconnect. Hidden unless the server is configured for it.
  */
 export function BankSection() {
   const queryClient = useQueryClient();
@@ -136,6 +136,15 @@ export function BankSection() {
     mutationFn: ({ uid, accountId }: { uid: string; accountId: string | null }) =>
       unwrap(api.api.bank.accounts[':uid'].link.$put({ param: { uid }, json: { accountId } })),
     onSuccess: saved,
+    onError: failed,
+  });
+  const add = useMutation({
+    mutationFn: (uid: string) => unwrap(api.api.bank.accounts[':uid']['create-account'].$post({ param: { uid } })),
+    onSuccess: async ({ name, status: next }) => {
+      saved(next);
+      await invalidateData(queryClient);
+      toast.show({ key: COMMAND_TOAST, message: `Added ${name} to Accounts` });
+    },
     onError: failed,
   });
   const disconnect = useMutation({
@@ -185,21 +194,36 @@ export function BankSection() {
       </p>
       {c.accounts.length === 0 && <p className="text-sm text-muted">The bank shared no accounts.</p>}
       {c.accounts.map((bank) => (
-        <SelectField
-          key={bank.uid}
-          label={`${bank.name} (${bank.currency})`}
-          value={bank.accountId ?? ''}
-          hint={accountHint(bank)}
-          disabled={link.isPending}
-          onChange={(event) => link.mutate({ uid: bank.uid, accountId: event.target.value || null })}
-        >
-          <option value="">Not linked</option>
-          {options(bank).map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </SelectField>
+        <div key={bank.uid} className="flex items-start gap-2">
+          <SelectField
+            className="min-w-0 flex-1"
+            label={`${bank.name} (${bank.currency})`}
+            value={bank.accountId ?? ''}
+            hint={accountHint(bank)}
+            disabled={link.isPending || add.isPending}
+            onChange={(event) => link.mutate({ uid: bank.uid, accountId: event.target.value || null })}
+          >
+            <option value="">{bank.accountId ? 'Not linked' : 'Link to existing account…'}</option>
+            {options(bank).map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </SelectField>
+          {bank.accountId === null && (
+            // Level with the select, under its label.
+            <Button
+              variant="secondary"
+              className="mt-6"
+              mutating
+              busy={add.isPending && add.variables === bank.uid}
+              disabled={add.isPending || link.isPending}
+              onClick={() => add.mutate(bank.uid)}
+            >
+              Add to budget
+            </Button>
+          )}
+        </div>
       ))}
       <div className="flex gap-2">
         <ConnectLink

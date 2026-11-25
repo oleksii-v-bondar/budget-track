@@ -128,7 +128,10 @@ describe('bank connections', () => {
       '/api/bank/connect?bank=Revolut',
     );
     const eur = within(revolutCard).getByLabelText('EUR (EUR)');
-    expect(within(eur).getAllByRole('option').map((o) => o.textContent)).toEqual(['Not linked', 'Revolut EUR']);
+    expect(within(eur).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Link to existing account…',
+      'Revolut EUR',
+    ]);
     await user.selectOptions(eur, euro.id);
 
     await user.click(screen.getByRole('button', { name: 'Sync now' }));
@@ -146,6 +149,31 @@ describe('bank connections', () => {
     ]);
   });
 
+  it('adds an unlinked bank account to the budget', async () => {
+    const added = { ...revolut, accounts: [{ ...revolut.accounts[0]!, accountId: euro.id }] };
+    let status = connected;
+    const { user, requests } = await openSettings({
+      'GET /api/bank/status': () => ({ body: status }),
+      'GET /api/accounts': { body: { accounts: [pko, savings, euro] } },
+      'POST /api/bank/accounts/:uid/create-account': () => {
+        status = { configured: true, connections: [pkoBank, added] };
+        return { status: 201, body: { name: 'Revolut', status } };
+      },
+    });
+
+    const revolutCard = await screen.findByRole('article', { name: 'Revolut' });
+    // A linked bank account has nothing to add.
+    const pkoCard = screen.getByRole('article', { name: 'PKO BP' });
+    expect(within(pkoCard).queryByRole('button', { name: 'Add to budget' })).toBeNull();
+    await user.click(within(revolutCard).getByRole('button', { name: 'Add to budget' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Added Revolut to Accounts');
+    await waitFor(() => expect(within(revolutCard).queryByRole('button', { name: 'Add to budget' })).toBeNull());
+    expect(within(revolutCard).getByLabelText('EUR (EUR)')).toHaveValue(euro.id);
+    expect(writes(requests)).toEqual([
+      { method: 'POST', path: '/api/bank/accounts/rev-eur/create-account', body: undefined },
+    ]);
+  });
+
   it('cannot connect or sync while offline', async () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     await openSettings({
@@ -153,7 +181,7 @@ describe('bank connections', () => {
       'GET /api/accounts': { body: { accounts: [pko, savings, euro] } },
     });
     await screen.findByRole('article', { name: 'PKO BP' });
-    for (const name of ['Connect bank', 'Sync now', 'Disconnect']) {
+    for (const name of ['Connect bank', 'Sync now', 'Disconnect', 'Add to budget']) {
       for (const button of screen.getAllByRole('button', { name })) expect(button).toBeDisabled();
     }
     expect(screen.queryByRole('link', { name: 'Reconnect' })).not.toBeInTheDocument();
