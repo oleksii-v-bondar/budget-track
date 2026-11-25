@@ -158,6 +158,13 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
 - A sync quotes NBP rates first, then imports through `createTransaction` in one `runCommand` ("Bank sync") and marks
   the rows `approved = false` with `import_id = <uid>:<entry_reference ?? transaction_id ?? sha256>`; `last_synced_at`
   is written after the command (not recorded for undo). `bank_connection` / `bank_account` aren't recorded tables.
+- Payee memory (YNAB-like): `bank/payee-match.ts` turns a bank text into a comparison key (`payeeKey`: no diacritics,
+  card masks, numbers, boilerplate, legal forms or trailing cities: "ZAKUP PRZY UŻYCIU KARTY … BIEDRONKA 1234" →
+  "biedronka") and a name for a new payee (`payeeDisplayName`). An import's payee is a learned `payee_alias` (key →
+  payee), else a live user payee whose name has the key, else a similar one (`bestMatch`), else a new one; it gets that
+  payee's `last_category_id`. Imports keep the bank text in `transaction.imported_payee`; giving such a transaction
+  another user payee (edit, bulk, review) upserts the alias in the same command, so undo removes it. Merging a payee
+  re-points its aliases (and adds its name's key), renaming adds the old name's key, deleting drops its aliases.
 - The session cookie is SameSite=Lax so the bank's redirect back to `/api/bank/callback` carries it; the callback
   checks the state cookie `/api/bank/connect` set. The web app reaches `/connect` with plain links (top-level
   navigations); the service worker never serves `/api/*`. Bank logos are not shown, so the CSP keeps no other origins.

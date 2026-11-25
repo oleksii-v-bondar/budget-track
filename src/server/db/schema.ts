@@ -267,6 +267,15 @@ export const payee = pgTable(
   ],
 );
 
+/** Learned bank texts: an import whose `payeeKey` is `key` gets this payee (see `bank/payee-match.ts`). */
+export const payeeAlias = pgTable('payee_alias', {
+  key: text('key').primaryKey(),
+  payeeId: uuid('payee_id')
+    .notNull()
+    .references(() => payee.id),
+  createdAt: instant('created_at').defaultNow().notNull(),
+});
+
 export const scheduledTransaction = pgTable('scheduled_transaction', {
   id: uuid('id').primaryKey().defaultRandom(),
   accountId: uuid('account_id')
@@ -331,6 +340,8 @@ export const transaction = pgTable(
     // explicitly.
     scheduledId: uuid('scheduled_id').references(() => scheduledTransaction.id),
     importId: text('import_id'),
+    /** The bank's text an import named its payee from; changing the payee teaches `payee_alias`. */
+    importedPayee: text('imported_payee'),
     externalId: text('external_id'),
     deletedAt: instant('deleted_at'),
     ...timestamps,

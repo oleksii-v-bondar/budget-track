@@ -5,11 +5,11 @@ import { asc, eq, isNotNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AccountListResponse } from '../../shared/api/accounts';
 import type { AddToBudgetResponse, BankStatus } from '../../shared/api/bank';
-import { bankAccount, bankConnection, payee, transaction } from '../db/schema';
+import { bankAccount, bankConnection, payee, payeeAlias, transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
-import { createAccount, createCategory, createGroup, createTransaction } from '../test/fixtures';
+import { createAccount, createCategory, createGroup, createPayee, createTransaction } from '../test/fixtures';
 import { stubFx } from '../test/fx';
 import { snapshot } from '../test/snapshot';
 
@@ -451,7 +451,7 @@ describe('POST /api/bank/sync', () => {
       { accountId: pko.id, importId: `pko-1:${unnamed}`, date: '2026-11-16', payee: 'Unknown', categoryId: null, amount: 300, amountBase: 300, ...flags },
       { accountId: pko.id, importId: 'pko-1:T4', date: '2026-11-17', payee: 'BLIK na telefon', categoryId: null, amount: -2000, amountBase: -2000, ...flags },
       { accountId: pko.id, importId: 'pko-1:E1', date: '2026-11-18', payee: 'Biedronka', categoryId: groceries.id, amount: -4599, amountBase: -4599, ...flags },
-      { accountId: pko.id, importId: 'pko-1:E2', date: '2026-11-19', payee: 'ACME Sp. z o.o.', categoryId: null, amount: 500_000, amountBase: 500_000, ...flags },
+      { accountId: pko.id, importId: 'pko-1:E2', date: '2026-11-19', payee: 'ACME', categoryId: null, amount: 500_000, amountBase: 500_000, ...flags },
       { accountId: euro.id, importId: 'rev-eur:R1', date: '2026-11-19', payee: 'Uber', categoryId: null, amount: -1000, amountBase: -4300, ...flags, fxRate: '4.300000' },
     ]);
     expect(await (await app.client.get('/api/undo')).json()).toEqual({ undo: { label: 'Bank sync' }, redo: null });
@@ -523,6 +523,85 @@ describe('POST /api/bank/sync', () => {
     requests = [];
     expect(await (await sync(app)).json()).toEqual({ imported: 1, reconnectNeeded: ['PKO BP'], failed: [] });
     expect(listed().map((r) => r.path)).toEqual(['/accounts/rev-eur/transactions']);
+  });
+});
+
+describe('payee memory', () => {
+  async function linkedPko() {
+    const app = await bankApp();
+    const pko = await createAccount(app.client, { name: 'PKO', startingDate: '2026-10-01' });
+    const food = (await createGroup(app.client, 'Bills')).id;
+    const groceries = await createCategory(app.client, food, 'Groceries');
+    const phone = await createCategory(app.client, food, 'Phone');
+    await connect(app, 'PKO BP', 'pko-code');
+    await link(app, 'pko-1', pko.id);
+    bankTransactions['pko-1'] = [];
+    return { app, pko, groceries, phone };
+  }
+  /** Adds a booked transaction to the bank's list, then syncs. */
+  async function bankSends(app: TestApp, ref: string, fields: Record<string, unknown>) {
+    bankTransactions['pko-1']!.push(booked({ entry_reference: ref, ...pln('10.00'), booking_date: '2026-11-18', ...fields }));
+    app.clock.advance(MINUTE);
+    expect(await (await sync(app)).json()).toMatchObject({ imported: 1 });
+    const [row] = await t.db.select().from(transaction).where(eq(transaction.importId, `pko-1:${ref}`));
+    return row!;
+  }
+  const lastImport = async () => (await imported()).findLast(() => true)!;
+  const patch = ({ client }: TestApp, id: string, body: Record<string, unknown>) =>
+    client.send('PATCH', `/api/transactions/${id}`, body);
+  const aliases = () => t.db.select({ key: payeeAlias.key, payeeId: payeeAlias.payeeId }).from(payeeAlias).orderBy(payeeAlias.key);
+
+  it("gives another store of the same shop its payee and the category it was approved with", async () => {
+    const { app, groceries } = await linkedPko();
+    const first = await bankSends(app, 'E1', { creditor: { name: 'BIEDRONKA 1234 WARSZAWA' } });
+    expect(first.importedPayee).toBe('BIEDRONKA 1234 WARSZAWA');
+    expect(await lastImport()).toMatchObject({ payee: 'Biedronka', categoryId: null, approved: false });
+    expect((await patch(app, first.id, { categoryId: groceries.id, approved: true })).status).toBe(200);
+
+    await bankSends(app, 'E2', { creditor: { name: 'BIEDRONKA 5678 KRAKOW' } });
+    expect(await lastImport()).toMatchObject({ payee: 'Biedronka', categoryId: groceries.id, approved: false });
+    await bankSends(app, 'E3', { remittance_information: ['ZAKUP PRZY UŻYCIU KARTY 4321********1234 BIEDRONKA 1234'] });
+    expect(await lastImport()).toMatchObject({ payee: 'Biedronka', categoryId: groceries.id, approved: false });
+    expect(await t.db.select({ name: payee.name }).from(payee).where(eq(payee.name, 'Biedronka'))).toHaveLength(1);
+  });
+
+  it('learns a new payee for a bank text, undoably, and keeps it through merges and renames', async () => {
+    const { app, phone } = await linkedPko();
+    const first = await bankSends(app, 'E1', { creditor: { name: 'P4 SP. Z O.O.' } });
+    expect(await lastImport()).toMatchObject({ payee: 'P4', categoryId: null });
+    const before = await snapshot(t.db);
+
+    expect((await patch(app, first.id, { payeeName: 'Play', categoryId: phone.id })).status).toBe(200);
+    const play = (await t.db.select().from(payee).where(eq(payee.name, 'Play')))[0]!;
+    expect(await aliases()).toEqual([{ key: 'p4', payeeId: play.id }]);
+    const after = await snapshot(t.db);
+    expect((await app.client.post('/api/undo')).status).toBe(200);
+    expect(await aliases()).toEqual([]);
+    expect(await snapshot(t.db)).toEqual(before);
+    expect((await app.client.post('/api/redo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(after);
+
+    // The alias wins over the payee named "P4".
+    await bankSends(app, 'E2', { creditor: { name: 'P4 Sp. z o.o.' } });
+    expect(await lastImport()).toMatchObject({ payee: 'Play', categoryId: phone.id });
+
+    // Merging moves the aliases, and the merged payee's name, to the target.
+    const mobile = await createPayee(app.client, 'Play Mobile');
+    expect((await app.client.post(`/api/payees/${play.id}/merge`, { targetId: mobile.id })).status).toBe(200);
+    expect(await aliases()).toEqual([
+      { key: 'p4', payeeId: mobile.id },
+      { key: 'play', payeeId: mobile.id },
+    ]);
+    await bankSends(app, 'E3', { creditor: { name: 'P4 SP. Z O.O.' } });
+    expect(await lastImport()).toMatchObject({ payee: 'Play Mobile', categoryId: phone.id });
+
+    // Renaming keeps the old name's imports; deleting a payee forgets its aliases.
+    expect((await app.client.send('PATCH', `/api/payees/${mobile.id}`, { name: 'Telefon' })).status).toBe(200);
+    expect((await aliases()).map((a) => a.key)).toEqual(['p4', 'play', 'play mobile']);
+    const unused = await createPayee(app.client, 'Netia');
+    await t.db.insert(payeeAlias).values({ key: 'netia sa', payeeId: unused.id });
+    expect((await app.client.send('DELETE', `/api/payees/${unused.id}`)).status).toBe(200);
+    expect((await aliases()).map((a) => a.key)).toEqual(['p4', 'play', 'play mobile']);
   });
 });
 

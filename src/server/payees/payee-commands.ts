@@ -1,14 +1,22 @@
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
+import { payeeKey } from '../bank/payee-match';
 import type { ChangeRecorder } from '../commands/recorder';
 import type { Executor } from '../db/client';
-import { payee, scheduledSubtransaction, scheduledTransaction, subtransaction, transaction } from '../db/schema';
+import {
+  payee,
+  payeeAlias,
+  scheduledSubtransaction,
+  scheduledTransaction,
+  subtransaction,
+  transaction,
+} from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
 import { payeeKindOf, payeeUsage } from './payee-queries';
 
 type PayeeRow = typeof payee.$inferSelect;
 
 /** Live user payees: neither transfer nor system payees (spec §4.4 name uniqueness applies to these only). */
-const isUserPayee = and(isNull(payee.deletedAt), isNull(payee.transferAccountId), isNull(payee.systemKind));
+export const isUserPayee = and(isNull(payee.deletedAt), isNull(payee.transferAccountId), isNull(payee.systemKind));
 
 async function loadPayee(db: Executor, id: string): Promise<PayeeRow> {
   const [row] = await db
@@ -49,6 +57,15 @@ export async function findOrCreatePayee(rec: ChangeRecorder, name: string): Prom
   return (await findUserPayeeByName(rec.tx, name))?.id ?? (await createPayee(rec, name)).id;
 }
 
+/** Imports whose bank text has the same `payeeKey` as `text` get this payee from now on. */
+export async function learnPayeeAlias(rec: ChangeRecorder, text: string, payeeId: string): Promise<void> {
+  const key = payeeKey(text);
+  if (key === '') return;
+  const [known] = await rec.tx.select().from(payeeAlias).where(eq(payeeAlias.key, key));
+  if (known) await rec.update(payeeAlias, eq(payeeAlias.key, key), { payeeId });
+  else await rec.insert(payeeAlias, { key, payeeId });
+}
+
 export async function renamePayee(rec: ChangeRecorder, id: string, name: string): Promise<{ name: string }> {
   const current = await loadPayee(rec.tx, id);
   assertUserPayee(current);
@@ -56,13 +73,16 @@ export async function renamePayee(rec: ChangeRecorder, id: string, name: string)
     throw new DomainError('payee_name_taken', 'You already have a payee with this name. Merge the two instead.');
   }
   await rec.update(payee, eq(payee.id, id), { name });
+  // Imports named like the old name keep coming here.
+  if (payeeKey(current.name) !== payeeKey(name)) await learnPayeeAlias(rec, current.name, id);
   return { name: current.name };
 }
 
 /**
  * Spec §10: every transaction, split line, schedule and schedule line of the payee moves to the target (soft-deleted
  * transactions too, so undoing their deletion never resurrects a deleted payee), then the payee is soft-deleted.
- * The target keeps its own default category, or inherits the merged payee's.
+ * The target keeps its own default category, or inherits the merged payee's; imports the payee would have matched
+ * (its learned aliases and its name) go to the target.
  */
 export async function mergePayee(
   rec: ChangeRecorder,
@@ -84,6 +104,8 @@ export async function mergePayee(
   await rec.update(subtransaction, eq(subtransaction.payeeId, id), to);
   await rec.update(scheduledTransaction, eq(scheduledTransaction.payeeId, id), to);
   await rec.update(scheduledSubtransaction, eq(scheduledSubtransaction.payeeId, id), to);
+  await rec.update(payeeAlias, eq(payeeAlias.payeeId, id), to);
+  await learnPayeeAlias(rec, source.name, targetId);
   if (target.lastCategoryId === null && source.lastCategoryId !== null) {
     await rec.update(payee, eq(payee.id, targetId), { lastCategoryId: source.lastCategoryId });
   }
@@ -98,6 +120,7 @@ export async function deletePayee(rec: ChangeRecorder, id: string, now: Date): P
   if ((await payeeUsage(rec.tx, id)) > 0) {
     throw new DomainError('payee_in_use', 'This payee is used by transactions. Merge it into another payee instead.');
   }
+  await rec.delete(payeeAlias, eq(payeeAlias.payeeId, id));
   await rec.update(payee, eq(payee.id, id), { deletedAt: now });
   return { name: current.name };
 }

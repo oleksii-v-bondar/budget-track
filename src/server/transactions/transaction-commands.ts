@@ -6,7 +6,7 @@ import type { Executor } from '../db/client';
 import { systemPayeeId } from '../db/lookups';
 import { payee, subtransaction, transaction } from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
-import { findOrCreatePayee } from '../payees/payee-commands';
+import { findOrCreatePayee, learnPayeeAlias } from '../payees/payee-commands';
 import { accountsOf, type Aggregate, draftOf, loadAggregate, storedRates } from './aggregate';
 import {
   type DefaultRates,
@@ -311,7 +311,8 @@ export async function editDraft(
  * PATCH /api/transactions/:id (spec §10 "Creating and editing", "Transfers"): the edited transaction is planned again
  * with every rule of a new one, then its rows are brought in line. Spec §9: a new date replaces an NBP rate with that
  * day's (from `context.defaults`); a manual rate stays until a new one is sent. `deletedIds` lists the transactions
- * the edit soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts).
+ * the edit soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts). A new user payee for an
+ * imported transaction becomes the payee of its bank text (`payee_alias`).
  */
 export async function updateTransaction(
   rec: ChangeRecorder,
@@ -345,6 +346,10 @@ export async function updateTransaction(
   const deletedIds = await syncPlan(rec, agg, plan, context.now, replaceLines);
   if (draft.payeeId !== agg.main.payeeId || draft.categoryId !== agg.main.categoryId) {
     await rememberCategory(rec, plan);
+  }
+  // A new payee for an import teaches the next imports with this bank text.
+  if (agg.main.importedPayee && plan.payee?.kind === 'user' && draft.payeeId !== agg.main.payeeId) {
+    await learnPayeeAlias(rec, agg.main.importedPayee, plan.payee.id);
   }
   return { payeeName: plan.payee?.name ?? null, deletedIds };
 }

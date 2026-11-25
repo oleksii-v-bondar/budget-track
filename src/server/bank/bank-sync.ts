@@ -7,12 +7,13 @@ import { MAX_AMOUNT } from '../../shared/api/common';
 import { addDays, type IsoDate, monthOf } from '../../engine';
 import { createAccount } from '../accounts/account-commands';
 import { todayIn } from '../clock';
+import type { ChangeRecorder } from '../commands/recorder';
 import { runCommand } from '../commands/run-command';
 import type { EnableBankingConfig } from '../config';
-import { account, bankAccount, bankConnection, transaction } from '../db/schema';
+import { account, bankAccount, bankConnection, payee, payeeAlias, transaction } from '../db/schema';
 import type { AppDeps } from '../http/app';
 import { AppError, DomainError } from '../http/errors';
-import { findUserPayeeByName } from '../payees/payee-commands';
+import { createPayee, findUserPayeeByName, isUserPayee } from '../payees/payee-commands';
 import type { DefaultRates } from '../transactions/plan';
 import { createTransaction } from '../transactions/transaction-commands';
 import {
@@ -21,6 +22,7 @@ import {
   EnableBankingError,
   enableBankingClient,
 } from './enable-banking';
+import { bestMatch, payeeDisplayName, payeeKey } from './payee-match';
 
 /** The banks offered are Polish. */
 const COUNTRY = 'PL';
@@ -336,8 +338,36 @@ export async function addToBudget(deps: AppDeps, uid: string): Promise<{ name: s
 }
 
 /**
+ * The payee of an import (YNAB-like), by the `payeeKey` of its bank text: the payee a learned alias names, else a payee
+ * whose name has the same key or a similar one (`bestMatch`), else a new payee named after the text.
+ */
+async function payeeOfImport(rec: ChangeRecorder, text: string): Promise<{ id: string; lastCategoryId: string | null }> {
+  const key = payeeKey(text);
+  const [alias] = await rec.tx
+    .select({ id: payee.id, lastCategoryId: payee.lastCategoryId })
+    .from(payeeAlias)
+    .innerJoin(payee, eq(payee.id, payeeAlias.payeeId))
+    .where(and(eq(payeeAlias.key, key), isUserPayee));
+  if (alias) return alias;
+  // ponytail: reads every live payee per import; fine for one user's hundreds, cache per sync if it ever isn't.
+  const payees = await rec.tx
+    .select({
+      id: payee.id,
+      name: payee.name,
+      lastCategoryId: payee.lastCategoryId,
+      lastUsed: sql<string | null>`(select max(t.date)::text from ${transaction} t where t.payee_id = ${payee.id} and t.deleted_at is null)`,
+    })
+    .from(payee)
+    .where(isUserPayee);
+  const match = bestMatch(key, payees.map((p) => ({ ...p, key: payeeKey(p.name) })));
+  if (match) return match;
+  const name = payeeDisplayName(text);
+  return (await findUserPayeeByName(rec.tx, name)) ?? { id: (await createPayee(rec, name)).id, lastCategoryId: null };
+}
+
+/**
  * Imports the booked transactions of every linked bank account of the active connections as one undoable command
- * ("Bank sync"): unapproved and cleared, the counterparty as the payee with that payee's last category (YNAB-like).
+ * ("Bank sync"): unapproved and cleared, the counterparty's payee (`payeeOfImport`) with its last category (YNAB-like).
  * The import id (`<uid>:<entry reference>`) skips what was imported before, deleted or not, also from an earlier
  * session of the same bank account. Transactions dated before the account's starting balance (already in it) or after
  * today are left out. A connection whose session has expired becomes `reconnect_needed` and is skipped; one that
@@ -436,19 +466,23 @@ async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
         const ref = refOf(i.importId);
         if (seen.has(ref)) continue;
         seen.add(ref);
-        const payee = await findUserPayeeByName(rec.tx, i.payeeName);
+        const match = await payeeOfImport(rec, i.payeeName);
         const input = {
           accountId,
           date: i.date,
-          payeeName: i.payeeName,
-          categoryId: onBudget ? (payee?.lastCategoryId ?? null) : null,
+          payeeId: match.id,
+          categoryId: onBudget ? match.lastCategoryId : null,
           memo: '',
           amount: i.amount,
           cleared: 'cleared' as const,
           flag: null,
         };
         const saved = await createTransaction(rec, input, today, i.defaults);
-        await rec.update(transaction, eq(transaction.id, saved.id), { approved: false, importId: i.importId });
+        await rec.update(transaction, eq(transaction.id, saved.id), {
+          approved: false,
+          importId: i.importId,
+          importedPayee: i.payeeName,
+        });
         count++;
       }
     }

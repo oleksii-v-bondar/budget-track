@@ -39,6 +39,7 @@ describe('migrations', () => {
       'loan_interest_override',
       'month_note',
       'payee',
+      'payee_alias',
       'scheduled_subtransaction',
       'scheduled_transaction',
       'session',
