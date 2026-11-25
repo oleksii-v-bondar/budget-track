@@ -77,6 +77,14 @@ describe('Edit Plan', () => {
     expect(screen.getByTestId('rta-banner')).toBeInTheDocument();
   });
 
+  it('invites to add a group while there is none', async () => {
+    fakeApi(SIGNED_IN);
+    renderApp('/budget?month=2026-11');
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Plan' }));
+    expect(await screen.findByText('No groups yet. Tap New Group to add one.')).toBeInTheDocument();
+    expect(screen.getByTestId('cost-to-be-me')).toHaveTextContent('0,00 zł');
+  });
+
   it("shows each category's monthly target, naming cadences other than monthly", async () => {
     await openEditPlan();
     expect(row('c-rent')).toHaveTextContent(/^Rent2 000,00 zł$/);

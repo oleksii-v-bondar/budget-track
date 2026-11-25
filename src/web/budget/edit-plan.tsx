@@ -546,6 +546,7 @@ export function EditPlan({ view, onClose }: { view: BudgetMonthDto; onClose: () 
             />
           )}
         </ReorderList>
+        {groups.length === 0 && <p className="px-4 py-8 text-center text-muted">No groups yet. Tap New Group to add one.</p>}
         <HiddenSection view={view} onEdit={setEditing} />
       </div>
 
