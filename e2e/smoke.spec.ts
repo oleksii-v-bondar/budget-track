@@ -42,13 +42,14 @@ test('sign in, add an account and a category, assign, spend, and undo', async ({
   await wizard.getByRole('button', { name: 'Add account', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Balances' }).getByRole('heading', { name: 'Checking' })).toBeVisible();
 
-  // 3. A group and a category, in the Plan's edit mode.
+  // 3. A group and a category, in the Plan's Edit Plan view.
   await tab('Plan').click();
   const banner = page.getByTestId('rta-banner');
   await expect(banner).toHaveText(/1\s000,00\szł/);
-  await page.getByRole('button', { name: 'Edit categories' }).click();
-  await page.getByRole('button', { name: 'Add group' }).click();
-  const newGroup = page.getByRole('dialog', { name: 'New group' });
+  await page.getByRole('button', { name: 'Edit Plan' }).click();
+  await expect(page.getByRole('heading', { name: 'Edit Plan' })).toBeVisible();
+  await page.getByRole('button', { name: 'New Group' }).click();
+  const newGroup = page.getByRole('dialog', { name: 'New Group' });
   await newGroup.getByLabel('Name').fill('Everyday');
   await newGroup.getByRole('button', { name: 'Add group' }).click();
   await expect(page.getByText('Create group "Everyday"')).toBeVisible();
@@ -57,7 +58,7 @@ test('sign in, add an account and a category, assign, spend, and undo', async ({
   await newCategory.getByLabel('Name').fill('Groceries');
   await newCategory.getByRole('button', { name: 'Add category' }).click();
   await expect(page.getByText('Create category "Groceries"')).toBeVisible();
-  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
 
   // 4. Assign with a keypad expression.
   const groceries = page.getByRole('button', { name: /^Groceries/ });

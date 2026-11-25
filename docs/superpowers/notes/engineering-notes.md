@@ -240,7 +240,10 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   review), `/accounts`, `/accounts/$accountId` (a register), `/reflect`, `/transactions/new?accountId=`, `/settings`
   (from the "…" menu). The tab bar is Home · Plan · Spending · Accounts · Reflect; "+ Transaction" opens the new
   transaction in a `Sheet` (in a register it starts in that account). Editing a transaction, a category or an account
-  happens in a `Sheet` on its screen. Plan edit mode reorders with `@dnd-kit`. Home's counts (`useAttention`,
+  happens in a `Sheet` on its screen. The Plan's edit icon opens Edit Plan (`budget/edit-plan.tsx`), a full-screen
+  view over the Plan, like YNAB's: Cost to Be Me (`budget/plan-targets.ts` turns each target into what it costs a
+  month), the month's targets against the expected monthly income (`/api/budget/settings`), and every group and
+  category to add, rename, move, hide, delete and give a target; its Reorder mode drags them with `@dnd-kit`. Home's counts (`useAttention`,
   `home/attention.ts`) and Reflect (`reflect/reflect-model.ts`) read the month views (`GET /api/budget/:month`):
   spending is the categories' net outflows (card payment categories left out), income `rta.income`. There are no
   Scheduled, Payees or loan screens: a future-dated transaction becomes a one-time schedule on the server and the

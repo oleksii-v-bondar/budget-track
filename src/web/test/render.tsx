@@ -30,4 +30,5 @@ export const SIGNED_IN = {
   'GET /api/auth/status': { body: { authenticated: true } },
   'GET /api/undo': { body: { undo: null, redo: null } },
   'GET /api/budget/:month': (request: FakeRequest) => ({ body: budgetMonth({ month: monthOfPath(request.path) }) }),
+  'GET /api/budget/settings': { body: { expectedMonthlyIncome: null } },
 };

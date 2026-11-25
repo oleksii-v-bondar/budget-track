@@ -146,7 +146,7 @@ describe('the Plan screen', () => {
   it('says when the budget has no categories yet', async () => {
     await openBudget({});
     expect(
-      await screen.findByText('No categories yet. Tap Edit categories to add a group and its categories.'),
+      await screen.findByText('No categories yet. Tap Edit Plan to add a group and its categories.'),
     ).toBeInTheDocument();
     expect(screen.getByTestId('rta-banner')).toHaveTextContent('0,00 zł');
   });

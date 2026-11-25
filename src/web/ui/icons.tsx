@@ -208,3 +208,48 @@ export const CategoryNeededIcon = (props: IconProps) => (
     <path d="m8.5 12.5 2.5 2.5 4.5-5" />
   </Icon>
 );
+
+export const CheckIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="m5 12.5 4.5 4.5L19 7.5" />
+  </Icon>
+);
+
+export const PencilIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="m4 20 1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19Z" />
+  </Icon>
+);
+
+/** New Group: a folder with a plus. */
+export const FolderPlusIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+    <path d="M12 10v6M9 13h6" />
+  </Icon>
+);
+
+/** Reorder: an arrow up beside an arrow down. */
+export const ReorderIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4" />
+  </Icon>
+);
+
+/** Add to a group: a filled disc with a plus cut out. */
+export const PlusCircleIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="12" cy="12" r="10" fill="currentColor" stroke="none" />
+    <path d="M12 7.5v9M7.5 12h9" className="stroke-page" />
+  </Icon>
+);
+
+/** A group's actions: three dots in a ring. */
+export const MoreCircleIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="12" cy="12" r="10" />
+    <circle cx="7.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="16.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
+  </Icon>
+);

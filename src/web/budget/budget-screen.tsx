@@ -4,7 +4,7 @@ import type { BudgetMonthDto } from '../../shared/api/budget';
 import { api, ApiError, unwrap } from '../lib/api';
 import { errorMessage } from '../lib/commands';
 import { formatMoney, formatMonth, formatMonthShort } from '../lib/format';
-import { PILL_BUTTON, ScreenHeader } from '../shell/screen-header';
+import { ScreenHeader } from '../shell/screen-header';
 import { Button } from '../ui/button';
 import { cx } from '../ui/cx';
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, EditIcon, FilterIcon, NoteIcon } from '../ui/icons';
@@ -12,7 +12,7 @@ import { Sheet } from '../ui/sheet';
 import { budgetMonthQuery } from './budget-api';
 import { CategoryList } from './category-list';
 import { CategorySheetContent } from './category-sheet';
-import { BudgetEditor } from './edit-mode';
+import { EditPlan } from './edit-plan';
 import { FilterMenu } from './filter-menu';
 import { BUDGET_FILTERS, type BudgetFilter, filterCounts } from './filters';
 import { MonthPicker } from './month-picker';
@@ -117,11 +117,11 @@ function CategorySheet({
 
 const TOOL = 'flex size-11 items-center justify-center rounded-full hover:bg-white/10';
 
-/** The top bar's left end: edit mode and the filters. */
+/** The top bar's left end: Edit Plan and the filters. */
 function PlanTools({ filter, onEdit, onFilter }: { filter: BudgetFilter; onEdit: () => void; onFilter: () => void }) {
   return (
     <div className="flex items-center rounded-full bg-raised px-1 ring-1 ring-white/5">
-      <button type="button" aria-label="Edit categories" className={TOOL} onClick={onEdit}>
+      <button type="button" aria-label="Edit Plan" className={TOOL} onClick={onEdit}>
         <EditIcon />
       </button>
       <button
@@ -159,19 +159,12 @@ export function BudgetScreen({ month, filter, onMonthChange, onFilterChange }: B
   const view = query.data;
   const filterLabel = BUDGET_FILTERS.find((f) => f.value === filter)!.label;
 
+  if (view && editing) return <EditPlan view={view} onClose={() => setEditing(false)} />;
   return (
     <div className="pb-4">
       <h1 className="sr-only">Plan</h1>
       <ScreenHeader
-        left={
-          editing ? (
-            <button type="button" className={PILL_BUTTON} onClick={() => setEditing(false)}>
-              Done
-            </button>
-          ) : (
-            <PlanTools filter={filter} onEdit={() => setEditing(true)} onFilter={() => setOpen('filter')} />
-          )
-        }
+        left={<PlanTools filter={filter} onEdit={() => setEditing(true)} onFilter={() => setOpen('filter')} />}
         center={
           <button
             type="button"
@@ -184,12 +177,7 @@ export function BudgetScreen({ month, filter, onMonthChange, onFilterChange }: B
           </button>
         }
       />
-      {view && editing ? (
-        <div className="mt-3 flex flex-col gap-3">
-          <h2 className="px-4 text-2xl font-bold">Edit categories</h2>
-          <BudgetEditor view={view} />
-        </div>
-      ) : view ? (
+      {view ? (
         <div
           aria-busy={query.isPlaceholderData || undefined}
           className={cx('mt-3 flex flex-col gap-3', query.isPlaceholderData && 'opacity-60')}

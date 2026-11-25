@@ -63,7 +63,7 @@ export function filterCounts(view: BudgetMonthDto): Record<BudgetFilter, number>
 
 /** Shown when a filter matches nothing. */
 export const EMPTY_FILTER_MESSAGES: Record<BudgetFilter, string> = {
-  all: 'No categories yet. Tap Edit categories to add a group and its categories.',
+  all: 'No categories yet. Tap Edit Plan to add a group and its categories.',
   overspent: 'No category is overspent.',
   underfunded: 'No target needs more money this month.',
   overfunded: 'No category has more assigned than its target needs.',
