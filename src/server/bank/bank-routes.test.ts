@@ -5,8 +5,8 @@ import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AccountListResponse } from '../../shared/api/accounts';
 import type { AddToBudgetResponse, BankStatus } from '../../shared/api/bank';
-import type { UpdateTransactionResponse } from '../../shared/api/transactions';
-import { account, bankAccount, bankConnection, payee, payeeAlias, transaction } from '../db/schema';
+import type { RegisterResponse, UpdateTransactionResponse } from '../../shared/api/transactions';
+import { account, bankAccount, bankConnection, bankImport, payee, payeeAlias, transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
@@ -148,11 +148,11 @@ afterEach(async () => {
   await t.drop();
 });
 
-async function bankApp(): Promise<TestApp> {
+async function bankApp(fx = stubFx({ EUR: '4.3' })): Promise<TestApp> {
   const { port } = server.address() as AddressInfo;
   const app = createTestApp(t.db, {
     now: NOW,
-    fx: stubFx({ EUR: '4.3' }),
+    fx,
     config: { enableBanking: { appId: APP_ID, privateKey, baseUrl: `http://127.0.0.1:${port}`, redirectUri: REDIRECT } },
   });
   await setUpBudget(app);
@@ -431,12 +431,12 @@ describe('POST /api/bank/sync', () => {
     return { app, pko, euro, groceries };
   }
 
-  it('imports booked transactions, unapproved, as one undoable "Bank sync", and only once', async () => {
+  it('imports booked and pending transactions, unapproved, as one undoable "Bank sync", and only once', async () => {
     const { app, pko, euro, groceries } = await linkedBanks();
     const before = await snapshot(t.db);
 
     const res = await sync(app);
-    expect(await res.json()).toEqual({ imported: 5, matched: 0, paired: 0, reconnectNeeded: [], failed: [] });
+    expect(await res.json()).toEqual({ imported: 6, pending: 1, matched: 0, paired: 0, dropped: 0, reconnectNeeded: [], failed: [] });
     // The first sync goes back 90 days, but not past the starting balance; every page is read; pko-2 isn't linked.
     const dates = { date_from: '2026-10-01', date_to: '2026-11-20' };
     expect(listed().map((r) => [r.path, r.query])).toEqual([
@@ -454,11 +454,13 @@ describe('POST /api/bank/sync', () => {
       { accountId: pko.id, importId: 'pko-1:E1', date: '2026-11-18', payee: 'Biedronka', categoryId: groceries.id, amount: -4599, amountBase: -4599, ...flags },
       { accountId: pko.id, importId: 'pko-1:E2', date: '2026-11-19', payee: 'ACME', categoryId: null, amount: 500_000, amountBase: 500_000, ...flags },
       { accountId: euro.id, importId: 'rev-eur:R1', date: '2026-11-19', payee: 'Uber', categoryId: null, amount: -1000, amountBase: -4300, ...flags, fxRate: '4.300000' },
+      // Pending at the bank: uncleared until it is booked.
+      { accountId: pko.id, importId: 'pko-1:E3', date: '2026-11-20', payee: 'Lidl', categoryId: null, amount: -1250, amountBase: -1250, ...flags, cleared: 'uncleared' },
     ]);
     expect(await (await app.client.get('/api/undo')).json()).toEqual({ undo: { label: 'Bank sync' }, redo: null });
     const { accounts } = (await (await app.client.get('/api/accounts')).json()) as AccountListResponse;
     expect(accounts.map((a) => [a.name, a.unapprovedCount])).toEqual([
-      ['PKO', 4],
+      ['PKO', 5],
       ['Revolut', 1],
     ]);
     const after = await snapshot(t.db);
@@ -471,7 +473,7 @@ describe('POST /api/bank/sync', () => {
     // The next sync overlaps the last by 5 days and imports nothing new, so it adds no undo entry.
     requests = [];
     app.clock.advance(30 * MINUTE);
-    expect(await (await sync(app)).json()).toEqual({ imported: 0, matched: 0, paired: 0, reconnectNeeded: [], failed: [] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, pending: 0, matched: 0, paired: 0, dropped: 0, reconnectNeeded: [], failed: [] });
     expect(listed()[0]!.query).toEqual({ date_from: '2026-11-15', date_to: '2026-11-20' });
     expect(await snapshot(t.db)).toEqual(after);
 
@@ -485,7 +487,7 @@ describe('POST /api/bank/sync', () => {
     expect(await connect(app, 'PKO BP', 'pko-code')).toBe('/settings');
     bankTransactions['pko-1b'] = bankTransactions['pko-1']!;
     requests = [];
-    expect(await (await sync(app)).json()).toEqual({ imported: 0, matched: 0, paired: 0, reconnectNeeded: [], failed: [] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, pending: 0, matched: 0, paired: 0, dropped: 0, reconnectNeeded: [], failed: [] });
     expect(listed()[0]).toMatchObject({
       path: '/accounts/pko-1b/transactions',
       query: { date_from: '2026-11-15', date_to: '2026-11-20' },
@@ -497,7 +499,7 @@ describe('POST /api/bank/sync', () => {
     const { app, euro } = await linkedBanks();
     expired.add('rev-session');
     failing.add('pko-session');
-    expect(await (await sync(app)).json()).toEqual({ imported: 0, matched: 0, paired: 0, reconnectNeeded: ['Revolut'], failed: ['PKO BP'] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 0, pending: 0, matched: 0, paired: 0, dropped: 0, reconnectNeeded: ['Revolut'], failed: ['PKO BP'] });
     expect((await status(app)).connections.map((c) => [c.bank, c.status])).toEqual([
       ['PKO BP', 'active'],
       ['Revolut', 'reconnect_needed'],
@@ -505,7 +507,7 @@ describe('POST /api/bank/sync', () => {
 
     failing.clear();
     requests = [];
-    expect(await (await sync(app)).json()).toEqual({ imported: 4, matched: 0, paired: 0, reconnectNeeded: ['Revolut'], failed: [] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 5, pending: 1, matched: 0, paired: 0, dropped: 0, reconnectNeeded: ['Revolut'], failed: [] });
     expect(listed().every((r) => r.path.startsWith('/accounts/pko-1/'))).toBe(true);
 
     expired.clear();
@@ -522,7 +524,7 @@ describe('POST /api/bank/sync', () => {
       .where(eq(bankConnection.aspspName, 'PKO BP'));
     expect((await connectionOf(app, 'PKO BP')).status).toBe('reconnect_needed');
     requests = [];
-    expect(await (await sync(app)).json()).toEqual({ imported: 1, matched: 0, paired: 0, reconnectNeeded: ['PKO BP'], failed: [] });
+    expect(await (await sync(app)).json()).toEqual({ imported: 1, pending: 0, matched: 0, paired: 0, dropped: 0, reconnectNeeded: ['PKO BP'], failed: [] });
     expect(listed().map((r) => r.path)).toEqual(['/accounts/rev-eur/transactions']);
   });
 });
@@ -673,7 +675,7 @@ describe('matching imports and pairing transfers', () => {
     bankTransactions['pko-1'] = ['E1', 'E2', 'E3'].map((ref) => debit(ref, '25.00', '2026-11-18', 'Żabka'));
     const before = await snapshot(t.db);
 
-    expect(await syncs(app)).toEqual({ imported: 1, matched: 2, paired: 0, reconnectNeeded: [], failed: [] });
+    expect(await syncs(app)).toEqual({ imported: 1, pending: 0, matched: 2, paired: 0, dropped: 0, reconnectNeeded: [], failed: [] });
     const entry = { account: 'PKO', amount: -2500, amountBase: -2500, categoryId: groceries.id, approved: true };
     expect(await live()).toEqual([
       { ...entry, date: '2026-11-13', payee: 'Too early', cleared: 'uncleared', importId: null },
@@ -697,7 +699,7 @@ describe('matching imports and pairing transfers', () => {
     bankTransactions['rev-pln'] = [credit('R1', '100.00', '2026-11-18', 'Jan Kowalski')];
     const before = await snapshot(t.db);
 
-    expect(await syncs(app)).toEqual({ imported: 2, matched: 0, paired: 1, reconnectNeeded: [], failed: [] });
+    expect(await syncs(app)).toEqual({ imported: 2, pending: 0, matched: 0, paired: 1, dropped: 0, reconnectNeeded: [], failed: [] });
     const side = { categoryId: null, cleared: 'cleared', approved: false };
     expect(await live()).toEqual([
       { ...side, account: 'PKO', date: '2026-11-18', payee: 'Transfer : Revolut', amount: -10_000, amountBase: -10_000, importId: 'pko-1:P1' },
@@ -741,7 +743,7 @@ describe('matching imports and pairing transfers', () => {
       }),
     ];
 
-    expect(await syncs(app)).toEqual({ imported: 3, matched: 0, paired: 1, reconnectNeeded: [], failed: [] });
+    expect(await syncs(app)).toEqual({ imported: 3, pending: 0, matched: 0, paired: 1, dropped: 0, reconnectNeeded: [], failed: [] });
     const row = { date: '2026-11-18', categoryId: null, cleared: 'cleared', approved: false };
     // Both native amounts stay; the PLN side gives the PLN amounts.
     expect(await live()).toEqual([
@@ -924,6 +926,262 @@ describe('matching imports and pairing transfers', () => {
   });
 });
 
+describe('pending transactions', () => {
+  async function linkedAccounts(fx?: ReturnType<typeof stubFx>) {
+    const app = await bankApp(fx);
+    const pko = await createAccount(app.client, { name: 'PKO', startingDate: '2026-10-01' });
+    const revolut = await createAccount(app.client, { name: 'Revolut', startingDate: '2026-10-01' });
+    const euro = await createAccount(app.client, { name: 'Revolut EUR', currency: 'EUR', startingDate: '2026-10-01' });
+    const food = (await createGroup(app.client, 'Food')).id;
+    const groceries = await createCategory(app.client, food, 'Groceries');
+    const eatingOut = await createCategory(app.client, food, 'Eating out');
+    sessions['rev-code'] = {
+      ...REVOLUT_SESSION,
+      accounts: [
+        { uid: 'rev-pln', account_id: { iban: 'LT603250000000000099' }, name: 'Jan Kowalski', currency: 'PLN' },
+        REVOLUT_SESSION.accounts[0],
+      ],
+    };
+    await connect(app, 'PKO BP', 'pko-code');
+    await connect(app, 'Revolut', 'rev-code');
+    await link(app, 'pko-1', pko.id);
+    await link(app, 'rev-pln', revolut.id);
+    await link(app, 'rev-eur', euro.id);
+    bankTransactions = { 'pko-1': [], 'rev-pln': [], 'rev-eur': [] };
+    return { app, pko, revolut, euro, groceries, eatingOut };
+  }
+  /** Syncs `days` days (and a minute) after the last sync. */
+  const syncs = async (app: TestApp, days = 0) => {
+    app.clock.advance(days * DAY + MINUTE);
+    requests = [];
+    return (await sync(app)).json();
+  };
+  const nothing = { imported: 0, pending: 0, matched: 0, paired: 0, dropped: 0, reconnectNeeded: [], failed: [] };
+  /** A card payment the bank hasn't booked yet: dated the day it was made. */
+  const pending = (ref: string, amount: string, date: string, to: string) =>
+    booked({ entry_reference: ref, ...pln(amount), status: 'PDNG', transaction_date: date, creditor: { name: to } });
+  const debit = (ref: string, amount: string, date: string, to: string) =>
+    booked({ entry_reference: ref, ...pln(amount), booking_date: date, creditor: { name: to } });
+  const credit = (ref: string, amount: string, date: string, from: string) =>
+    booked({ entry_reference: ref, ...pln(amount), credit_debit_indicator: 'CRDT', booking_date: date, debtor: { name: from } });
+  const eur = (fields: Record<string, unknown>) => ({ transaction_amount: { currency: 'EUR', amount: '10.00' }, creditor: { name: 'Uber' }, ...fields });
+  const rowOf = async (id: string) => (await t.db.select().from(transaction).where(eq(transaction.id, id)))[0]!;
+  const importOf = async (importId: string) =>
+    (await t.db.select().from(transaction).where(eq(transaction.importId, importId)))[0]!;
+  const patch = ({ client }: TestApp, id: string, body: Record<string, unknown>) =>
+    client.send('PATCH', `/api/transactions/${id}`, body);
+  const holders = () =>
+    t.db.select({ key: bankImport.importId, transactionId: bankImport.transactionId }).from(bankImport).orderBy(bankImport.importId);
+  const live = () =>
+    t.db
+      .select({ account: account.name, date: transaction.date, payee: payee.name, amount: transaction.amount, cleared: transaction.cleared, approved: transaction.approved, bankPending: transaction.bankPending, importId: transaction.importId })
+      .from(transaction)
+      .innerJoin(account, eq(account.id, transaction.accountId))
+      .leftJoin(payee, eq(payee.id, transaction.payeeId))
+      .where(and(isNull(transaction.deletedAt), eq(transaction.isStartingBalance, false)))
+      .orderBy(asc(transaction.date), asc(account.name), asc(transaction.amount));
+
+  it('imports a pending payment uncleared; a later sync books the same row, keeping what the owner set', async () => {
+    const { app, pko, groceries, eatingOut } = await linkedAccounts();
+    // Biedronka's last category is Groceries.
+    await createTransaction(app.client, { accountId: pko.id, date: '2026-11-01', payeeName: 'Biedronka', categoryId: groceries.id, amount: -1000 });
+    bankTransactions['pko-1'] = [pending('P1', '45.99', '2026-11-19', 'BIEDRONKA 1234 WARSZAWA')];
+
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 1, pending: 1 });
+    const { id } = await importOf('pko-1:P1');
+    expect(await rowOf(id)).toMatchObject({
+      date: '2026-11-19',
+      amount: -4599,
+      categoryId: groceries.id,
+      cleared: 'uncleared',
+      approved: false,
+      bankPending: true,
+    });
+    // Like any uncleared transaction, it counts in the working balance and the register shows it pending.
+    expect((await accountsOf(app)).find((a) => a.id === pko.id)!.balance).toEqual({ cleared: 0, uncleared: -5599, working: -5599 });
+    const register = (await (await app.client.get(`/api/transactions?accountId=${pko.id}`)).json()) as RegisterResponse;
+    expect(register.transactions.filter((r) => !r.isStartingBalance).map((r) => [r.payeeName, r.bankPending])).toEqual([
+      ['Biedronka', true],
+      ['Biedronka', false],
+    ]);
+    expect((await patch(app, id, { categoryId: eatingOut.id })).status).toBe(200);
+
+    // Still pending a week later: nothing changes.
+    expect(await syncs(app, 8)).toEqual(nothing);
+    // Booked two days after the payment, under another id and text: the sync reaches back to the oldest pending row.
+    bankTransactions['pko-1'] = [debit('B1', '45.99', '2026-11-21', 'ZAKUP PRZY UŻYCIU KARTY BIEDRONKA 1234')];
+    const before = await snapshot(t.db);
+    expect(await syncs(app, 1)).toEqual({ ...nothing, matched: 1 });
+    expect(listed()[0]!.query).toEqual({ date_from: '2026-11-17', date_to: '2026-11-29' });
+    expect(await rowOf(id)).toMatchObject({
+      date: '2026-11-21',
+      amount: -4599,
+      categoryId: eatingOut.id,
+      cleared: 'cleared',
+      approved: false,
+      bankPending: false,
+      importId: 'pko-1:B1',
+      deletedAt: null,
+    });
+    // Both ids stay recorded, so neither is imported again.
+    expect(await holders()).toEqual([
+      { key: `${pko.id}:B1`, transactionId: id },
+      { key: `${pko.id}:P1`, transactionId: id },
+    ]);
+
+    const after = await snapshot(t.db);
+    expect(await syncs(app)).toEqual(nothing);
+    expect(await snapshot(t.db)).toEqual(after);
+    expect((await app.client.post('/api/undo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(before);
+    expect((await app.client.post('/api/redo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(after);
+  });
+
+  it('books a pending payment at a new amount within 10% at the same payee, and under the id the bank kept', async () => {
+    const { app } = await linkedAccounts();
+    bankTransactions['pko-1'] = [
+      pending('P1', '100.00', '2026-11-18', 'U SZWEJKA'),
+      pending('P2', '50.00', '2026-11-18', 'KINO MURANOW'),
+      pending('P3', '20.00', '2026-11-18', 'Żabka'),
+    ];
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 3, pending: 3 });
+    const [p1, p2, p3] = await Promise.all(['P1', 'P2', 'P3'].map((ref) => importOf(`pko-1:${ref}`)));
+
+    bankTransactions['pko-1'] = [
+      // A tip: 8% more.
+      debit('B1', '108.00', '2026-11-19', 'U Szwejka'),
+      // 4% more but somewhere else, and 20% more at the same cinema: neither books the cinema.
+      debit('B2', '52.00', '2026-11-19', 'KINO ATLANTIC'),
+      debit('B3', '60.00', '2026-11-19', 'KINO MURANOW'),
+      // Another 20.00 zł, never pending: P3 comes back booked under its own id, so it isn't P3's.
+      debit('B4', '20.00', '2026-11-19', 'Orlen'),
+      debit('P3', '20.00', '2026-11-20', 'Żabka'),
+    ];
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 3, matched: 2, dropped: 1 });
+    expect(await rowOf(p1!.id)).toMatchObject({ date: '2026-11-19', amount: -10_800, amountBase: -10_800, cleared: 'cleared', bankPending: false });
+    expect(await rowOf(p3!.id)).toMatchObject({ date: '2026-11-20', amount: -2000, cleared: 'cleared', bankPending: false, importId: 'pko-1:P3' });
+    expect((await rowOf(p2!.id)).deletedAt).not.toBeNull();
+    expect((await live()).map((r) => [r.importId, r.amount, r.cleared])).toEqual([
+      ['pko-1:B1', -10_800, 'cleared'],
+      ['pko-1:B3', -6000, 'cleared'],
+      ['pko-1:B2', -5200, 'cleared'],
+      ['pko-1:B4', -2000, 'cleared'],
+      ['pko-1:P3', -2000, 'cleared'],
+    ]);
+  });
+
+  it('never books a row the bank still lists as pending with another transaction', async () => {
+    const { app } = await linkedAccounts();
+    bankTransactions['pko-1'] = [pending('P1', '20.00', '2026-11-18', 'Orlen')];
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 1, pending: 1 });
+    // A BLIK payment of the same amount, booked at once.
+    bankTransactions['pko-1'].push(debit('B1', '20.00', '2026-11-19', 'BLIK'));
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 1 });
+    bankTransactions['pko-1'][0] = debit('P1', '20.00', '2026-11-20', 'Orlen');
+    expect(await syncs(app)).toEqual({ ...nothing, matched: 1 });
+    expect((await live()).map((r) => [r.importId, r.date, r.cleared, r.bankPending])).toEqual([
+      ['pko-1:B1', '2026-11-19', 'cleared', false],
+      ['pko-1:P1', '2026-11-20', 'cleared', false],
+    ]);
+  });
+
+  it('drops a pending row only when every bank account linked to its account lists it no more', async () => {
+    const { app, pko } = await linkedAccounts();
+    await link(app, 'pko-2', pko.id);
+    bankTransactions['pko-1'] = [pending('P1', '30.00', '2026-11-18', 'Allegro')];
+    bankTransactions['pko-2'] = [debit('X1', '1.00', '2026-11-18', 'Fee')];
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 2, pending: 1 });
+    expect(await syncs(app)).toEqual(nothing);
+    bankTransactions['pko-1'] = [];
+    expect(await syncs(app)).toEqual({ ...nothing, dropped: 1 });
+  });
+
+  it('drops a pending payment the bank no longer lists: deleted, or kept for the owner who approved it', async () => {
+    const { app } = await linkedAccounts();
+    bankTransactions['pko-1'] = [pending('P1', '30.00', '2026-11-18', 'Allegro'), pending('P2', '40.00', '2026-11-18', 'Orlen')];
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 2, pending: 2 });
+    const [p1, p2] = [await importOf('pko-1:P1'), await importOf('pko-1:P2')];
+    expect((await patch(app, p2.id, { approved: true })).status).toBe(200);
+
+    bankTransactions['pko-1'] = [];
+    const before = await snapshot(t.db);
+    expect(await syncs(app)).toEqual({ ...nothing, dropped: 2 });
+    expect(await rowOf(p1.id)).toMatchObject({ deletedAt: expect.any(Date), importId: null });
+    expect(await rowOf(p2.id)).toMatchObject({ deletedAt: null, cleared: 'uncleared', approved: true, bankPending: false });
+    expect(await holders()).toEqual([]);
+
+    const after = await snapshot(t.db);
+    expect(await syncs(app)).toEqual(nothing);
+    expect(await snapshot(t.db)).toEqual(after);
+    expect((await app.client.post('/api/undo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(before);
+    expect((await app.client.post('/api/redo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(after);
+  });
+
+  it("drops nothing when a bank fails or an account's transactions are missing an NBP rate", async () => {
+    const rates: Record<string, string> = { '2026-10-01': '4.3', '2026-11-19': '4.3' };
+    const { app } = await linkedAccounts(stubFx({ EUR: rates }));
+    bankTransactions['pko-1'] = [pending('P1', '30.00', '2026-11-19', 'Allegro')];
+    bankTransactions['rev-eur'] = [booked(eur({ entry_reference: 'E1', status: 'PDNG', transaction_date: '2026-11-19' }))];
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 2, pending: 2 });
+    const before = await snapshot(t.db);
+
+    bankTransactions['pko-1'] = [];
+    failing.add('pko-session');
+    // Booked on a day NBP has no rate for yet: the sync can't import it, so it doesn't know E1 is gone.
+    bankTransactions['rev-eur'] = [booked(eur({ entry_reference: 'B1', booking_date: '2026-11-20' }))];
+    expect(await syncs(app)).toEqual({ ...nothing, failed: ['PKO BP'] });
+    expect(await snapshot(t.db)).toEqual(before);
+
+    failing.clear();
+    rates['2026-11-20'] = '4.25';
+    expect(await syncs(app)).toEqual({ ...nothing, matched: 1, dropped: 1 });
+    expect(await importOf('rev-eur:B1')).toMatchObject({
+      date: '2026-11-20',
+      amount: -1000,
+      amountBase: -4250,
+      fxRate: '4.250000',
+      cleared: 'cleared',
+      bankPending: false,
+    });
+  });
+
+  it('a pending payment takes an entry made by hand, which the booked one then clears', async () => {
+    const { app, pko, groceries } = await linkedAccounts();
+    await createTransaction(app.client, { accountId: pko.id, date: '2026-11-18', payeeName: 'Kiosk', categoryId: groceries.id, amount: -2500 });
+    bankTransactions['pko-1'] = [pending('P1', '25.00', '2026-11-19', 'Żabka')];
+    expect(await syncs(app)).toEqual({ ...nothing, matched: 1 });
+    const row = { account: 'PKO', payee: 'Kiosk', amount: -2500, approved: true };
+    expect(await live()).toEqual([{ ...row, date: '2026-11-18', cleared: 'uncleared', bankPending: true, importId: 'pko-1:P1' }]);
+
+    bankTransactions['pko-1'] = [debit('B1', '25.00', '2026-11-20', 'Żabka')];
+    expect(await syncs(app)).toEqual({ ...nothing, matched: 1 });
+    expect(await live()).toEqual([{ ...row, date: '2026-11-20', cleared: 'cleared', bankPending: false, importId: 'pko-1:B1' }]);
+  });
+
+  it('pairs transfers with booked rows only: a pending top-up pairs once the bank books it', async () => {
+    const { app } = await linkedAccounts();
+    bankTransactions['pko-1'] = [pending('P1', '100.00', '2026-11-17', 'Revolut Ltd')];
+    bankTransactions['rev-pln'] = [credit('R1', '100.00', '2026-11-18', 'Jan Kowalski')];
+    expect(await syncs(app)).toEqual({ ...nothing, imported: 2, pending: 1 });
+    expect((await live()).map((r) => [r.account, r.payee, r.bankPending])).toEqual([
+      ['PKO', 'Revolut', true],
+      ['Revolut', 'Jan Kowalski', false],
+    ]);
+
+    bankTransactions['pko-1'] = [debit('B1', '100.00', '2026-11-19', 'Revolut Ltd')];
+    expect(await syncs(app)).toEqual({ ...nothing, matched: 1, paired: 1 });
+    const side = { date: '2026-11-19', cleared: 'cleared', approved: false, bankPending: false };
+    expect(await live()).toEqual([
+      { ...side, account: 'PKO', payee: 'Transfer : Revolut', amount: -10_000, importId: 'pko-1:B1' },
+      { ...side, account: 'Revolut', payee: 'Transfer : PKO', amount: 10_000, importId: 'rev-pln:R1' },
+    ]);
+    expect(await syncs(app)).toEqual(nothing);
+  });
+});
+
 describe('Add to budget', () => {
   it("adds a connected bank's account: the bank balance less this month's transactions, which arrive unapproved", async () => {
     const app = await bankApp();
@@ -945,8 +1203,9 @@ describe('Add to budget', () => {
 
     expect(await connect(app, 'Revolut', 'rev-code')).toBe('/settings');
     const accounts = await accountsOf(app);
-    expect(accounts.map((a) => [a.name, a.type, a.currency, a.balance.working, a.unapprovedCount])).toEqual([
-      ['Revolut', 'checking', 'PLN', 123_456, 2],
+    // The pending Lidl counts in the working balance, not the cleared one.
+    expect(accounts.map((a) => [a.name, a.type, a.currency, a.balance, a.unapprovedCount])).toEqual([
+      ['Revolut', 'checking', 'PLN', { cleared: 123_456, uncleared: -1250, working: 122_206 }, 3],
     ]);
     // 1234.56 − (5000.00 − 45.99), on the 1st.
     expect(await startingBalances()).toEqual([
@@ -955,6 +1214,7 @@ describe('Add to budget', () => {
     expect((await imported()).map((i) => [i.importId, i.date, i.amount, i.approved])).toEqual([
       ['rev-pln:R2', '2026-11-01', 500_000, false],
       ['rev-pln:R1', '2026-11-18', -4599, false],
+      ['rev-pln:R3', '2026-11-20', -1250, false],
     ]);
     expect((await connectionOf(app, 'Revolut')).accounts).toEqual([
       expect.objectContaining({ uid: 'rev-pln', accountId: accounts[0]!.id, lastSyncedAt: '2026-11-20T10:00:00.000Z' }),
@@ -971,6 +1231,24 @@ describe('Add to budget', () => {
       undone: { label: 'Create account "Revolut"' },
     });
     expect((await connectionOf(app, 'Revolut')).accounts).toMatchObject([{ uid: 'rev-pln', accountId: null }]);
+  });
+
+  it('takes the pending transactions out of an available balance, which has them already', async () => {
+    const app = await bankApp();
+    sessions['rev-code'] = {
+      ...REVOLUT_SESSION,
+      accounts: [{ uid: 'rev-pln', account_id: { iban: 'LT603250000000000099' }, name: 'Jan Kowalski', currency: 'PLN' }],
+    };
+    bankBalances['rev-pln'] = [balance('ITAV', '954.01')];
+    bankTransactions['rev-pln'] = [
+      booked({ entry_reference: 'R1', ...pln('45.99'), booking_date: '2026-11-18', creditor: { name: 'Biedronka' } }),
+      booked({ entry_reference: 'R2', ...pln('12.50'), status: 'PDNG', transaction_date: '2026-11-20', creditor: { name: 'Lidl' } }),
+    ];
+
+    expect(await connect(app, 'Revolut', 'rev-code')).toBe('/settings');
+    // 954.01 + 45.99 + 12.50 on the 1st: the working balance is the bank's available balance.
+    expect((await startingBalances()).map((b) => b.amount)).toEqual([101_250]);
+    expect((await accountsOf(app)).map((a) => a.balance)).toEqual([{ cleared: 96_651, uncleared: -1250, working: 95_401 }]);
   });
 
   it('names accounts after the bank, with the currency and the IBAN when needed, and types them', async () => {

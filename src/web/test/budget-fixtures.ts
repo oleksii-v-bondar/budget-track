@@ -214,6 +214,7 @@ export function transactionDto(fields: Partial<TransactionDto> & Pick<Transactio
     effectiveRate: null,
     cleared: 'uncleared',
     approved: true,
+    bankPending: false,
     flag: null,
     isStartingBalance: false,
     isSplit: false,

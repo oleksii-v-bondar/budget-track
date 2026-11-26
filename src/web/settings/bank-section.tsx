@@ -55,12 +55,13 @@ function lastSynced(iso: string | null): string {
   return `Last synced ${dateOf(iso)} ${new Date(iso).toTimeString().slice(0, 5)}`;
 }
 
-/** "12 new, 3 matched, 2 transfers." */
-function syncMessage({ imported, matched, paired, reconnectNeeded, failed }: BankSyncResponse): string {
+/** "12 new (2 pending), 3 matched, 2 transfers, 1 cancelled." */
+function syncMessage({ imported, pending, matched, paired, dropped, reconnectNeeded, failed }: BankSyncResponse): string {
   const counts = [
-    imported > 0 && `${imported} new`,
+    imported > 0 && `${imported} new${pending > 0 ? ` (${pending} pending)` : ''}`,
     matched > 0 && `${matched} matched`,
     paired > 0 && `${paired} transfer${paired === 1 ? '' : 's'}`,
+    dropped > 0 && `${dropped} cancelled`,
   ].filter(Boolean);
   const parts = [counts.length === 0 ? 'No new transactions.' : `${counts.join(', ')}.`];
   if (reconnectNeeded.length > 0) parts.push(`Reconnect ${reconnectNeeded.join(', ')} to sync it.`);
@@ -164,7 +165,7 @@ export function BankSection() {
       await invalidateData(queryClient);
       // Only a sync that imported nothing because of a bank is an error; otherwise its cards show what needs doing.
       const problems = result.reconnectNeeded.length + result.failed.length > 0;
-      const changed = result.imported + result.matched > 0;
+      const changed = result.imported + result.matched + result.dropped > 0;
       toast.show({
         key: COMMAND_TOAST,
         tone: problems && !changed ? 'error' : 'info',

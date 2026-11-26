@@ -144,6 +144,24 @@ describe('register', () => {
     ]);
   });
 
+  it('marks a pending transaction, also in its sheet, which still approves it', async () => {
+    const zabka = transaction(checking, 'zabka', { payeeName: 'Żabka', amount: -1_250, approved: false, bankPending: true });
+    fakeApi({
+      ...registerRoutes({ first: registerPage([zabka, lidl]) }),
+      'GET /api/categories': { body: categoryGroups([]) },
+      'GET /api/payees': { body: { payees: [] } },
+    });
+    renderApp('/transactions');
+    const row = (await screen.findByText('Żabka')).closest('li')!;
+    expect(within(row).getByText('Pending')).toBeInTheDocument();
+    expect(within(screen.getByText('Lidl').closest('li')!).queryByText('Pending')).toBeNull();
+
+    await userEvent.click(within(row).getByRole('button'));
+    const sheet = screen.getByRole('dialog', { name: 'Edit transaction' });
+    expect(within(sheet).getByText('Pending at the bank')).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Approve' })).toBeEnabled();
+  });
+
   it("starts a new transaction from an account's register in that account", async () => {
     fakeApi({
       ...registerRoutes({ first: registerPage([], { owner: checking }) }),

@@ -342,6 +342,8 @@ export const transaction = pgTable(
     importId: text('import_id'),
     /** The bank's text an import named its payee from; changing the payee teaches `payee_alias`. */
     importedPayee: text('imported_payee'),
+    /** Still pending at the bank (status PDNG): each sync books it, or deletes it when the bank drops it. */
+    bankPending: boolean('bank_pending').notNull().default(false),
     externalId: text('external_id'),
     deletedAt: instant('deleted_at'),
     ...timestamps,

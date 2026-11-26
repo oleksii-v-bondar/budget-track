@@ -50,14 +50,17 @@ export interface AddToBudgetResponse {
 }
 
 /**
- * POST /api/bank/sync, one undo entry ("Bank sync"): how many transactions were imported as new rows, how many bank
- * transactions matched a row that was already there (entered by hand, a transfer's other side), how many new rows
- * were paired with their other side into a transfer, and which banks were skipped.
+ * POST /api/bank/sync, one undo entry ("Bank sync"): how many transactions were imported as new rows (`pending` of
+ * them still pending at the bank), how many bank transactions matched a row that was already there (entered by hand,
+ * a transfer's other side, a pending row the bank booked), how many rows were paired with their other side into a
+ * transfer, how many pending rows the bank dropped (cancelled or expired), and which banks were skipped.
  */
 export interface BankSyncResponse {
   imported: number;
+  pending: number;
   matched: number;
   paired: number;
+  dropped: number;
   /** Banks whose session has expired: reconnect them in Settings. */
   reconnectNeeded: string[];
   /** Banks that couldn't be reached this time. */

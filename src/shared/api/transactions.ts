@@ -296,6 +296,8 @@ export interface TransactionDto {
   effectiveRate: string | null;
   cleared: ClearedStatus;
   approved: boolean;
+  /** A bank import still pending at the bank: the next syncs book it (and clear it) or drop it. */
+  bankPending: boolean;
   flag: FlagColor | null;
   isStartingBalance: boolean;
   isSplit: boolean;

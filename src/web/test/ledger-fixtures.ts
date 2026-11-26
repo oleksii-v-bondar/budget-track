@@ -68,6 +68,7 @@ export function transaction(owner: AccountDto, key: string, fields: Partial<Tran
     effectiveRate: null,
     cleared: 'uncleared',
     approved: true,
+    bankPending: false,
     flag: null,
     isStartingBalance: false,
     isSplit: false,

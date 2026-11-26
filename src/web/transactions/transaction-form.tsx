@@ -304,6 +304,12 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
   return (
     <>
       <form noValidate onSubmit={submit} hidden={picking !== null} className="flex flex-col gap-4">
+        {transaction?.bankPending && (
+          <p className="rounded-xl bg-raised p-3 text-sm text-muted">
+            <span className="font-semibold text-gray-200 italic">Pending at the bank</span>. It clears when the bank
+            books it.
+          </p>
+        )}
         {locked ? (
           <p className="rounded-xl bg-raised p-3 text-sm text-gray-200">
             {transaction?.transfer?.splitLineId

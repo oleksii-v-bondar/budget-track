@@ -100,6 +100,7 @@ export async function loadTransactions(db: Executor, where?: SQL, limit?: number
       effectiveRate: rateOf(currency, txn.amount, txn.amountBase),
       cleared: txn.cleared,
       approved: txn.approved,
+      bankPending: txn.bankPending,
       flag: txn.flag,
       isStartingBalance: txn.isStartingBalance,
       isSplit: txn.isSplit,

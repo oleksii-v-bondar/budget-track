@@ -161,20 +161,41 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   `<account id>:<ref>` (the import id after `<uid>:`, as account uids change with every session), with the row that
   holds it now. The sync skips what it holds, so matching and pairing may delete or move rows freely.
   `transaction.import_id` stays for display and debugging (unique per account, deleted rows included).
-- Per bank transaction, in this order (`bank-sync.ts`; the sync reports `{ imported, matched, paired }`):
+- Per bank transaction, booked ones first (`bank-sync.ts`; the sync reports
+  `{ imported, pending, matched, paired, dropped }`):
+  0. A booked one books the account's pending row it belongs to (below), if any.
   1. `matchExisting` (YNAB-like): a live row of the account with the same amount, ±4 days, that no `bank_import` holds
-     (an entry made by hand, a transfer's other side, an entered schedule), the closest date first, takes the import
-     and is cleared; payee, category, date and approval stay.
+     and isn't pending (an entry made by hand, a transfer's other side, an entered schedule), the closest date first,
+     takes the import and is cleared (a pending import leaves it uncleared and makes it pending); payee, category, date
+     and approval stay.
   2. `importNew`: a new unapproved, cleared row. A `payee_alias` to a transfer payee makes it a transfer (its side in
      the other account unapproved too) when that is another open account in the same currency on the same side of
      the budget; otherwise the alias is ignored. Its `bank_import` stores the category the payee gave it
      (`auto_category_id`).
-  3. `pairTransfer`: a new row pairs with exactly one imported row in another account (a learned transfer's: its
-     account) that is plain, unapproved, uncategorized or still in its `auto_category_id`, of the opposite sign: same
+  3. `pairTransfer` (booked rows only, on both sides): a new or newly booked row pairs with exactly one imported row in
+     another account (a learned transfer's: its account) that is plain, unapproved, not pending, uncategorized or
+     still in its `auto_category_id`, of the opposite sign: same
      currency, the opposite amount ±3 days; else PLN amounts within 2%, ±1 day. A plain row becomes a transfer through
      the planner and `syncPlan` (`transferAmount` = the other native amount; no category unless budget↔tracking, which
      takes the budget side's or doesn't pair); the transfer's side replaces the candidate: the candidate is
-     soft-deleted and its `import_id` and `bank_import` move to that side, unapproved.
+     soft-deleted and its `import_id` and `bank_import`s move to that side, unapproved.
+- Pending transactions (status PDNG, YNAB-like): imported like booked ones, but uncleared, with
+  `transaction.bank_pending`, dated by `transaction_date`. Each sync fetches far enough back to cover them (the oldest
+  pending row − 2 days, if earlier than the usual window) and reconciles them per account:
+  - A booked import books a pending row (`bookingOf`, `bookPending`): the row holding its `bank_import` (the bank kept
+    the id), else one dated −2…+7 days from the booking with the same amount, or within 10% when its bank text has the
+    same `payeeKey` (plain rows only), the closest date first; never one whose id the bank still lists (as pending, or
+    booked under that id), so a same-amount payment can't take a row whose own booking comes later. The row is
+    cleared and un-pended and takes the booked id; a plain row takes the booking date and amount through
+    `updateTransaction` (so PLN amounts follow); payee, category, memo and approval stay. Both ids stay in
+    `bank_import`, pointing at the row. An untouched booked row then tries `pairTransfer`.
+  - A pending row whose ids the bank no longer lists as pending was dropped (`dropPending`), judged only from complete
+    lists (no fetch failure, no missing NBP rate) of every bank account linked to its account: soft-deleted, or, when
+    the owner touched it (approved, cleared, categorized, memo, flag, transfer, split), kept and un-pended. Either way
+    its `import_id` is cleared and its `bank_import`s deleted, so a later copy of it imports again (or matches the
+    kept row).
+  - "Add to budget" subtracts this month's pending transactions too when the balance it starts from counts them
+    (XPCD, ITAV).
 - Marking a transaction as a transfer (the sheet's "This is a transfer", Review's "Transfer…", bulk Set payee): an
   edit that gives a plain, non-split row a transfer payee links it to its other side when that is already in the
   other account (`transferMatch` in `transaction-commands.ts`): a live, plain row of the opposite sign (not a transfer,

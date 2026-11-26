@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { and, asc, eq, gt, inArray, isNull, lt, ne, notExists, or, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, gt, inArray, isNull, lt, ne, notExists, or, sql } from 'drizzle-orm';
 import type { AccountType } from '../../shared/accounts';
 import { BASE_CURRENCY, createAccountRequestSchema } from '../../shared/api/accounts';
 import type { BankStatus, BankSyncResponse } from '../../shared/api/bank';
 import { MAX_AMOUNT } from '../../shared/api/common';
-import { addDays, type IsoDate, monthOf } from '../../engine';
+import { addDays, diffDays, type IsoDate, monthOf } from '../../engine';
 import { createAccount } from '../accounts/account-commands';
 import { todayIn } from '../clock';
 import type { ChangeRecorder } from '../commands/recorder';
@@ -17,7 +17,7 @@ import { createPayee, findUserPayeeByName, isUserPayee } from '../payees/payee-c
 import { draftOf, loadAggregate } from '../transactions/aggregate';
 import { type DefaultRates, planTransaction } from '../transactions/plan';
 import { findAccount, onBudget } from '../transactions/rules';
-import { createTransaction } from '../transactions/transaction-commands';
+import { createTransaction, updateTransaction } from '../transactions/transaction-commands';
 import { syncPlan } from '../transactions/write';
 import {
   type BankTransaction,
@@ -43,10 +43,17 @@ const PAIR_DAYS = 3;
 /** …between currencies, PLN amounts within this many percent, this many days apart at most. */
 const PAIR_FX_PERCENT = 2;
 const PAIR_FX_DAYS = 1;
+/** A pending transaction's booked copy (under a new id) is dated from this many days before it… */
+const BOOKED_BEFORE_DAYS = 2;
+/** …to this many days after it, with its amount or, at the same payee, one this many percent off (a tip, FX). */
+const BOOKED_AFTER_DAYS = 7;
+const BOOKED_AMOUNT_PERCENT = 10;
 const AUTO_SYNC_EVERY_MS = 6 * 60 * 60 * 1000;
 const AUTO_SYNC_FIRST_MS = 60 * 1000;
 /** The balance "Add to budget" starts from: booked, else expected, else available, else whichever the bank sends. */
 const BALANCE_TYPES = ['ITBD', 'CLBD', 'XPCD', 'ITAV'];
+/** The balances that count pending transactions already. */
+const PENDING_BALANCES = new Set(['XPCD', 'ITAV']);
 
 const unavailable = () =>
   new AppError(502, 'bank_unavailable', "Can't reach the bank connection service. Try again later.");
@@ -218,6 +225,8 @@ interface Import {
   date: IsoDate;
   payeeName: string;
   amount: number;
+  /** Still pending at the bank (PDNG). */
+  pending: boolean;
   defaults: DefaultRates;
 }
 
@@ -225,12 +234,16 @@ interface Import {
 const refOf = (importId: string) => importId.slice(importId.indexOf(':') + 1);
 
 /**
- * A booked transaction's import: amount in minor units, negative for a debit; the counterparty (or the first line of
- * the payment details) as the payee. Null for one without a date. `hashes` numbers transactions that have no id from
- * the bank and look the same.
+ * A booked or pending transaction's import: amount in minor units, negative for a debit; the counterparty (or the
+ * first line of the payment details) as the payee. Null for one without a date. `hashes` numbers transactions that
+ * have no id from the bank and look the same.
  */
 function importOf(uid: string, t: BankTransaction, hashes: Map<string, number>) {
-  const date = t.booking_date ?? t.value_date ?? t.transaction_date;
+  const pending = t.status === 'PDNG';
+  // A pending card payment is dated the day it was made; the bank books it a few days later.
+  const date = pending
+    ? (t.transaction_date ?? t.booking_date ?? t.value_date)
+    : (t.booking_date ?? t.value_date ?? t.transaction_date);
   if (!date) return null;
   const minor = Math.round(Math.abs(Number(t.transaction_amount.amount)) * 100);
   const amount = t.credit_debit_indicator === 'DBIT' ? -minor : minor;
@@ -241,31 +254,39 @@ function importOf(uid: string, t: BankTransaction, hashes: Map<string, number>) 
   let ref = t.entry_reference || t.transaction_id;
   if (!ref) {
     ref = createHash('sha256').update(`${date}|${amount}|${remittance.join('\n')}`).digest('hex');
-    const seen = (hashes.get(ref) ?? 0) + 1;
-    hashes.set(ref, seen);
+    const counted = `${t.status}|${ref}`;
+    const seen = (hashes.get(counted) ?? 0) + 1;
+    hashes.set(counted, seen);
     if (seen > 1) ref = `${ref}#${seen}`;
   }
-  return { importId: `${uid}:${ref}`, date, amount, payeeName };
+  return { importId: `${uid}:${ref}`, date, amount, payeeName, pending };
 }
 
-/** The booked transactions of a list the sync imports into an account in `currency` opened on `start`. */
-function bookedImports(
+/**
+ * The booked and pending transactions of a list the sync imports into an account in `currency` opened on `start`, and
+ * the refs of every pending one the bank lists, whatever its date.
+ */
+function bankImports(
   deps: AppDeps,
   uid: string,
   list: BankTransaction[],
   { start, today, currency }: { start: IsoDate; today: IsoDate; currency: string },
 ) {
   const hashes = new Map<string, number>();
-  return list.flatMap((t) => {
-    if (t.status !== 'BOOK') return [];
+  const pendingRefs: string[] = [];
+  const items = list.flatMap((t) => {
+    if (t.status !== 'BOOK' && t.status !== 'PDNG') return [];
     const item = importOf(uid, t, hashes);
-    if (!item || item.date < start || item.date > today) return [];
+    if (!item) return [];
+    if (item.pending) pendingRefs.push(refOf(item.importId));
+    if (item.date < start || item.date > today) return [];
     if (t.transaction_amount.currency.toUpperCase() !== currency || !(Math.abs(item.amount) <= MAX_AMOUNT)) {
       deps.logger.warn({ uid, importId: item.importId }, 'skipped a bank transaction');
       return [];
     }
     return [item];
   });
+  return { items, pendingRefs };
 }
 
 /** By Enable Banking's cash account type: a card account is a credit card, a savings account savings, else checking. */
@@ -292,8 +313,9 @@ async function accountNameOf(deps: AppDeps, bank: typeof bankAccount.$inferSelec
 
 /**
  * "Add to budget" (YNAB-like): creates the account an unlinked bank account syncs into, links it and syncs it. The
- * starting balance, dated the 1st of this month, is the bank's balance less this month's booked transactions, which
- * the sync then imports unapproved, for review. Two undo entries: the account's creation and the sync.
+ * starting balance, dated the 1st of this month, is the bank's balance less this month's booked transactions (and
+ * pending ones, when the balance counts them), which the sync then imports unapproved, for review. Two undo entries:
+ * the account's creation and the sync.
  */
 export async function addToBudget(deps: AppDeps, uid: string): Promise<{ name: string }> {
   const [found] = await deps.db
@@ -316,9 +338,10 @@ export async function addToBudget(deps: AppDeps, uid: string): Promise<{ name: s
     if (!picked) throw new EnableBankingError(0, null, `Enable Banking sent no ${bank.currency} balance`);
     balance = Math.round(Number(picked.amount) * 100);
     const list = await client.transactions(uid, start, today);
-    const imports = bookedImports(deps, uid, list, { start, today, currency: bank.currency });
+    const { items } = bankImports(deps, uid, list, { start, today, currency: bank.currency });
+    const counted = items.filter((i) => !i.pending || PENDING_BALANCES.has(picked.type));
     // Each transaction once, as the sync imports it.
-    month = [...new Map(imports.map((i) => [i.importId, i.amount])).values()].reduce((sum, amount) => sum + amount, 0);
+    month = [...new Map(counted.map((i) => [i.importId, i.amount])).values()].reduce((sum, amount) => sum + amount, 0);
   } catch (err) {
     if (!(err instanceof EnableBankingError)) throw err;
     deps.logger.warn({ err, bank: bankName }, 'Enable Banking failed to give a starting balance');
@@ -403,7 +426,8 @@ const daysFrom = (date: IsoDate) => sql<number>`abs(${transaction.date} - ${date
 /**
  * YNAB-like matching: the live transaction of the account with the import's amount, dated within 4 days, that no import
  * holds yet (an entry made by hand, a transfer's other side, an entered schedule), the closest date first. It takes
- * the bank's id and is cleared; its payee, category, date and approval stay. Returns its id, null when there is none.
+ * the bank's id and is cleared (a pending import's stays uncleared and becomes pending); its payee, category, date and
+ * approval stay. Returns its id, null when there is none.
  */
 async function matchExisting(rec: ChangeRecorder, accountId: string, i: Import): Promise<string | null> {
   const days = daysFrom(i.date);
@@ -417,6 +441,7 @@ async function matchExisting(rec: ChangeRecorder, accountId: string, i: Import):
         eq(transaction.amount, i.amount),
         isNull(transaction.deletedAt),
         eq(transaction.isStartingBalance, false),
+        eq(transaction.bankPending, false),
         sql`${days} <= ${MATCH_DAYS}`,
         notExists(held),
       ),
@@ -425,7 +450,8 @@ async function matchExisting(rec: ChangeRecorder, accountId: string, i: Import):
     .limit(1);
   if (!found) return null;
   await rec.update(transaction, eq(transaction.id, found.id), {
-    cleared: found.cleared === 'uncleared' ? 'cleared' : undefined,
+    cleared: !i.pending && found.cleared === 'uncleared' ? 'cleared' : undefined,
+    bankPending: i.pending || undefined,
     importId: i.importId,
     importedPayee: i.payeeName,
   });
@@ -433,8 +459,9 @@ async function matchExisting(rec: ChangeRecorder, accountId: string, i: Import):
 }
 
 /**
- * A new row for an import: unapproved and cleared, the counterparty's payee (`payeeOfImport`) with its last category.
- * A learned transfer's other side waits, unapproved, for its own bank's copy to match it.
+ * A new row for an import: unapproved and cleared (uncleared and pending while the bank hasn't booked it), the
+ * counterparty's payee (`payeeOfImport`) with its last category. A learned transfer's other side waits, unapproved, for
+ * its own bank's copy to match it.
  */
 async function importNew(
   rec: ChangeRecorder,
@@ -450,12 +477,13 @@ async function importNew(
     categoryId: budget ? match.lastCategoryId : null,
     memo: '',
     amount: i.amount,
-    cleared: 'cleared' as const,
+    cleared: i.pending ? ('uncleared' as const) : ('cleared' as const),
     flag: null,
   };
   const saved = await createTransaction(rec, input, today, i.defaults);
   const [row] = await rec.update(transaction, eq(transaction.id, saved.id), {
     approved: false,
+    bankPending: i.pending,
     importId: i.importId,
     importedPayee: i.payeeName,
   });
@@ -464,20 +492,29 @@ async function importNew(
 }
 
 /**
- * Pairs a new import with the other side of a transfer between the owner's accounts, imported into another account
- * (a learned transfer's: into its account): a plain, unapproved import, uncategorized or still in the category its
- * payee gave it, of the opposite sign (same currency: the opposite amount within 3 days; between currencies: PLN
- * amounts within 2% and 1 day). Only a single candidate pairs. A plain import becomes a transfer to that account (both
- * native amounts kept, no category between two budget accounts); the transfer's side there replaces the candidate:
- * the candidate is deleted and its bank import moves to that side, which stays unapproved. Returns whether it paired.
+ * Pairs a new (or newly booked) import with the other side of a transfer between the owner's accounts, imported into
+ * another account (a learned transfer's: into its account): a plain, unapproved, booked import, uncategorized or still
+ * in the category its payee gave it, of the opposite sign (same currency: the opposite amount within 3 days; between
+ * currencies: PLN amounts within 2% and 1 day). Only a single candidate pairs. A plain import becomes a transfer to
+ * that account (both native amounts kept, no category between two budget accounts); the transfer's side there
+ * replaces the candidate: the candidate is deleted and its bank imports move to that side, which stays unapproved.
+ * Returns whether it paired.
  */
 async function pairTransfer(rec: ChangeRecorder, x: TxnRow, now: Date): Promise<boolean> {
   if (x.amount === 0) return false;
   const days = daysFrom(x.date);
+  const imported = rec.tx
+    .select({ id: bankImport.importId })
+    .from(bankImport)
+    .where(
+      and(
+        eq(bankImport.transactionId, transaction.id),
+        or(isNull(transaction.categoryId), eq(transaction.categoryId, bankImport.autoCategoryId)),
+      ),
+    );
   const found = await rec.tx
-    .select({ y: transaction, importId: bankImport.importId, currency: account.currency, days })
+    .select({ y: transaction, currency: account.currency, days })
     .from(transaction)
-    .innerJoin(bankImport, eq(bankImport.transactionId, transaction.id))
     .innerJoin(account, eq(account.id, transaction.accountId))
     .where(
       and(
@@ -487,7 +524,8 @@ async function pairTransfer(rec: ChangeRecorder, x: TxnRow, now: Date): Promise<
         isNull(transaction.transferTxnId),
         eq(transaction.isSplit, false),
         eq(transaction.approved, false),
-        or(isNull(transaction.categoryId), eq(transaction.categoryId, bankImport.autoCategoryId)),
+        eq(transaction.bankPending, false),
+        exists(imported),
         x.amount < 0 ? gt(transaction.amount, 0) : lt(transaction.amount, 0),
         sql`${days} <= ${PAIR_DAYS}`,
       ),
@@ -500,7 +538,7 @@ async function pairTransfer(rec: ChangeRecorder, x: TxnRow, now: Date): Promise<
       : apart <= PAIR_FX_DAYS && Math.abs(base(y) - base(x)) * 100 <= PAIR_FX_PERCENT * Math.max(base(y), base(x)),
   );
   if (candidates.length !== 1) return false;
-  const { y, importId } = candidates[0]!;
+  const { y } = candidates[0]!;
   const sideId = x.transferTxnId ?? (await makeTransfer(rec, x, y, now));
   if (sideId === null) return false;
   // The import id moves to the transfer's side (unique per account, deleted rows included).
@@ -511,7 +549,7 @@ async function pairTransfer(rec: ChangeRecorder, x: TxnRow, now: Date): Promise<
     importId: y.importId,
     importedPayee: y.importedPayee,
   });
-  await rec.update(bankImport, eq(bankImport.importId, importId), { transactionId: sideId });
+  await rec.update(bankImport, eq(bankImport.transactionId, y.id), { transactionId: sideId });
   return true;
 }
 
@@ -545,14 +583,107 @@ async function makeTransfer(rec: ChangeRecorder, x: TxnRow, y: TxnRow, now: Date
   return row!.sideId!;
 }
 
+/** A live row of an account still pending at the bank, with the bank ids it holds. */
+interface PendingRow {
+  row: TxnRow;
+  keys: string[];
+  autoCategoryId: string | null;
+}
+
+/** The account's rows still pending at the bank, the oldest first. */
+async function pendingRows(rec: ChangeRecorder, accountId: string): Promise<PendingRow[]> {
+  const found = await rec.tx
+    .select({ row: transaction, key: bankImport.importId, autoCategoryId: bankImport.autoCategoryId })
+    .from(transaction)
+    .innerJoin(bankImport, eq(bankImport.transactionId, transaction.id))
+    .where(and(eq(transaction.accountId, accountId), eq(transaction.bankPending, true), isNull(transaction.deletedAt)))
+    .orderBy(asc(transaction.createdAt), asc(transaction.id));
+  const rows = new Map<string, PendingRow>();
+  for (const { row, key, autoCategoryId } of found) {
+    const pending = rows.get(row.id) ?? { row, keys: [], autoCategoryId };
+    pending.keys.push(key);
+    rows.set(row.id, pending);
+  }
+  return [...rows.values()];
+}
+
+/** The owner left an import as the sync made it: unapproved, plain, no memo or flag, in the category its payee gave. */
+const untouched = (row: TxnRow, autoCategoryId: string | null) =>
+  !row.approved && !row.transferTxnId && !row.isSplit && !row.memo && !row.flag && row.categoryId === autoCategoryId;
+
 /**
- * Imports the booked transactions of every linked bank account of the active connections as one undoable command
- * ("Bank sync"). A bank transaction recorded in `bank_import` before is skipped, whatever became of its row, also when
- * it comes from an earlier session of the same bank account. Otherwise it matches a row already there
- * (`matchExisting`), or becomes a new row (`importNew`) that may pair with its other side into a transfer
- * (`pairTransfer`). Transactions dated before the account's starting balance (already in it) or after today are left
- * out. A connection whose session has expired becomes `reconnect_needed` and is skipped; one that fails otherwise is
- * skipped this time. With a `uid`, only that bank account is synced.
+ * The pending row a booked import under a new id books: dated from 7 days before it to 2 days after it, with its
+ * amount or (a plain row whose bank text has the same payee key) within 10% of it, the closest date first, then the
+ * oldest. A row whose id the bank still lists, as pending or booked (`taken`), isn't the import's.
+ */
+function bookingOf(waiting: PendingRow[], i: Import, taken: Set<string>): PendingRow | undefined {
+  const key = payeeKey(i.payeeName);
+  const apart = (p: PendingRow) => diffDays(p.row.date, i.date);
+  return waiting
+    .filter((p) => {
+      const { row } = p;
+      if (p.keys.some((k) => taken.has(k))) return false;
+      if (apart(p) < -BOOKED_BEFORE_DAYS || apart(p) > BOOKED_AFTER_DAYS) return false;
+      if (row.amount === i.amount) return true;
+      return (
+        !row.transferTxnId &&
+        !row.isSplit &&
+        Math.sign(row.amount) === Math.sign(i.amount) &&
+        Math.abs(i.amount - row.amount) * 100 <= BOOKED_AMOUNT_PERCENT * Math.abs(row.amount) &&
+        row.importedPayee !== null &&
+        payeeKey(row.importedPayee) === key
+      );
+    })
+    .sort((a, b) => Math.abs(apart(a)) - Math.abs(apart(b)))[0];
+}
+
+/**
+ * Books a pending row with its booked copy: it is cleared, no longer pending and takes the bank's id; a plain row also
+ * takes the booking date and amount, through the planner so its PLN amount follows. Its payee, category, memo and
+ * approval stay. Returns the row.
+ */
+async function bookPending(
+  rec: ChangeRecorder,
+  { row }: PendingRow,
+  i: Import,
+  { today, now }: { today: IsoDate; now: Date },
+): Promise<TxnRow> {
+  if (!row.transferTxnId && !row.isSplit && (row.date !== i.date || row.amount !== i.amount)) {
+    const patch = { date: i.date, amount: i.amount, confirmReconciled: true };
+    await updateTransaction(rec, row.id, patch, { today, now, defaults: i.defaults });
+  }
+  const [booked] = await rec.update(transaction, eq(transaction.id, row.id), {
+    cleared: row.cleared === 'uncleared' ? 'cleared' : undefined,
+    bankPending: false,
+    importId: i.importId,
+  });
+  return booked!;
+}
+
+/**
+ * A pending row the bank dropped (a cancelled or expired authorization) is deleted, unless the owner touched it: then
+ * it stays, no longer pending, for the owner to decide. Its bank ids are forgotten, so whatever the bank lists under
+ * them later is imported again, or matches the row kept.
+ */
+async function dropPending(rec: ChangeRecorder, { row, autoCategoryId }: PendingRow, now: Date): Promise<void> {
+  const kept = row.cleared !== 'uncleared' || !untouched(row, autoCategoryId);
+  // The import id goes too (unique per account, deleted rows included).
+  const change = kept ? { bankPending: false, importId: null } : { deletedAt: now, importId: null };
+  await rec.update(transaction, eq(transaction.id, row.id), change);
+  await rec.delete(bankImport, eq(bankImport.transactionId, row.id));
+}
+
+/**
+ * Imports the booked and pending transactions of every linked bank account of the active connections as one undoable
+ * command ("Bank sync"). A bank transaction recorded in `bank_import` before is skipped, whatever became of its row,
+ * also when it comes from an earlier session of the same bank account, unless it is the booked copy of a row still
+ * pending under the same id. A booked one first books the account's pending row it belongs to (`bookingOf`,
+ * `bookPending`); otherwise it matches a row already there (`matchExisting`), or becomes a new row (`importNew`) that
+ * may pair with its other side into a transfer (`pairTransfer`). A pending one matches or becomes a row the same way,
+ * uncleared and pending, and never pairs. A pending row whose id the bank no longer lists as pending, in a complete
+ * list, was dropped (`dropPending`). Transactions dated before the account's starting balance (already in it) or after
+ * today are left out. A connection whose session has expired becomes `reconnect_needed` and is skipped; one that fails
+ * otherwise is skipped this time. With a `uid`, only that bank account is synced.
  */
 async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
   const client = bankClient(deps);
@@ -578,7 +709,21 @@ async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
     await deps.db.update(bankConnection).set({ status: 'reconnect_needed' }).where(eq(bankConnection.id, connection.id));
   };
 
-  const fetched: { uid: string; accountId: string; onBudget: boolean; imports: Import[]; complete: boolean }[] = [];
+  // Far enough back to see what became of every row still pending at the bank.
+  const pendingSince = await deps.db
+    .select({ accountId: transaction.accountId, date: sql<IsoDate>`min(${transaction.date})::text` })
+    .from(transaction)
+    .where(and(eq(transaction.bankPending, true), isNull(transaction.deletedAt)))
+    .groupBy(transaction.accountId);
+
+  const fetched: {
+    uid: string;
+    accountId: string;
+    onBudget: boolean;
+    imports: Import[];
+    pendingRefs: string[];
+    complete: boolean;
+  }[] = [];
   for (const connection of connections) {
     if (uid !== undefined && !linked.some((l) => l.bank.connectionId === connection.id)) continue;
     if (connection.status !== 'active' || connection.validUntil <= now) {
@@ -591,18 +736,22 @@ async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
         if (bank.connectionId !== connection.id) continue;
         const start = opened ?? '1970-01-01';
         const firstFrom = addDays(today, -FIRST_SYNC_DAYS);
-        const from = bank.lastSyncedAt
+        const usual = bank.lastSyncedAt
           ? addDays(todayIn(deps.config.timeZone, bank.lastSyncedAt), -OVERLAP_DAYS)
           : firstFrom > start
             ? firstFrom
             : start;
+        const oldest = pendingSince.find((p) => p.accountId === bank.accountId)?.date;
+        const reach = oldest ? addDays(oldest, -BOOKED_BEFORE_DAYS) : usual;
+        const from = reach < usual ? reach : usual;
         if (from > today) continue;
         const list = await client.transactions(bank.uid, from, today);
+        const { items, pendingRefs } = bankImports(deps, bank.uid, list, { start, today, currency });
         const imports: Import[] = [];
         // A transaction without an NBP rate waits for the next sync, which starts from the last complete one.
         let complete = true;
         const rates = new Map<IsoDate, string | null>();
-        for (const item of bookedImports(deps, bank.uid, list, { start, today, currency })) {
+        for (const item of items) {
           const defaults: DefaultRates = { date: item.date, rates: new Map() };
           if (currency !== BASE_CURRENCY) {
             if (!rates.has(item.date)) rates.set(item.date, (await deps.fx.quote(currency, item.date))?.rate ?? null);
@@ -615,7 +764,14 @@ async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
           }
           imports.push({ ...item, defaults });
         }
-        fromConnection.push({ uid: bank.uid, accountId: bank.accountId!, onBudget: accountClass !== 'tracking', imports, complete });
+        fromConnection.push({
+          uid: bank.uid,
+          accountId: bank.accountId!,
+          onBudget: accountClass !== 'tracking',
+          imports,
+          pendingRefs,
+          complete,
+        });
       }
     } catch (err) {
       if (!(err instanceof EnableBankingError)) throw err;
@@ -627,19 +783,57 @@ async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
     fetched.push(...fromConnection);
   }
 
+  // Every bank account linked to an account: only complete lists from all of them tell what the bank dropped.
+  const links = await deps.db.select({ uid: bankAccount.uid, accountId: bankAccount.accountId }).from(bankAccount);
   const counts = await runCommand(deps, 'Bank sync', async (rec) => {
-    const result = { imported: 0, matched: 0, paired: 0 };
+    const result = { imported: 0, pending: 0, matched: 0, paired: 0, dropped: 0 };
+    // By account: the ids the bank lists as pending, and those it lists as pending or booked.
+    const lists = new Map<string, { listed: Set<string>; taken: Set<string> }>();
+    for (const { accountId, imports, pendingRefs } of fetched) {
+      const list = lists.get(accountId) ?? { listed: new Set(), taken: new Set() };
+      for (const ref of pendingRefs) {
+        list.listed.add(`${accountId}:${ref}`);
+        list.taken.add(`${accountId}:${ref}`);
+      }
+      for (const i of imports) if (!i.pending) list.taken.add(`${accountId}:${refOf(i.importId)}`);
+      lists.set(accountId, list);
+    }
     for (const target of fetched) {
-      const keyOf = (i: Import) => `${target.accountId}:${refOf(i.importId)}`;
-      const keys = target.imports.map(keyOf);
+      const keyOf = (ref: string) => `${target.accountId}:${ref}`;
+      const { taken } = lists.get(target.accountId)!;
+      // Booked first: an entry made by hand matches the bank's booked copy before a pending one.
+      const imports = [...target.imports].sort((a, b) => Number(a.pending) - Number(b.pending));
+      const keys = imports.map((i) => keyOf(refOf(i.importId)));
       const known = keys.length
-        ? await rec.tx.select({ key: bankImport.importId }).from(bankImport).where(inArray(bankImport.importId, keys))
+        ? await rec.tx
+            .select({ key: bankImport.importId, transactionId: bankImport.transactionId })
+            .from(bankImport)
+            .where(inArray(bankImport.importId, keys))
         : [];
-      const seen = new Set(known.map((row) => row.key));
-      for (const i of target.imports) {
-        const key = keyOf(i);
-        if (seen.has(key)) continue;
-        seen.add(key);
+      const holders = new Map(known.map((row) => [row.key, row.transactionId]));
+      const waiting = await pendingRows(rec, target.accountId);
+      const book = async (p: PendingRow, i: Import) => {
+        waiting.splice(waiting.indexOf(p), 1);
+        const row = await bookPending(rec, p, i, { today, now });
+        result.matched++;
+        if (untouched(row, p.autoCategoryId) && (await pairTransfer(rec, row, now))) result.paired++;
+      };
+      for (const i of imports) {
+        const key = keyOf(refOf(i.importId));
+        if (holders.has(key)) {
+          // The bank booked a pending transaction under the same id.
+          const kept = i.pending ? undefined : waiting.find((p) => p.row.id === holders.get(key));
+          if (kept) await book(kept, i);
+          continue;
+        }
+        holders.set(key, null);
+        const booking = i.pending ? undefined : bookingOf(waiting, i, taken);
+        if (booking) {
+          const { row, autoCategoryId } = booking;
+          await rec.insert(bankImport, { importId: key, transactionId: row.id, autoCategoryId });
+          await book(booking, i);
+          continue;
+        }
         const matched = await matchExisting(rec, target.accountId, i);
         if (matched) {
           await rec.insert(bankImport, { importId: key, transactionId: matched });
@@ -649,7 +843,17 @@ async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
         const row = await importNew(rec, target, i, today);
         await rec.insert(bankImport, { importId: key, transactionId: row.id, autoCategoryId: row.categoryId });
         result.imported++;
-        if (await pairTransfer(rec, row, now)) result.paired++;
+        if (i.pending) result.pending++;
+        else if (await pairTransfer(rec, row, now)) result.paired++;
+      }
+    }
+    for (const [accountId, { listed }] of lists) {
+      const sources = links.filter((l) => l.accountId === accountId);
+      if (!sources.every((l) => fetched.some((f) => f.uid === l.uid && f.complete))) continue;
+      for (const p of await pendingRows(rec, accountId)) {
+        if (p.keys.some((k) => listed.has(k))) continue;
+        await dropPending(rec, p, now);
+        result.dropped++;
       }
     }
     return result;

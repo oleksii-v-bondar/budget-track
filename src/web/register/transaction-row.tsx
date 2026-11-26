@@ -46,6 +46,11 @@ export function StatusIcons({ transaction }: { transaction: TransactionDto }) {
   );
 }
 
+/** A bank import the bank hasn't booked yet. */
+export function PendingChip() {
+  return <span className="shrink-0 rounded-md bg-zero px-1.5 py-0.5 text-xs text-muted italic">Pending</span>;
+}
+
 export interface TransactionRowProps {
   transaction: TransactionDto;
   /** Whether the transaction's account is on the budget (for "Category Needed"). */
@@ -55,8 +60,9 @@ export interface TransactionRowProps {
 }
 
 /**
- * One Spending or register row: the payee, its category in a chip ("Category Needed" in yellow, with a yellow edge,
- * when a budget transaction has none) and the memo; the amount, the status icons and the account.
+ * One Spending or register row: the payee ("Pending" beside it while the bank hasn't booked it), its category in a
+ * chip ("Category Needed" in yellow, with a yellow edge, when a budget transaction has none) and the memo; the amount,
+ * the status icons and the account.
  */
 export function TransactionRow({ transaction, onBudget, showAccount }: TransactionRowProps) {
   const missing = needsCategory(transaction, onBudget);
@@ -64,7 +70,10 @@ export function TransactionRow({ transaction, onBudget, showAccount }: Transacti
   return (
     <div className={cx('flex gap-3 border-l-4 py-3 pr-4 pl-3', missing ? 'border-yellow-400' : 'border-transparent')}>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[17px] font-semibold">{payeeLabel(transaction)}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[17px] font-semibold">{payeeLabel(transaction)}</span>
+          {transaction.bankPending && <PendingChip />}
+        </span>
         {(label || transaction.memo) && (
           <span className="mt-1.5 flex min-w-0 items-center gap-2">
             {missing ? (

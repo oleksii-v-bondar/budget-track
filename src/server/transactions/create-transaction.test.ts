@@ -78,6 +78,7 @@ describe('POST /api/transactions', () => {
         effectiveRate: null,
         cleared: 'uncleared',
         approved: true,
+        bankPending: false,
         flag: null,
         isStartingBalance: false,
         isSplit: false,

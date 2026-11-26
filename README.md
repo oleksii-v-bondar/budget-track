@@ -56,7 +56,7 @@ It runs on the Oracle VM next to progress-dashboard at https://budget-track.duck
 
 ## Bank connections (Enable Banking)
 
-Optional. Budget Track imports booked transactions through [Enable Banking](https://enablebanking.com), whose
+Optional. Budget Track imports booked and pending transactions through [Enable Banking](https://enablebanking.com), whose
 restricted production mode is free for your own accounts.
 
 1. Sign up at https://enablebanking.com/sign-in/ (it emails you a sign-in link).
@@ -84,9 +84,13 @@ How it works:
   then Settings shows "Reconnect needed". Reconnecting a bank replaces its connection and keeps the account links (by
   IBAN). Disconnect ends the consent; imported transactions stay.
 - The server also syncs every 6 hours by itself. The first sync of an account goes back 90 days, but never before its
-  starting balance; later ones re-read the last 5 days and skip what was imported before. Only booked transactions
-  are imported (pending ones once they are booked); the counterparty (or the first line of the payment details)
-  becomes the payee, with the payee's last category. A sync is one Undo.
+  starting balance; later ones re-read the last 5 days (further back while a transaction is still pending) and skip
+  what was imported before. The counterparty (or the first line of the payment details) becomes the payee, with the
+  payee's last category. A sync is one Undo.
+- Pending transactions (like YNAB): a card payment the bank hasn't booked yet is imported uncleared, marked
+  "Pending", and counts in the balances and the budget. When the bank books it, the same row is cleared and takes the
+  booking date and amount (a tip, FX), keeping your payee, category, memo and approval. When the bank drops it (a
+  cancelled authorization), it is deleted, unless you approved or changed it: then it stays, no longer pending.
 - **Approve** in the register: imported transactions are cleared and unapproved (a blue dot; Accounts and the
   register header show "N to approve"). Open one, fix its payee or category and tap Approve, or select several and
   use Approve.
