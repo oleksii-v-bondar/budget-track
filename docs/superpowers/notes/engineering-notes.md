@@ -175,6 +175,17 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
      the planner and `syncPlan` (`transferAmount` = the other native amount; no category unless budget↔tracking, which
      takes the budget side's or doesn't pair); the transfer's side replaces the candidate: the candidate is
      soft-deleted and its `import_id` and `bank_import` move to that side, unapproved.
+- Marking a transaction as a transfer (the sheet's "This is a transfer", Review's "Transfer…", bulk Set payee): an
+  edit that gives a plain, non-split row a transfer payee links it to its other side when that is already in the
+  other account (`transferMatch` in `transaction-commands.ts`): a live, plain row of the opposite sign (not a transfer,
+  split, starting balance or system-payee row); same currency: the opposite amount ±5 days; else PLN amounts within
+  3%, ±3 days, and the amount of `transferAmount` if one was sent (none sent: the row's amount becomes it, and the dry
+  run sees the same draft). The closest date wins, then a row a `bank_import` holds, then the oldest. `linkPlan`
+  writes the plan's side over that row and links both (no new row): it keeps its id, cleared, approved, flag,
+  `import_id` and `bank_import`, so a re-sync skips it; a reconciled one needs `confirmReconciled`. Without a match
+  the side is created as before, and the bank's copy matches it later (`matchExisting`). `PATCH` answers
+  `{ …TransactionDto, linkedTo }` and the web app toasts "Linked with the matching transaction in <B>" or
+  "Transfer to <B> created".
 - Payee memory (YNAB-like): `bank/payee-match.ts` turns a bank text into a comparison key (`payeeKey`: no diacritics,
   card masks, numbers, boilerplate, legal forms or trailing cities: "ZAKUP PRZY UŻYCIU KARTY … BIEDRONKA 1234" →
   "biedronka") and a name for a new payee (`payeeDisplayName`). An import's payee is a learned `payee_alias` (key →
@@ -264,7 +275,11 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   review), `/accounts`, `/accounts/$accountId` (a register), `/reflect`, `/transactions/new?accountId=`, `/settings`
   (from the "…" menu). The tab bar is Home · Plan · Spending · Accounts · Reflect; "+ Transaction" opens the new
   transaction in a `Sheet` (in a register it starts in that account). Editing a transaction, a category or an account
-  happens in a `Sheet` on its screen. The Plan's edit icon opens Edit Plan (`budget/edit-plan.tsx`), a full-screen
+  happens in a `Sheet` on its screen. The transaction sheet's "This is a transfer" switch (`role="switch"`) swaps the
+  payee for a "To account" / "From account" picker of the other open accounts (choosing a "Transfer : <Account>"
+  payee turns it on; turning it off gives the payee back); the payee list shows a "Transfers" section as soon as the
+  field has the focus. In the review, unapproved rows have Approve and "Transfer…" (`register/mark-transfer.tsx`: tap
+  an account to save the row as a transfer and approve it). The Plan's edit icon opens Edit Plan (`budget/edit-plan.tsx`), a full-screen
   view over the Plan, like YNAB's: Cost to Be Me (`budget/plan-targets.ts` turns each target into what it costs a
   month), the month's targets against the expected monthly income (`/api/budget/settings`), and every group and
   category to add, rename, move, hide, delete and give a target; its Reorder mode drags them with `@dnd-kit`. Home's counts (`useAttention`,

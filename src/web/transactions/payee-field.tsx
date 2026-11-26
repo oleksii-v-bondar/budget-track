@@ -1,10 +1,16 @@
-import { type KeyboardEvent, useId, useState } from 'react';
+import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 import type { AccountDto } from '../../shared/api/accounts';
 import type { PayeeDto } from '../../shared/api/payees';
 import { cx } from '../ui/cx';
 import type { PayeeValue } from './form-model';
 
 type Option = { kind: 'create'; name: string } | { kind: 'payee'; payee: PayeeDto };
+
+interface Section {
+  key: string;
+  label: string | null;
+  options: Option[];
+}
 
 export interface PayeeFieldProps {
   label: string;
@@ -26,8 +32,9 @@ export interface PayeeFieldProps {
 const MAX_MATCHES = 8;
 
 /**
- * Spec §11 payee autocomplete: matching payees, "Transfer : <Account>" payees of the other open accounts, and
- * "Create …" for a name that doesn't exist yet (the server creates it with the transaction).
+ * Spec §11 payee autocomplete, open while the field has the focus: matching payees, a "Transfers" section of the
+ * "Transfer : <Account>" payees of the other open accounts (first while nothing is typed), and "Create …" for a name
+ * that doesn't exist yet (the server creates it with the transaction).
  */
 export function PayeeField({
   label,
@@ -46,6 +53,12 @@ export function PayeeField({
   const [text, setText] = useState(value.kind === 'none' ? '' : value.name);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  // A sheet focuses its first field as it opens: only a later focus (a tap, Tab) opens the list.
+  const ready = useRef(false);
+  useEffect(() => {
+    const timer = setTimeout(() => (ready.current = true));
+    return () => clearTimeout(timer);
+  }, []);
 
   const query = text.trim().toLowerCase();
   const matches = (name: string) => name.toLowerCase().includes(query);
@@ -53,10 +66,21 @@ export function PayeeField({
   const user = payees.filter((p) => p.kind === 'user' && matches(p.name)).slice(0, MAX_MATCHES);
   const transfers = payees.filter((p) => p.kind === 'transfer' && openAccounts.has(p.transferAccountId ?? '') && matches(p.name));
   const exact = payees.some((p) => p.kind === 'user' && p.name.toLowerCase() === query);
-  const options: Option[] = [
-    ...[...user, ...transfers].map((payee) => ({ kind: 'payee' as const, payee })),
-    ...(allowNew && query !== '' && !exact ? [{ kind: 'create' as const, name: text.trim() }] : []),
-  ];
+  const payeeSection: Section = { key: 'payees', label: 'Payees', options: user.map((payee) => ({ kind: 'payee', payee })) };
+  const transferSection: Section = {
+    key: 'transfers',
+    label: 'Transfers',
+    options: transfers.map((payee) => ({ kind: 'payee', payee })),
+  };
+  const create: Section = {
+    key: 'create',
+    label: null,
+    options: allowNew && query !== '' && !exact ? [{ kind: 'create', name: text.trim() }] : [],
+  };
+  const sections = (query === '' ? [transferSection, payeeSection] : [payeeSection, transferSection, create]).filter(
+    (section) => section.options.length > 0,
+  );
+  const options = sections.flatMap((section) => section.options);
 
   const choose = (option: Option) => {
     if (option.kind === 'create') {
@@ -109,6 +133,7 @@ export function PayeeField({
         placeholder="Who did you pay, or who paid you?"
         onChange={(event) => type(event.target.value)}
         onClick={() => setOpen(true)}
+        onFocus={() => ready.current && setOpen(true)}
         onBlur={() => setOpen(false)}
         onKeyDown={onKeyDown}
         className={cx(
@@ -123,27 +148,42 @@ export function PayeeField({
         </p>
       )}
       {open && options.length > 0 && (
-        <ul
+        <div
           id={listId}
           role="listbox"
           aria-label={`${name} suggestions`}
           className="absolute top-full z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl bg-surface py-1 shadow-lg ring-1 ring-line"
         >
-          {options.map((option, index) => (
-            <li
-              key={option.kind === 'create' ? 'create' : option.payee.id}
-              id={`${id}-option-${index}`}
-              role="option"
-              aria-selected={index === active}
-              // Keep the focus in the input, so choosing doesn't blur (and close) the list first.
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => choose(option)}
-              className={cx('cursor-pointer px-3 py-2', index === active && 'bg-brand-light')}
-            >
-              {option.kind === 'create' ? `Create "${option.name}"` : option.payee.name}
-            </li>
-          ))}
-        </ul>
+          {sections.map((section) => {
+            const first = options.indexOf(section.options[0]!);
+            return (
+              <div key={section.key} role="group" aria-label={section.label ?? undefined}>
+                {section.label && (
+                  <div aria-hidden="true" className="px-3 pt-2 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
+                    {section.label}
+                  </div>
+                )}
+                {section.options.map((option, offset) => {
+                  const index = first + offset;
+                  return (
+                    <div
+                      key={option.kind === 'create' ? 'create' : option.payee.id}
+                      id={`${id}-option-${index}`}
+                      role="option"
+                      aria-selected={index === active}
+                      // Keep the focus in the input, so choosing doesn't blur (and close) the list first.
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => choose(option)}
+                      className={cx('cursor-pointer px-3 py-2', index === active && 'bg-brand-light')}
+                    >
+                      {option.kind === 'create' ? `Create "${option.name}"` : option.payee.name}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

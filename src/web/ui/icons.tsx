@@ -253,3 +253,10 @@ export const MoreCircleIcon = (props: IconProps) => (
     <circle cx="16.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
   </Icon>
 );
+
+/** Two opposite arrows: money moving between the owner's accounts. */
+export const TransferIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M4 8h15l-4-4M20 16H5l4 4" />
+  </Icon>
+);

@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BudgetMonthDto } from '../../shared/api/budget';
@@ -8,6 +8,7 @@ import {
   balances,
   category,
   categoryGroups,
+  idFor,
   payee,
   registerPage,
   splitLine,
@@ -116,10 +117,11 @@ describe('new transaction', () => {
     const options = within(suggestions).getAllByRole('option').map((o) => o.textContent);
     expect(options).toEqual(['Transfer : Savings', 'Transfer : House', 'Transfer : Euro', 'Create "Transfer"']);
     await user.click(screen.getByRole('option', { name: 'Transfer : Savings' }));
+    // Choosing a transfer payee switches the sheet to "This is a transfer".
+    expect(screen.getByRole('switch', { name: 'This is a transfer' })).toBeChecked();
+    expect(screen.getByLabelText('To account')).toHaveValue(savings.id);
     expect(screen.getByText('A transfer between two budget accounts takes no category.')).toBeInTheDocument();
-    await user.clear(screen.getByRole('combobox', { name: 'Payee' }));
-    await user.type(screen.getByRole('combobox', { name: 'Payee' }), 'House');
-    await user.click(screen.getByRole('option', { name: 'Transfer : House' }));
+    await user.selectOptions(screen.getByLabelText('To account'), 'House');
     await user.click(screen.getByRole('button', { name: 'Add transaction' }));
     expect(screen.getByText('Choose a category for the budget side of a transfer to or from a tracking account.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Category: none' }));
@@ -128,6 +130,24 @@ describe('new transaction', () => {
     await user.click(screen.getByRole('button', { name: 'Add transaction' }));
     await waitFor(() => expect(posted(requests)).toHaveLength(1));
     expect(posted(requests)[0]!.body).toMatchObject({ payeeId: house.transferPayeeId, categoryId: rent.id, amount: -50_000 });
+  });
+
+  it('lists the transfers as soon as the payee field has the focus, before anything is typed', async () => {
+    server();
+    renderApp(`/transactions/new?accountId=${checking.id}`);
+    const user = userEvent.setup();
+    await typeAmount(user, '10');
+    const field = screen.getByRole('combobox', { name: 'Payee' });
+    act(() => field.focus());
+    const suggestions = screen.getByRole('listbox', { name: 'Payee suggestions' });
+    const groups = within(suggestions).getAllByRole('group');
+    expect(groups.map((group) => group.getAttribute('aria-label'))).toEqual(['Transfers', 'Payees']);
+    expect(within(groups[0]!).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Transfer : Savings',
+      'Transfer : House',
+      'Transfer : Euro',
+    ]);
+    expect(within(groups[1]!).getByRole('option')).toHaveTextContent('Lidl');
   });
 
   it('suggests the NBP rate for a foreign account and books at a typed rate', async () => {
@@ -210,6 +230,46 @@ describe('editing from the register', () => {
     await user.click(within(sheet).getByRole('button', { name: 'Approve' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(posted(requests).map((r) => r.body)).toEqual([{ categoryId: rent.id, approved: true, confirmReconciled: false }]);
+  });
+
+  it('marks an imported transaction as a transfer to the account chosen, and says it was linked', async () => {
+    const imported = { ...saved, cleared: 'cleared' as const, approved: false };
+    const { user, sheet, requests } = await openSaved(
+      { [`PATCH /api/transactions/${saved.id}`]: { body: { ...imported, linkedTo: idFor('txn:savings-side') } } },
+      imported,
+    );
+    const toggle = within(sheet).getByRole('switch', { name: 'This is a transfer' });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(within(sheet).queryByRole('combobox', { name: 'Payee' })).toBeNull();
+    const picker = within(sheet).getByLabelText('To account');
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Choose an account',
+      'Savings',
+      'House',
+      'Euro (EUR)',
+    ]);
+    await user.click(within(sheet).getByRole('button', { name: 'Approve' }));
+    expect(picker).toHaveAccessibleDescription('Choose the account the money goes to.');
+
+    // A transfer to a tracking account keeps the category on the budget side; between budget accounts there is none.
+    await user.selectOptions(picker, 'House');
+    expect(within(sheet).getByRole('button', { name: 'Category: Groceries' })).toBeInTheDocument();
+    await user.selectOptions(picker, 'Euro (EUR)');
+    expect(within(sheet).getByLabelText('Amount in EUR (received)')).toHaveAccessibleDescription(
+      'Leave it empty to take the amount of the matching transaction there.',
+    );
+    // Switched off, it is the transaction it was, with its payee.
+    await user.click(toggle);
+    expect(within(sheet).getByRole('combobox', { name: 'Payee' })).toHaveValue('Lidl');
+    await user.click(toggle);
+    await user.selectOptions(within(sheet).getByLabelText('To account'), 'Savings');
+    expect(within(sheet).queryByRole('button', { name: /^Category/ })).toBeNull();
+    await user.click(within(sheet).getByRole('button', { name: 'Approve' }));
+    expect(await screen.findByText('Linked with the matching transaction in Savings')).toBeInTheDocument();
+    expect(posted(requests).map((r) => r.body)).toEqual([
+      { payeeId: savings.transferPayeeId, categoryId: null, approved: true, confirmReconciled: false },
+    ]);
   });
 
   it('deletes it (confirming, as it is reconciled)', async () => {

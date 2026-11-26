@@ -22,6 +22,7 @@ import { LoadError, Loading } from '../ui/load-state';
 import { Sheet } from '../ui/sheet';
 import { BulkActions, bulkErrorMessage } from './bulk-actions';
 import { FilterForm } from './filter-form';
+import { MarkTransfer } from './mark-transfer';
 import { filterChips, type RegisterFilters, registerParams } from './filters';
 import { registerQuery } from './register-api';
 import { groupByDate, payeeLabel } from './register-days';
@@ -309,9 +310,11 @@ interface RegisterListProps {
   selection: Selection | null;
   /** While reviewing: approves one transaction. */
   onApprove: ((transaction: TransactionDto) => void) | null;
+  /** While reviewing: makes one a transfer to or from another account (and approves it). */
+  onTransfer: (transaction: TransactionDto) => void;
 }
 
-function RegisterList({ transactions, accounts, showAccount, onOpen, selection, onApprove }: RegisterListProps) {
+function RegisterList({ transactions, accounts, showAccount, onOpen, selection, onApprove, onTransfer }: RegisterListProps) {
   return groupByDate(transactions).map((day) => (
     <section key={day.date} aria-label={formatDayHeading(day.date)}>
       <h3 className="px-4 pt-5 pb-2 text-lg font-semibold">{formatDayHeading(day.date)}</h3>
@@ -349,14 +352,27 @@ function RegisterList({ transactions, accounts, showAccount, onOpen, selection, 
                 </button>
               )}
               {onApprove && !selection && !transaction.approved && (
-                <Button
-                  mutating
-                  aria-label={`Approve ${name}`}
-                  className="mr-4 min-h-9 shrink-0 px-3 text-sm"
-                  onClick={() => onApprove(transaction)}
-                >
-                  Approve
-                </Button>
+                <span className="mr-4 flex shrink-0 flex-col gap-1.5">
+                  <Button
+                    mutating
+                    aria-label={`Approve ${name}`}
+                    className="min-h-9 px-3 text-sm"
+                    onClick={() => onApprove(transaction)}
+                  >
+                    Approve
+                  </Button>
+                  {!transaction.transfer && !transaction.isSplit && !transaction.isStartingBalance && (
+                    <Button
+                      variant="secondary"
+                      mutating
+                      aria-label={`Mark ${name} as a transfer`}
+                      className="min-h-9 px-3 text-sm"
+                      onClick={() => onTransfer(transaction)}
+                    >
+                      Transfer…
+                    </Button>
+                  )}
+                </span>
               )}
             </li>
           );
@@ -392,6 +408,7 @@ export function RegisterScreen({
   );
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [editing, setEditing] = useState<TransactionDto | null>(null);
+  const [marking, setMarking] = useState<TransactionDto | null>(null);
   const approve = useCommand((ids: string[]) =>
     unwrap(api.api.transactions.bulk.$post({ json: { ids, action: { type: 'approve' }, confirmReconciled: false } })),
   );
@@ -514,6 +531,7 @@ export function RegisterScreen({
           onOpen={setEditing}
           selection={selected && { ids: selected, toggle }}
           onApprove={reviewing ? (transaction) => approve.mutate([transaction.id]) : null}
+          onTransfer={setMarking}
         />
       )}
       {hasNextPage && <LoadMore onLoad={loadMore} busy={isFetchingNextPage} />}
@@ -530,6 +548,11 @@ export function RegisterScreen({
       )}
       <Sheet open={editing !== null} onClose={() => setEditing(null)} title="Edit transaction">
         {editing && <TransactionForm transaction={editing} onDone={() => setEditing(null)} />}
+      </Sheet>
+      <Sheet open={marking !== null} onClose={() => setMarking(null)} title="Transfer">
+        {marking && (
+          <MarkTransfer transaction={marking} accounts={accounts.data.accounts} onDone={() => setMarking(null)} />
+        )}
       </Sheet>
     </div>
   );

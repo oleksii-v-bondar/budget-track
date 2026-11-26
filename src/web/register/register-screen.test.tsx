@@ -122,6 +122,28 @@ describe('register', () => {
     await waitFor(() => expect(history.location.search).toBe(''));
   });
 
+  it('makes a transaction under review a transfer to the account tapped, approving it', async () => {
+    const savings = account({ name: 'Savings', type: 'savings' });
+    const topUp = transaction(checking, 'top-up', { payeeName: 'Revolut', amount: -9_900, approved: false });
+    const { requests } = fakeApi({
+      ...registerRoutes({ first: registerPage([topUp]) }),
+      'GET /api/accounts': { body: { accounts: [{ ...checking, unapprovedCount: 1 }, tracking, savings] } },
+      [`PATCH /api/transactions/${topUp.id}`]: { body: { ...topUp, linkedTo: null } },
+    });
+    renderApp('/transactions?unapproved=true');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /^Mark Revolut -99,00\szł as a transfer$/ }));
+    const sheet = screen.getByRole('dialog', { name: 'Transfer' });
+    const choices = within(sheet).getByRole('list', { name: 'To account' });
+    expect(within(choices).getAllByRole('button').map((b) => b.textContent)).toEqual(['House', 'Savings']);
+    await user.click(within(choices).getByRole('button', { name: 'Savings' }));
+    expect(await screen.findByText('Transfer to Savings created')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(requests.filter((r) => r.method === 'PATCH').map(({ path, body }) => ({ path, body }))).toEqual([
+      { path: `/api/transactions/${topUp.id}`, body: { payeeId: savings.transferPayeeId, approved: true, confirmReconciled: false } },
+    ]);
+  });
+
   it("starts a new transaction from an account's register in that account", async () => {
     fakeApi({
       ...registerRoutes({ first: registerPage([], { owner: checking }) }),

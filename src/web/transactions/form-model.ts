@@ -49,6 +49,8 @@ export interface FormValues {
   transferAmount: string;
   /** Saving approves a transaction that waits for approval (a bank import), like YNAB. */
   approve: boolean;
+  /** "This is a transfer": the payee is the other account's transfer payee, chosen as "To/From account". */
+  transfer: boolean;
   /** A split's lines; null for a plain transaction. */
   lines: LineValues[] | null;
 }
@@ -135,6 +137,7 @@ export function newValues(today: string, context: FormContext, prefill: Prefill 
     fxRate: '',
     transferAmount: '',
     approve: false,
+    transfer: false,
     lines: null,
   };
 }
@@ -165,6 +168,7 @@ export function editValues(transaction: TransactionDto, categoryId = transaction
         ? amountToExpression(Math.abs(transaction.transfer.amount))
         : '',
     approve: !transaction.approved,
+    transfer: transaction.transfer !== null,
     lines: transaction.isSplit ? linesOf(transaction.lines, direction) : null,
   };
 }
@@ -174,6 +178,12 @@ export function transferTarget(payee: PayeeValue, context: FormContext): Account
   if (payee.kind !== 'existing') return null;
   const target = context.payees.find((p) => p.id === payee.id)?.transferAccountId;
   return context.accounts.find((a) => a.id === target) ?? null;
+}
+
+/** The payee of a transfer to or from `target`: its "Transfer : <name>" payee. */
+export function transferPayeeValue(target: AccountDto, context: FormContext): PayeeValue {
+  const name = context.payees.find((p) => p.id === target.transferPayeeId)?.name ?? `Transfer : ${target.name}`;
+  return { kind: 'existing', id: target.transferPayeeId, name };
 }
 
 /**
@@ -202,8 +212,12 @@ export function needsTransferAmount(account: AccountDto | undefined, target: Acc
   return Boolean(account && target && account.currency !== target.currency);
 }
 
-/** Checks the form before sending; keys are request paths, as in the server's answers. */
-export function checkForm(values: FormValues, context: FormContext): Record<string, string> {
+/**
+ * Checks the form before sending; keys are request paths, as in the server's answers. `linkable`: a saved plain
+ * transaction becoming a transfer may leave the other currency's amount empty, as the server then takes it from the
+ * matching transaction in the other account (or asks for it).
+ */
+export function checkForm(values: FormValues, context: FormContext, linkable = false): Record<string, string> {
   const errors: Record<string, string> = {};
   const account = context.accounts.find((a) => a.id === values.accountId);
   const target = transferTarget(values.payee, context);
@@ -216,6 +230,9 @@ export function checkForm(values: FormValues, context: FormContext): Record<stri
     if (!name.success) errors.payeeName = name.error.issues[0]!.message;
   }
   if (target && target.id === values.accountId) errors.payeeId = 'A transfer needs two different accounts.';
+  if (values.transfer && !target && !values.lines) {
+    errors.payeeId = `Choose the account the money ${values.direction === 'outflow' ? 'goes to' : 'comes from'}.`;
+  }
   if (categoryRule(account, target) === 'required' && values.categoryId === null) {
     errors.categoryId = 'Choose a category for the budget side of a transfer to or from a tracking account.';
   }
@@ -223,7 +240,7 @@ export function checkForm(values: FormValues, context: FormContext): Record<stri
     const rate = fxRateSchema.safeParse(rateInput(values.fxRate));
     if (!rate.success) errors.fxRate = rate.error.issues[0]!.message;
   }
-  if (needsTransferAmount(account, target)) {
+  if (needsTransferAmount(account, target) && !(linkable && values.transferAmount.trim() === '')) {
     const amount = readAmount(values.transferAmount);
     if (!amount.ok) errors.transferAmount = amount.error;
     else if (amount.value <= 0 || values.amount === 0) {
@@ -322,7 +339,8 @@ export function updateTransactionBody(
   if (JSON.stringify(lines) !== JSON.stringify(lineBodies(original, context))) body.lines = lines;
   if (values.memo.trim() !== original.memo.trim()) body.memo = values.memo.trim();
   if (signedAmount(values) !== signedAmount(original)) body.amount = signedAmount(values);
-  if (needsTransferAmount(account, target) && values.transferAmount.trim() !== original.transferAmount.trim()) {
+  const transferAmount = values.transferAmount.trim();
+  if (needsTransferAmount(account, target) && transferAmount !== '' && transferAmount !== original.transferAmount.trim()) {
     body.transferAmount = transferAmountOf(values);
   }
   if (rateCurrency(account, target, values.direction) !== null && values.fxRate.trim() !== original.fxRate.trim()) {

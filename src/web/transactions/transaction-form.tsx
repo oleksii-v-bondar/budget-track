@@ -26,7 +26,7 @@ import { AmountKeypad } from '../ui/amount-keypad';
 import { Button } from '../ui/button';
 import { cx } from '../ui/cx';
 import { Checkbox, FormError, SegmentedControl, SelectField, TextField } from '../ui/field';
-import { FlagIcon, LockIcon } from '../ui/icons';
+import { FlagIcon, LockIcon, TransferIcon } from '../ui/icons';
 import { LoadError, Loading } from '../ui/load-state';
 import { useToast } from '../ui/toast';
 import { CategoryPicker } from './category-picker';
@@ -44,9 +44,11 @@ import {
   needsTransferAmount,
   newLine,
   newValues,
+  type PayeeValue,
   type Prefill,
   rateCurrency,
   signedAmount,
+  transferPayeeValue,
   transferTarget,
   updateTransactionBody,
 } from './form-model';
@@ -66,6 +68,12 @@ export interface TransactionFormProps {
 
 /** One save: what the form sends. */
 type SavePlan = { kind: 'create'; body: CreateTransactionInput } | { kind: 'update'; body: UpdateTransactionRequest };
+
+/** What a save did: scheduled a future transaction, or linked a new transfer to the row already in the other account. */
+interface Saved {
+  scheduledFor: string | null;
+  linkedTo: string | null;
+}
 
 /** "1 EUR = 4,30 zł" for a transfer between currencies. */
 function rateLabel(from: { amount: number; currency: string }, to: { amount: number; currency: string }): string | null {
@@ -104,6 +112,32 @@ function FlagPicker({ value, onChange }: { value: FlagColor | null; onChange: (f
   );
 }
 
+/** "This is a transfer": the payee gives way to the account the money goes to or comes from. */
+function TransferSwitch({ checked, onChange }: { checked: boolean; onChange: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label="This is a transfer"
+      onClick={onChange}
+      className={cx(
+        'flex min-h-12 items-center gap-3 rounded-xl px-3 py-2 text-left ring-1',
+        checked ? 'bg-brand-light ring-brand/40' : 'bg-raised ring-line',
+      )}
+    >
+      <TransferIcon className={cx('size-5 shrink-0', checked ? 'text-brand' : 'text-muted')} />
+      <span className="flex-1">
+        <span className="block text-base font-medium">This is a transfer</span>
+        <span className="block text-sm text-muted">Between two of your accounts</span>
+      </span>
+      <span aria-hidden="true" className={cx('relative h-6 w-10 shrink-0 rounded-full', checked ? 'bg-brand' : 'bg-zero')}>
+        <span className={cx('absolute top-0.5 size-5 rounded-full bg-white shadow', checked ? 'left-[18px]' : 'left-0.5')} />
+      </span>
+    </button>
+  );
+}
+
 function SplitButton({ onSplit }: { onSplit: () => void }) {
   return (
     <button type="button" onClick={onSplit} className="text-sm font-semibold text-brand">
@@ -127,10 +161,16 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
   /** The category picker, for the transaction or one of its split lines. */
   const [picking, setPicking] = useState<'main' | number | null>(null);
   const set = (patch: Partial<FormValues>) => setValues((current) => ({ ...current, ...patch }));
+  /** The payee to give back when "This is a transfer" is switched off. */
+  const [plainPayee, setPlainPayee] = useState<PayeeValue>(initial.transfer ? { kind: 'none' } : initial.payee);
 
   const account = context.accounts.find((a) => a.id === values.accountId);
   const target = transferTarget(values.payee, context);
-  const rule = categoryRule(account, target);
+  const initialTarget = transferTarget(initial.payee, context);
+  // Until the other account is chosen, a transfer shows no category.
+  const rule = values.transfer && !target ? 'none' : categoryRule(account, target);
+  // A saved plain transaction that becomes a transfer may link to its other side already in the other account.
+  const linkable = Boolean(transaction && !transaction.transfer && !transaction.isSplit);
   const rateCode = rateCurrency(account, target, values.direction);
   const isoDate = parseDate(values.date);
   const month = isoDate?.slice(0, 7);
@@ -139,13 +179,13 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
   const nbp = useQuery({ ...fxRateQuery(rateCode ?? '', isoDate ?? ''), enabled: nbpEnabled });
 
   const id = transaction?.id ?? '';
-  const save = useCommand(async (plan: SavePlan) => {
+  const save = useCommand(async (plan: SavePlan): Promise<Saved> => {
     if (plan.kind === 'update') {
-      await unwrap(api.api.transactions[':id'].$patch({ param: { id }, json: plan.body }));
-      return null;
+      const updated = await unwrap(api.api.transactions[':id'].$patch({ param: { id }, json: plan.body }));
+      return { scheduledFor: null, linkedTo: updated.linkedTo ?? null };
     }
     const created = await unwrap(api.api.transactions.$post({ json: plan.body }));
-    return created.kind === 'scheduled' ? created.date : null;
+    return { scheduledFor: created.kind === 'scheduled' ? created.date : null, linkedTo: null };
   });
   const remove = useCommand((confirmReconciled: boolean) =>
     unwrap(api.api.transactions[':id'].$delete({ param: { id }, json: { confirmReconciled } })),
@@ -156,8 +196,12 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
   const errors: Record<string, string | undefined> = { ...server.fields, ...checked };
   const done = () => onDone(values.accountId);
   // Spec §5.6: the server saves a transaction dated after today as a one-time scheduled transaction.
-  const saved = (scheduledFor: string | null) => {
+  const saved = ({ scheduledFor, linkedTo }: Saved) => {
     if (scheduledFor !== null) toast.show({ message: `Scheduled for ${formatDate(scheduledFor)}` });
+    if (linkable && target) {
+      const created = `Transfer ${values.direction === 'outflow' ? 'to' : 'from'} ${target.name} created`;
+      toast.show({ message: linkedTo ? `Linked with the matching transaction in ${target.name}` : created });
+    }
     done();
   };
 
@@ -166,7 +210,7 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const problems = locked ? {} : checkForm(values, context);
+    const problems = locked ? {} : checkForm(values, context, linkable);
     setChecked(problems);
     if (Object.keys(problems).length > 0) return;
     const plan: SavePlan = transaction
@@ -189,9 +233,30 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
   const onPayee = (payee: FormValues['payee']) =>
     setValues((current) => {
       const chosen = payee.kind === 'existing' ? context.payees.find((p) => p.id === payee.id) : undefined;
+      if (chosen?.kind === 'transfer') return { ...current, payee, transfer: true };
       const categoryId = current.categoryId ?? chosen?.lastCategoryId ?? null;
       return { ...current, payee, categoryId };
     });
+
+  // The other open accounts (and a closed one the transfer already goes to).
+  const transferAccounts = context.accounts.filter(
+    (a) => a.id !== values.accountId && (!a.closed || a.id === initialTarget?.id),
+  );
+  const canTransfer = !values.lines && !transaction?.isStartingBalance && transferAccounts.length > 0;
+  const toggleTransfer = () => {
+    if (values.transfer) {
+      set({ transfer: false, payee: plainPayee, transferAmount: '' });
+      return;
+    }
+    setPlainPayee(values.payee);
+    set({ transfer: true, payee: initialTarget ? initial.payee : { kind: 'none' }, transferAmount: initial.transferAmount });
+  };
+  const pickTarget = (accountId: string) => {
+    const chosen = transferAccounts.find((a) => a.id === accountId);
+    if (!chosen) return;
+    const transferAmount = chosen.id === initialTarget?.id ? initial.transferAmount : '';
+    set({ payee: transferPayeeValue(chosen, context), transferAmount });
+  };
 
   const categories = groups.flatMap((g) => g.categories);
   const category = categories.find((c) => c.id === values.categoryId);
@@ -280,15 +345,35 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
                 }}
               />
             )}
-            <PayeeField
-              label="Payee"
-              value={values.payee}
-              onChange={onPayee}
-              payees={context.payees}
-              accounts={context.accounts}
-              accountId={values.accountId}
-              error={errors.payeeId ?? errors.payeeName}
-            />
+            {canTransfer && <TransferSwitch checked={values.transfer} onChange={toggleTransfer} />}
+            {values.transfer ? (
+              <SelectField
+                label={values.direction === 'outflow' ? 'To account' : 'From account'}
+                value={target?.id ?? ''}
+                onChange={(event) => pickTarget(event.target.value)}
+                error={errors.payeeId}
+              >
+                <option value="" disabled>
+                  Choose an account
+                </option>
+                {transferAccounts.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.name}
+                    {option.currency !== BASE_CURRENCY && ` (${option.currency})`}
+                  </option>
+                ))}
+              </SelectField>
+            ) : (
+              <PayeeField
+                label="Payee"
+                value={values.payee}
+                onChange={onPayee}
+                payees={context.payees}
+                accounts={context.accounts}
+                accountId={values.accountId}
+                error={errors.payeeId ?? errors.payeeName}
+              />
+            )}
             {values.lines && account ? (
               <SplitEditor
                 lines={values.lines}
@@ -327,9 +412,11 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
                 A transfer between two {isOnBudget(target) ? 'budget' : 'tracking'} accounts takes no category.
               </p>
             ) : (
-              <div className="flex justify-end">
-                <SplitButton onSplit={split} />
-              </div>
+              !values.transfer && (
+                <div className="flex justify-end">
+                  <SplitButton onSplit={split} />
+                </div>
+              )
             )}
             <SelectField
               label="Account"
@@ -352,7 +439,11 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
                   value={values.transferAmount}
                   onChange={(transferAmount) => set({ transferAmount })}
                   error={errors.transferAmount}
-                  hint="What the other account receives or sends, in its currency."
+                  hint={
+                    linkable
+                      ? 'Leave it empty to take the amount of the matching transaction there.'
+                      : 'What the other account receives or sends, in its currency.'
+                  }
                 />
                 {effective && (
                   <p className="text-sm text-muted" data-testid="effective-rate">
@@ -440,9 +531,11 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
 
 /**
  * Spec §11 Transaction sheet, for a new transaction (from ＋ or a register) or a saved one: outflow/inflow, the
- * amount keypad, payee (new names and "Transfer : <Account>" payees), category with its Available, account, date,
+ * amount keypad, payee (new names and "Transfer : <Account>" payees) or, as "This is a transfer", the account the money
+ * goes to or comes from, category with its Available, account, date,
  * FX rate for foreign accounts (NBP's by default), the other amount of a transfer between currencies, memo, flag,
- * cleared; Delete removes a transfer's both sides. Changes to reconciled transactions ask first.
+ * cleared; Delete removes a transfer's both sides. Changes to reconciled transactions ask first. A saved transaction
+ * that becomes a transfer toasts whether it was linked to the matching transaction in the other account.
  */
 export function TransactionForm({ transaction, prefill, onDone }: TransactionFormProps) {
   const [today] = useState(todayIso);
