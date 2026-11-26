@@ -180,6 +180,9 @@ export function transferTarget(payee: PayeeValue, context: FormContext): Account
   return context.accounts.find((a) => a.id === target) ?? null;
 }
 
+/** "This is a transfer" without another open account to choose. */
+export const NO_OTHER_ACCOUNT = 'You have no other open account: add it in Accounts first.';
+
 /** The payee of a transfer to or from `target`: its "Transfer : <name>" payee. */
 export function transferPayeeValue(target: AccountDto, context: FormContext): PayeeValue {
   const name = context.payees.find((p) => p.id === target.transferPayeeId)?.name ?? `Transfer : ${target.name}`;

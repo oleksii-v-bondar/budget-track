@@ -272,6 +272,14 @@ describe('editing from the register', () => {
     ]);
   });
 
+  it('says to add the other account first when there is none', async () => {
+    const { user, sheet } = await openSaved({ 'GET /api/accounts': { body: { accounts: [checking] } } });
+    await user.click(within(sheet).getByRole('switch', { name: 'This is a transfer' }));
+    const picker = within(sheet).getByLabelText('To account');
+    expect(picker).toBeDisabled();
+    expect(picker).toHaveAccessibleDescription('You have no other open account: add it in Accounts first.');
+  });
+
   it('deletes it (confirming, as it is reconciled)', async () => {
     let calls = 0;
     const refused = { code: 'confirm_reconciled', message: 'Confirm.' };

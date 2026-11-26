@@ -7,6 +7,7 @@ import { formErrorsOf } from '../lib/form-errors';
 import { formatMoney } from '../lib/format';
 import { useOnline } from '../lib/online';
 import { ConfirmReconciled, needsConfirmation } from '../transactions/confirm-reconciled';
+import { NO_OTHER_ACCOUNT } from '../transactions/form-model';
 import { AmountField, readAmount } from '../ui/amount-field';
 import { Button } from '../ui/button';
 import { cx } from '../ui/cx';
@@ -75,6 +76,7 @@ export function MarkTransfer({ transaction, accounts, onDone }: MarkTransferProp
         <h3 id={headingId} className="text-sm font-medium text-gray-200">
           {outflow ? 'To account' : 'From account'}
         </h3>
+        {options.length === 0 && <p className="text-sm text-muted">{NO_OTHER_ACCOUNT}</p>}
         <ul aria-labelledby={headingId} className="divide-y divide-line overflow-hidden rounded-xl bg-raised">
           {options.map((option) => (
             <li key={option.id}>

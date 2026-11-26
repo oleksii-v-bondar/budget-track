@@ -277,7 +277,7 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   transaction in a `Sheet` (in a register it starts in that account). Editing a transaction, a category or an account
   happens in a `Sheet` on its screen. The transaction sheet's "This is a transfer" switch (`role="switch"`) swaps the
   payee for a "To account" / "From account" picker of the other open accounts (choosing a "Transfer : <Account>"
-  payee turns it on; turning it off gives the payee back); the payee list shows a "Transfers" section as soon as the
+  payee turns it on; turning it off gives the payee back; without another open account it says to add one); the payee list shows a "Transfers" section as soon as the
   field has the focus. In the review, unapproved rows have Approve and "Transfer…" (`register/mark-transfer.tsx`: tap
   an account to save the row as a transfer and approve it). The Plan's edit icon opens Edit Plan (`budget/edit-plan.tsx`), a full-screen
   view over the Plan, like YNAB's: Cost to Be Me (`budget/plan-targets.ts` turns each target into what it costs a

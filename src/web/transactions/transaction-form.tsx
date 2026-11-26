@@ -44,6 +44,7 @@ import {
   needsTransferAmount,
   newLine,
   newValues,
+  NO_OTHER_ACCOUNT,
   type PayeeValue,
   type Prefill,
   rateCurrency,
@@ -242,7 +243,7 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
   const transferAccounts = context.accounts.filter(
     (a) => a.id !== values.accountId && (!a.closed || a.id === initialTarget?.id),
   );
-  const canTransfer = !values.lines && !transaction?.isStartingBalance && transferAccounts.length > 0;
+  const canTransfer = !values.lines && !transaction?.isStartingBalance;
   const toggleTransfer = () => {
     if (values.transfer) {
       set({ transfer: false, payee: plainPayee, transferAmount: '' });
@@ -352,9 +353,11 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
                 value={target?.id ?? ''}
                 onChange={(event) => pickTarget(event.target.value)}
                 error={errors.payeeId}
+                disabled={transferAccounts.length === 0}
+                hint={transferAccounts.length === 0 ? NO_OTHER_ACCOUNT : undefined}
               >
                 <option value="" disabled>
-                  Choose an account
+                  {transferAccounts.length === 0 ? 'No other account' : 'Choose an account'}
                 </option>
                 {transferAccounts.map((option) => (
                   <option key={option.id} value={option.id}>
