@@ -1,10 +1,11 @@
-import { eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
+import { BASE_CURRENCY } from '../../shared/api/accounts';
 import type { CreateTransactionRequest, UpdateTransactionRequest } from '../../shared/api/transactions';
-import type { IsoDate } from '../../engine';
+import type { IsoDate, Money } from '../../engine';
 import type { ChangeRecorder } from '../commands/recorder';
 import type { Executor } from '../db/client';
 import { systemPayeeId } from '../db/lookups';
-import { payee, subtransaction, transaction } from '../db/schema';
+import { bankImport, payee, subtransaction, transaction } from '../db/schema';
 import { AppError, DomainError } from '../http/errors';
 import { findOrCreatePayee, learnPayeeAlias } from '../payees/payee-commands';
 import { accountsOf, type Aggregate, draftOf, loadAggregate, storedRates } from './aggregate';
@@ -18,7 +19,7 @@ import {
   type RowPlan,
 } from './plan';
 import { findAccount } from './rules';
-import { insertPlan, insertSchedule, rememberCategory, softDelete, syncPlan } from './write';
+import { insertPlan, insertSchedule, linkPlan, rememberCategory, softDelete, syncPlan } from './write';
 
 export interface SavedTransaction {
   kind: 'transaction' | 'scheduled';
@@ -290,21 +291,94 @@ async function assertSameCurrency(rec: ChangeRecorder, agg: Aggregate, draft: Dr
   }
 }
 
-/** The edited transaction as a draft, with what the saved one already has for planning it. */
+/** A new transfer links to its other side already in the other account: same currency, the opposite amount… */
+const LINK_DAYS = 5;
+/** …between currencies, PLN amounts within this many percent, this many days apart at most. */
+const LINK_FX_PERCENT = 3;
+const LINK_FX_DAYS = 3;
+
+/**
+ * The other side of the transfer a plain transaction becomes, when it is already in the other account: a live, plain
+ * row (not a transfer, split, starting balance or the app's) of the opposite sign. Same currency: the opposite amount
+ * within 5 days. Between currencies: PLN amounts within 3% and 3 days, and the amount the owner gave as
+ * `transferAmount` (or, when none was given, its amount becomes it). The closest date wins, then a bank import.
+ */
+async function transferMatch(
+  db: Executor,
+  agg: Aggregate,
+  draft: Draft,
+): Promise<{ row: TxnRow; transferAmount: Money | null } | null> {
+  const { main } = agg;
+  if (main.transferTxnId || main.isSplit || draft.lines !== null || draft.amount === 0 || draft.payeeId === null) {
+    return null;
+  }
+  const [target] = await db.select({ accountId: payee.transferAccountId }).from(payee).where(eq(payee.id, draft.payeeId));
+  if (!target?.accountId || target.accountId === draft.accountId) return null;
+  const here = await findAccount(db, draft.accountId);
+  const there = await findAccount(db, target.accountId);
+  if (!here || !there) return null;
+  const sameCurrency = here.currency === there.currency;
+  const days = sql<number>`abs(${transaction.date} - ${draft.date}::date)`;
+  const imported = sql<boolean>`exists (select 1 from ${bankImport} where ${bankImport.transactionId} = ${transaction.id})`;
+  const found = await db
+    .select({ row: transaction })
+    .from(transaction)
+    .leftJoin(payee, eq(payee.id, transaction.payeeId))
+    .where(
+      and(
+        eq(transaction.accountId, there.id),
+        isNull(transaction.deletedAt),
+        isNull(transaction.transferTxnId),
+        eq(transaction.isSplit, false),
+        eq(transaction.isStartingBalance, false),
+        isNull(payee.systemKind),
+        sameCurrency
+          ? eq(transaction.amount, -draft.amount)
+          : draft.transferAmount !== null
+            ? eq(transaction.amount, draft.transferAmount)
+            : draft.amount < 0
+              ? gt(transaction.amount, 0)
+              : lt(transaction.amount, 0),
+        sql`${days} <= ${sameCurrency ? LINK_DAYS : LINK_FX_DAYS}`,
+      ),
+    )
+    .orderBy(days, desc(imported), asc(transaction.createdAt), asc(transaction.id));
+  if (sameCurrency) return found[0] ? { row: found[0].row, transferAmount: null } : null;
+  // This side's PLN amount as booked, for the edited amount.
+  const base =
+    here.currency === BASE_CURRENCY
+      ? Math.abs(draft.amount)
+      : main.amount === 0
+        ? null
+        : Math.abs(Math.round((main.amountBase * draft.amount) / main.amount));
+  if (base === null) return null;
+  const match = found.find(({ row }) => {
+    const other = Math.abs(row.amountBase);
+    return Math.abs(other - base) * 100 <= LINK_FX_PERCENT * Math.max(other, base);
+  });
+  return match ? { row: match.row, transferAmount: match.row.amount } : null;
+}
+
+/**
+ * The edited transaction as a draft, with what the saved one already has for planning it, and the row in the other
+ * account that a new transfer links to (`transferMatch`).
+ */
 export async function editDraft(
   db: Executor,
   agg: Aggregate,
   patch: UpdateTransactionRequest,
   payeeByName: PayeeByName,
-): Promise<{ draft: Draft; context: PlanContext }> {
+): Promise<{ draft: Draft; context: PlanContext; link: TxnRow | null }> {
   const draft = await applyPatch(agg, patch, payeeByName);
+  const match = await transferMatch(db, agg, draft);
+  if (match) draft.transferAmount ??= match.transferAmount;
   const existing = {
     payeeId: agg.main.payeeId,
     rates: await storedRates(db, agg, draft.date === agg.main.date),
     counterpart: agg.counterpart && { accountId: agg.counterpart.accountId, amount: agg.counterpart.amount },
     accountIds: accountsOf(agg),
   };
-  return { draft, context: { existing } };
+  return { draft, context: { existing }, link: match?.row ?? null };
 }
 
 /**
@@ -312,22 +386,24 @@ export async function editDraft(
  * with every rule of a new one, then its rows are brought in line. Spec §9: a new date replaces an NBP rate with that
  * day's (from `context.defaults`); a manual rate stays until a new one is sent. `deletedIds` lists the transactions
  * the edit soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts). A new payee for an
- * imported transaction (a user or transfer payee) becomes the payee of its bank text (`payee_alias`).
+ * imported transaction (a user or transfer payee) becomes the payee of its bank text (`payee_alias`). A plain
+ * transaction that becomes a transfer links to its other side when that is already in the other account
+ * (`transferMatch`, `linkPlan`): `linkedTo` names it.
  */
 export async function updateTransaction(
   rec: ChangeRecorder,
   id: string,
   patch: UpdateTransactionRequest,
   context: EditContext,
-): Promise<{ payeeName: string | null; deletedIds: string[] }> {
+): Promise<{ payeeName: string | null; deletedIds: string[]; linkedTo: string | null }> {
   const agg = await loadAggregate(rec.tx, id);
   if (agg.owner) {
     await updateLineCounterpart(rec, { ...agg, owner: agg.owner }, patch);
-    return { payeeName: await payeeNameOf(rec, agg.main.payeeId), deletedIds: [] };
+    return { payeeName: await payeeNameOf(rec, agg.main.payeeId), deletedIds: [], linkedTo: null };
   }
   if (agg.main.payeeId !== null && agg.main.payeeId === (await systemPayeeId(rec.tx, 'fx_revaluation'))) {
     await updateRevaluation(rec, agg, patch);
-    return { payeeName: await payeeNameOf(rec, agg.main.payeeId), deletedIds: [] };
+    return { payeeName: await payeeNameOf(rec, agg.main.payeeId), deletedIds: [], linkedTo: null };
   }
   const prepared = await editDraft(rec.tx, agg, patch, (name) => findOrCreatePayee(rec, name));
   const draft = prepared.draft;
@@ -342,8 +418,13 @@ export async function updateTransaction(
   await assertSameCurrency(rec, agg, draft);
   const plan = await planTransaction(rec.tx, draft, { ...prepared.context, defaults: context.defaults });
   const replaceLines = !sameLines(draftOf(agg).lines, draft.lines);
-  assertConfirmed(editTouchesReconciled(agg, plan, replaceLines), patch.confirmReconciled);
-  const deletedIds = await syncPlan(rec, agg, plan, context.now, replaceLines);
+  const link = prepared.link && plan.counterpart?.accountId === prepared.link.accountId ? prepared.link : null;
+  // A linked row becomes the transfer's other side: changing a reconciled one asks first.
+  const sides = link ? { ...agg, counterpart: link } : agg;
+  assertConfirmed(editTouchesReconciled(sides, plan, replaceLines), patch.confirmReconciled);
+  let deletedIds: string[] = [];
+  if (link) await linkPlan(rec, agg, plan, link);
+  else deletedIds = await syncPlan(rec, agg, plan, context.now, replaceLines);
   if (draft.payeeId !== agg.main.payeeId || draft.categoryId !== agg.main.categoryId) {
     await rememberCategory(rec, plan);
   }
@@ -351,7 +432,7 @@ export async function updateTransaction(
   if (agg.main.importedPayee && plan.payee && plan.payee.kind !== 'system' && draft.payeeId !== agg.main.payeeId) {
     await learnPayeeAlias(rec, agg.main.importedPayee, plan.payee.id);
   }
-  return { payeeName: plan.payee?.name ?? null, deletedIds };
+  return { payeeName: plan.payee?.name ?? null, deletedIds, linkedTo: link?.id ?? null };
 }
 
 /** "Delete transaction "Biedronka"" */

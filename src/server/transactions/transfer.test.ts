@@ -1,12 +1,12 @@
 import { eq, inArray } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { TransactionDto } from '../../shared/api/transactions';
+import type { TransactionDto, UpdateTransactionResponse } from '../../shared/api/transactions';
 import { systemCategoryId } from '../db/lookups';
 import { ledgerLine, payee, scheduledTransaction, transaction } from '../db/schema';
 import { createTestApp, type TestApp } from '../test/app';
 import { setUpBudget } from '../test/auth';
 import { createTestDatabase, type TestDatabase } from '../test/db';
-import { createAccount, createPayee, createTransaction, ledgerLines } from '../test/fixtures';
+import { createAccount, createCategory, createGroup, createPayee, createTransaction, ledgerLines } from '../test/fixtures';
 import { snapshot } from '../test/snapshot';
 
 let t: TestDatabase;
@@ -139,6 +139,40 @@ describe('transfers', () => {
       status: 422,
       body: { code: 'category_required', message: required, fieldErrors: { categoryId: [required] } },
     });
+  });
+
+  it('links a budget↔tracking transfer to the row already in the other account, its category on the budget side', async () => {
+    const checking = await createAccount(ctx.client, { name: 'mBank', startingBalance: 100_000 });
+    const brokerage = await createAccount(ctx.client, { name: 'Brokerage', type: 'other_asset' });
+    const investing = await createCategory(ctx.client, (await createGroup(ctx.client, 'Future')).id, 'Investing');
+    const rta = await systemCategoryId(t.db, 'rta');
+    const patch = async (id: string, body: object) =>
+      json<UpdateTransactionResponse>(await ctx.client.send('PATCH', `/api/transactions/${id}`, body));
+
+    const sent = await createTransaction(ctx.client, {
+      accountId: checking.id,
+      date: '2026-11-17',
+      payeeName: 'XTB',
+      categoryId: investing.id,
+      amount: -50_000,
+    });
+    const deposit = await createTransaction(ctx.client, { accountId: brokerage.id, date: '2026-11-19', payeeName: 'Deposit', amount: 50_000 });
+    expect((await patch(sent.id, { payeeId: brokerage.transferPayeeId })).body).toMatchObject({
+      linkedTo: deposit.id,
+      categoryId: investing.id,
+      transfer: { transactionId: deposit.id },
+    });
+    expect(await get(deposit.id)).toMatchObject({ payeeName: 'Transfer : mBank', categoryId: null, date: '2026-11-17', amount: 50_000 });
+
+    // From the tracking side, the transfer still needs a category, which the budget side's row takes.
+    const payout = await createTransaction(ctx.client, { accountId: brokerage.id, date: '2026-11-19', payeeName: 'Payout', amount: -20_000 });
+    const received = await createTransaction(ctx.client, { accountId: checking.id, date: '2026-11-20', payeeName: 'XTB', amount: 20_000 });
+    expect((await patch(payout.id, { payeeId: checking.transferPayeeId })).body).toMatchObject({ code: 'category_required' });
+    expect((await patch(payout.id, { payeeId: checking.transferPayeeId, categoryId: rta })).body).toMatchObject({
+      linkedTo: received.id,
+      categoryId: null,
+    });
+    expect(await get(received.id)).toMatchObject({ payeeName: 'Transfer : Brokerage', categoryId: rta, date: '2026-11-19', amount: 20_000 });
   });
 
   it('refuses categories on budget↔budget and tracking↔tracking transfers, and self or closed targets', async () => {

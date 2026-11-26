@@ -10,6 +10,7 @@ import {
   registerQuerySchema,
   type TransactionDto,
   updateTransactionRequestSchema,
+  type UpdateTransactionResponse,
 } from '../../shared/api/transactions';
 import { type AuthedEnv, requireSession } from '../auth/sessions';
 import { todayIn } from '../clock';
@@ -69,8 +70,10 @@ export function transactionRoutes(deps: AppDeps) {
       const body = c.req.valid('json');
       const context = { today: today(), now: deps.clock.now() };
       const defaults = await editDefaultRates(deps, id, body, context.today);
-      await runCommand(deps, editLabel, (rec) => updateTransaction(rec, id, body, { ...context, defaults }));
-      return c.json<TransactionDto>(await getTransaction(deps.db, id));
+      const { linkedTo } = await runCommand(deps, editLabel, (rec) =>
+        updateTransaction(rec, id, body, { ...context, defaults }),
+      );
+      return c.json<UpdateTransactionResponse>({ ...(await getTransaction(deps.db, id)), linkedTo });
     })
     .delete('/:id', validate('param', idParamSchema), validate('json', deleteTransactionRequestSchema), async (c) => {
       const { id } = c.req.valid('param');

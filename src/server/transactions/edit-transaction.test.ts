@@ -222,7 +222,7 @@ describe('PATCH /api/transactions/:id', () => {
     expect((await ctx.client.post(`/api/accounts/${savings.id}/close`)).status).toBe(200);
 
     const entries = await undoCount();
-    expect(await edit(sent.id, { memo: '', amount: -500 })).toEqual(await get(sent.id));
+    expect(await edit(sent.id, { memo: '', amount: -500 })).toEqual({ ...(await get(sent.id)), linkedTo: null });
     expect(await undoCount()).toBe(entries);
 
     expect(await edit(sent.id, { memo: 'last one', amount: -600 })).toMatchObject({ memo: 'last one', amount: -600 });

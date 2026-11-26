@@ -91,6 +91,10 @@ export type CreateTransactionInput = z.input<typeof createTransactionRequestSche
  * and flag belong to each side. The counterpart of a split line takes only memo, cleared, approved and flag; the
  * rest is edited on the split.
  *
+ * A transfer payee on a plain transaction links it to its other side when that is already in the other account (a
+ * live, plain row of the opposite sign: the opposite amount within 5 days; between currencies, PLN amounts within 3%
+ * and 3 days, its amount as `transferAmount`, which may then be omitted). The closest date wins, then a bank import.
+ *
  * Changing the amount, account, date or transfer of a reconciled transaction (or un-reconciling it) needs
  * `confirmReconciled: true`; otherwise the answer is 409 `confirm_reconciled`.
  */
@@ -299,6 +303,13 @@ export interface TransactionDto {
   /** Live split lines in order; [] unless `isSplit`. */
   lines: SplitLineDto[];
 }
+
+/**
+ * PATCH /api/transactions/:id: the saved transaction. `linkedTo` is set when the edit made a plain transaction a
+ * transfer and a matching row already in the other account (e.g. its bank import) became the transfer's other side
+ * instead of a new row; null otherwise.
+ */
+export type UpdateTransactionResponse = TransactionDto & { linkedTo: string | null };
 
 /** POST /api/transactions: a booked transaction, or the one-time schedule a future date became (spec §5.6). */
 export type CreateTransactionResponse =

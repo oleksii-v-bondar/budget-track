@@ -88,6 +88,17 @@ async function softDeleteLines(rec: ChangeRecorder, agg: Aggregate, now: Date): 
 }
 
 /**
+ * Makes `other`, a plain row already in the transfer's other account (a bank import, an entry made by hand), the
+ * other side of the transfer that the plain transaction `agg.main` becomes, instead of creating a new side. It takes
+ * the plan's side and keeps its own cleared, approved and flag, its import id and its `bank_import`, so the bank's
+ * copy is never imported again.
+ */
+export async function linkPlan(rec: ChangeRecorder, agg: Aggregate, plan: Plan, other: { id: string }): Promise<void> {
+  await rec.update(transaction, eq(transaction.id, agg.main.id), { ...plan.main, transferTxnId: other.id });
+  await rec.update(transaction, eq(transaction.id, other.id), { ...plan.counterpart!, transferTxnId: agg.main.id });
+}
+
+/**
  * Brings a saved transaction's rows in line with its new plan. A transfer side in the same account is updated in
  * place (keeping its cleared, approved and flag); a transfer that moves to another account, or stops being one,
  * loses its old side, and a new side is created. Split lines are updated in place, unless `replaceLines` is set:
