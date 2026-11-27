@@ -35,7 +35,8 @@ async function sumsByAccount(db: Executor, accountIds: string[]): Promise<Map<st
       uncleared: sql<number>`coalesce(sum(${transaction.amount}) filter (where not ${isCleared}), 0)::bigint`,
       clearedBase: sql<number>`coalesce(sum(${transaction.amountBase}) filter (where ${isCleared}), 0)::bigint`,
       unclearedBase: sql<number>`coalesce(sum(${transaction.amountBase}) filter (where not ${isCleared}), 0)::bigint`,
-      unapproved: sql<number>`(count(*) filter (where not ${transaction.approved}))::int`,
+      // A round-up is approved with its purchase.
+      unapproved: sql<number>`(count(*) filter (where not ${transaction.approved} and ${transaction.roundupOf} is null))::int`,
     })
     .from(transaction)
     .where(and(inArray(transaction.accountId, accountIds), isNull(transaction.deletedAt)))

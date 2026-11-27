@@ -17,9 +17,9 @@ function registerFilter(category: BudgetCategoryDto): { accountId: string } | { 
     : { categoryId: category.id };
 }
 
-/** The PLN amount a row adds to the category: a split's lines in it, or the whole transaction. */
+/** The PLN amount a row adds to the category: a split's lines in it, or the whole transaction with its round-up. */
 export function amountIn(transaction: TransactionDto, filter: { accountId: string } | { categoryId: string }): number {
-  if (!('categoryId' in filter) || !transaction.isSplit) return transaction.amountBase;
+  if (!('categoryId' in filter) || !transaction.isSplit) return transaction.amountBase + (transaction.roundUp?.amountBase ?? 0);
   return transaction.lines
     .filter((line) => line.categoryId === filter.categoryId)
     .reduce((sum, line) => sum + line.amountBase, 0);

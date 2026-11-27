@@ -74,6 +74,7 @@ export function transaction(owner: AccountDto, key: string, fields: Partial<Tran
     isSplit: false,
     transfer: null,
     lines: [],
+    roundUp: null,
     ...fields,
   };
 }

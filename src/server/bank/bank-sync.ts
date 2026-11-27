@@ -17,6 +17,7 @@ import { createPayee, findUserPayeeByName, isUserPayee } from '../payees/payee-c
 import { draftOf, loadAggregate } from '../transactions/aggregate';
 import { type DefaultRates, planTransaction } from '../transactions/plan';
 import { findAccount, onBudget } from '../transactions/rules';
+import { linkRoundUps } from '../transactions/round-ups';
 import { createTransaction, updateTransaction } from '../transactions/transaction-commands';
 import { syncPlan } from '../transactions/write';
 import {
@@ -682,8 +683,9 @@ async function dropPending(rec: ChangeRecorder, { row, autoCategoryId }: Pending
  * may pair with its other side into a transfer (`pairTransfer`). A pending one matches or becomes a row the same way,
  * uncleared and pending, and never pairs. A pending row whose id the bank no longer lists as pending, in a complete
  * list, was dropped (`dropPending`). Transactions dated before the account's starting balance (already in it) or after
- * today are left out. A connection whose session has expired becomes `reconnect_needed` and is skipped; one that fails
- * otherwise is skipped this time. With a `uid`, only that bank account is synced.
+ * today are left out. Last, Revolut round-ups of the synced accounts are linked to their purchases (`linkRoundUps`).
+ * A connection whose session has expired becomes `reconnect_needed` and is skipped; one that fails otherwise is
+ * skipped this time. With a `uid`, only that bank account is synced.
  */
 async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
   const client = bankClient(deps);
@@ -856,6 +858,7 @@ async function runSync(deps: AppDeps, uid?: string): Promise<BankSyncResponse> {
         result.dropped++;
       }
     }
+    await linkRoundUps(rec, [...lists.keys()]);
     return result;
   });
   // Outside the command, so a sync that imports nothing adds no undo entry.

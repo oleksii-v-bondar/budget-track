@@ -19,6 +19,7 @@ import {
   type RowPlan,
 } from './plan';
 import { findAccount } from './rules';
+import { followPurchase } from './round-ups';
 import { insertPlan, insertSchedule, linkPlan, rememberCategory, softDelete, syncPlan } from './write';
 
 export interface SavedTransaction {
@@ -388,7 +389,7 @@ export async function editDraft(
  * the edit soft-deleted (an ended or moved transfer's old side, replaced lines' counterparts). A new payee for an
  * imported transaction (a user or transfer payee) becomes the payee of its bank text (`payee_alias`). A plain
  * transaction that becomes a transfer links to its other side when that is already in the other account
- * (`transferMatch`, `linkPlan`): `linkedTo` names it.
+ * (`transferMatch`, `linkPlan`): `linkedTo` names it. A purchase's Revolut round-up follows it (`followPurchase`).
  */
 export async function updateTransaction(
   rec: ChangeRecorder,
@@ -425,6 +426,7 @@ export async function updateTransaction(
   let deletedIds: string[] = [];
   if (link) await linkPlan(rec, agg, plan, link);
   else deletedIds = await syncPlan(rec, agg, plan, context.now, replaceLines);
+  await followPurchase(rec, id);
   if (draft.payeeId !== agg.main.payeeId || draft.categoryId !== agg.main.categoryId) {
     await rememberCategory(rec, plan);
   }
@@ -441,8 +443,8 @@ export const deleteLabel = (r: { payeeName: string | null }) =>
 
 /**
  * Spec §10: deleting one side of a transfer deletes both; deleting a split deletes the counterparts of its transfer
- * lines (its lines leave the budget with it). Everything is soft-deleted. A split line's counterpart is removed by
- * editing the split.
+ * lines (its lines leave the budget with it); deleting a purchase deletes its round-up. Everything is soft-deleted. A
+ * split line's counterpart is removed by editing the split.
  */
 export async function deleteTransaction(
   rec: ChangeRecorder,
@@ -457,7 +459,11 @@ export async function deleteTransaction(
       `This transfer is a line of a split in "${split!.name}": remove the line there.`,
     );
   }
-  const rows = [agg.main, agg.counterpart, ...agg.lines.map((l) => l.counterpart)].filter((r) => r !== null);
+  const roundUps = await rec.tx
+    .select()
+    .from(transaction)
+    .where(and(eq(transaction.roundupOf, id), isNull(transaction.deletedAt)));
+  const rows = [agg.main, agg.counterpart, ...agg.lines.map((l) => l.counterpart), ...roundUps].filter((r) => r !== null);
   assertConfirmed(rows.some((r) => r.cleared === 'reconciled'), context.confirmReconciled);
   const ids = rows.map((r) => r.id);
   await softDelete(rec, ids, context.now);

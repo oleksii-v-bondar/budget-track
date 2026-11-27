@@ -13,6 +13,7 @@ import { AppError } from '../http/errors';
 const transferAccount = alias(account, 'transfer_account');
 const otherSide = alias(transaction, 'other_side');
 const otherLine = alias(subtransaction, 'other_line');
+const roundUpRow = alias(transaction, 'round_up');
 
 const rateOf = (currency: string, amount: Money, amountBase: Money) =>
   currency === BASE_CURRENCY ? null : effectiveRate(amount, amountBase);
@@ -67,6 +68,7 @@ export async function loadTransactions(db: Executor, where?: SQL, limit?: number
       transferAccount: { name: transferAccount.name, currency: transferAccount.currency },
       other: { amount: otherSide.amount, amountBase: otherSide.amountBase },
       line: { amount: otherLine.amount, amountBase: otherLine.amountBase },
+      roundUp: { id: roundUpRow.id, amount: roundUpRow.amount, amountBase: roundUpRow.amountBase },
     })
     .from(transaction)
     .innerJoin(account, eq(account.id, transaction.accountId))
@@ -75,11 +77,12 @@ export async function loadTransactions(db: Executor, where?: SQL, limit?: number
     .leftJoin(transferAccount, eq(transferAccount.id, transaction.transferAccountId))
     .leftJoin(otherSide, eq(otherSide.id, transaction.transferTxnId))
     .leftJoin(otherLine, eq(otherLine.id, transaction.transferSubtxnId))
+    .leftJoin(roundUpRow, and(eq(roundUpRow.roundupOf, transaction.id), isNull(roundUpRow.deletedAt)))
     .where(and(isNull(transaction.deletedAt), where))
     .orderBy(desc(transaction.date), desc(transaction.id));
   const rows = await (limit === undefined ? query : query.limit(limit));
   const lines = await linesOf(db, rows.filter((r) => r.txn.isSplit).map((r) => r.txn.id));
-  return rows.map(({ txn, accountName, currency, payeeName, categoryName, transferAccount: to, ...sides }) => {
+  return rows.map(({ txn, accountName, currency, payeeName, categoryName, transferAccount: to, roundUp, ...sides }) => {
     // The counterpart of a split line faces that line, not the whole split.
     const other = sides.line ?? sides.other;
     return {
@@ -117,6 +120,7 @@ export async function loadTransactions(db: Executor, where?: SQL, limit?: number
             }
           : null,
       lines: lines.get(txn.id) ?? [],
+      roundUp,
     };
   });
 }
@@ -146,6 +150,8 @@ const containing = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`
 function registerWhere(query: RegisterQuery, uncategorized: boolean): SQL | undefined {
   const pattern = query.q === undefined ? null : containing(query.q);
   return and(
+    // A round-up shows merged into its purchase.
+    isNull(transaction.roundupOf),
     query.accountId ? eq(transaction.accountId, query.accountId) : undefined,
     pattern === null
       ? undefined

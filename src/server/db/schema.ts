@@ -344,6 +344,8 @@ export const transaction = pgTable(
     importedPayee: text('imported_payee'),
     /** Still pending at the bank (status PDNG): each sync books it, or deletes it when the bank drops it. */
     bankPending: boolean('bank_pending').notNull().default(false),
+    /** A Revolut round-up: the purchase it belongs to, which the lists show it merged into (`transactions/round-ups.ts`). */
+    roundupOf: uuid('roundup_of').references((): AnyPgColumn => transaction.id),
     externalId: text('external_id'),
     deletedAt: instant('deleted_at'),
     ...timestamps,
@@ -357,6 +359,7 @@ export const transaction = pgTable(
     index('transaction_transfer_txn_id').on(t.transferTxnId),
     index('transaction_transfer_account_id').on(t.transferAccountId),
     index('transaction_scheduled_id').on(t.scheduledId),
+    index('transaction_roundup_of').on(t.roundupOf),
     uniqueIndex('transaction_import_id').on(t.accountId, t.importId).where(sql`${t.importId} IS NOT NULL`),
     uniqueIndex('transaction_external_id').on(t.accountId, t.externalId).where(sql`${t.externalId} IS NOT NULL`),
   ],

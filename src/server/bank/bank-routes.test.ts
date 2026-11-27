@@ -1317,3 +1317,49 @@ describe('Add to budget', () => {
     expect((await addToBudget(app, 'nope')).status).toBe(404);
   });
 });
+
+describe('Revolut round-ups', () => {
+  it('shows a round-up merged into its purchase, in its category, approved and deleted with it, undoably', async () => {
+    const app = await bankApp();
+    const revolut = await createAccount(app.client, { name: 'Revolut', startingDate: '2026-10-01' });
+    const groceries = await createCategory(app.client, (await createGroup(app.client, 'Food')).id, 'Groceries');
+    // Żabka's last category is Groceries.
+    await createTransaction(app.client, { accountId: revolut.id, date: '2026-10-01', payeeName: 'Żabka', categoryId: groceries.id, amount: -1000 });
+    sessions['rev-code'] = {
+      ...REVOLUT_SESSION,
+      accounts: [{ uid: 'rev-pln', account_id: { iban: 'LT603250000000000099' }, name: 'Jan Kowalski', currency: 'PLN' }],
+    };
+    await connect(app, 'Revolut', 'rev-code');
+    await link(app, 'rev-pln', revolut.id);
+    const debit = (ref: string, amount: string, to: string) =>
+      booked({ entry_reference: ref, ...pln(amount), booking_date: '2026-11-18', creditor: { name: to } });
+    bankTransactions['rev-pln'] = [debit('X1', '11.25', 'Żabka'), debit('R1', '3.75', 'To PLN MB:be9ad12'), debit('S1', '50.00', 'Jan Nowak')];
+    const before = await snapshot(t.db);
+    const rowOf = async (importId: string) =>
+      (await t.db.select().from(transaction).where(eq(transaction.importId, importId)))[0]!;
+
+    expect(await (await sync(app)).json()).toMatchObject({ imported: 3 });
+    const register = (await (await app.client.get(`/api/transactions?accountId=${revolut.id}`)).json()) as RegisterResponse;
+    const r = await rowOf('rev-pln:R1');
+    const x = await rowOf('rev-pln:X1');
+    expect(
+      register.transactions
+        .filter((row) => row.date === '2026-11-18')
+        .sort((a, b) => a.amount - b.amount)
+        .map((row) => [row.payeeName, row.amount, row.roundUp]),
+    ).toEqual([
+      ['Jan Nowak', -5000, null],
+      ['Żabka', -1125, { id: r.id, amount: -375, amountBase: -375 }],
+    ]);
+    expect(r).toMatchObject({ roundupOf: x.id, categoryId: groceries.id, approved: false });
+    expect((await accountsOf(app))[0]!.unapprovedCount).toBe(2);
+
+    expect((await app.client.send('PATCH', `/api/transactions/${x.id}`, { approved: true })).status).toBe(200);
+    expect(await rowOf('rev-pln:R1')).toMatchObject({ approved: true, deletedAt: null });
+    expect((await app.client.send('DELETE', `/api/transactions/${x.id}`, {})).status).toBe(200);
+    expect((await rowOf('rev-pln:R1')).deletedAt).not.toBeNull();
+
+    for (let i = 0; i < 3; i++) expect((await app.client.post('/api/undo')).status).toBe(200);
+    expect(await snapshot(t.db)).toEqual(before);
+  });
+});

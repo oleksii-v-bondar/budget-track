@@ -21,6 +21,10 @@ export function payeeLabel(transaction: TransactionDto): string {
   return transaction.payeeName ?? (transaction.transfer ? `Transfer : ${transaction.transfer.accountName}` : 'No payee');
 }
 
+/** What a row shows: a purchase with its Revolut round-up (spent in the same category). */
+export const shownAmount = (transaction: TransactionDto): number =>
+  transaction.amount + (transaction.roundUp?.amount ?? 0);
+
 /** A budget transaction that counts as Uncategorized (spec §3: not a split, a transfer or a starting balance). */
 export function needsCategory(transaction: TransactionDto, onBudget: boolean): boolean {
   const { isSplit, categoryName, transfer, isStartingBalance } = transaction;

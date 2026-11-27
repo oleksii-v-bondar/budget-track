@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { fakeApi, type FakeRequest } from '../test/fake-api';
-import { account, balances, category, categoryGroups, payee, registerPage, transaction } from '../test/ledger-fixtures';
+import { account, balances, category, categoryGroups, idFor, payee, registerPage, transaction } from '../test/ledger-fixtures';
 import { renderApp, SIGNED_IN } from '../test/render';
 
 const checking = account({ name: 'Checking', balance: balances(90_000, -2_500) });
@@ -160,6 +160,28 @@ describe('register', () => {
     const sheet = screen.getByRole('dialog', { name: 'Edit transaction' });
     expect(within(sheet).getByText('Pending at the bank')).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'Approve' })).toBeEnabled();
+  });
+
+  it('shows a purchase with its Revolut round-up at the rounded amount; its sheet edits the purchase', async () => {
+    const zabka = transaction(checking, 'zabka', {
+      payeeName: 'Żabka',
+      amount: -1_125,
+      roundUp: { id: idFor('txn:round-up'), amount: -375, amountBase: -375 },
+    });
+    fakeApi({
+      ...registerRoutes({ first: registerPage([zabka]) }),
+      'GET /api/categories': { body: categoryGroups([]) },
+      'GET /api/payees': { body: { payees: [] } },
+    });
+    renderApp('/transactions');
+    const row = (await screen.findByText('Żabka')).closest('li')!;
+    expect(row).toHaveTextContent('-15,00 zł');
+    expect(row).toHaveTextContent('incl. 3,75 zł round-up');
+
+    await userEvent.click(within(row).getByRole('button'));
+    const sheet = screen.getByRole('dialog', { name: 'Edit transaction' });
+    expect(within(sheet).getByRole('button', { name: 'Amount' })).toHaveTextContent('-11,25 zł');
+    expect(within(sheet).getByText('+ 3,75 zł Revolut round-up (same category)')).toBeInTheDocument();
   });
 
   it("starts a new transaction from an account's register in that account", async () => {

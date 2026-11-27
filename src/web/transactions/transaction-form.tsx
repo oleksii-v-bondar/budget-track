@@ -341,6 +341,11 @@ function TransactionFormBody({ transaction, initial, context, groups, onDone }: 
                 {formatMoney(signed, currency)}
               </button>
               {errors.amount && <p className="text-sm text-red-400">{errors.amount}</p>}
+              {transaction?.roundUp && (
+                <p className="text-sm text-muted">
+                  + {formatMoney(-transaction.roundUp.amount, transaction.currency)} Revolut round-up (same category)
+                </p>
+              )}
             </div>
             {keypad && (
               <AmountKeypad

@@ -25,7 +25,7 @@ import { FilterForm } from './filter-form';
 import { MarkTransfer } from './mark-transfer';
 import { filterChips, type RegisterFilters, registerParams } from './filters';
 import { registerQuery } from './register-api';
-import { groupByDate, payeeLabel } from './register-days';
+import { groupByDate, payeeLabel, shownAmount } from './register-days';
 import { TransactionRow } from './transaction-row';
 
 function Balance({ label, minor, currency }: { label: string; minor: number; currency: string }) {
@@ -328,7 +328,7 @@ function RegisterList({ transactions, accounts, showAccount, onOpen, selection, 
               showAccount={showAccount}
             />
           );
-          const name = `${payeeLabel(transaction)} ${formatMoney(transaction.amount, transaction.currency)}`;
+          const name = `${payeeLabel(transaction)} ${formatMoney(shownAmount(transaction), transaction.currency)}`;
           return (
             <li key={transaction.id} className="flex items-center">
               {selection ? (

@@ -220,6 +220,7 @@ export function transactionDto(fields: Partial<TransactionDto> & Pick<Transactio
     isSplit: false,
     transfer: null,
     lines: [],
+    roundUp: null,
     ...fields,
   };
 }

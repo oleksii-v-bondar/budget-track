@@ -84,6 +84,7 @@ describe('POST /api/transactions', () => {
         isSplit: false,
         transfer: null,
         lines: [],
+        roundUp: null,
       },
     });
     expect(created!.lastCategoryId).toBe(groceries.id);

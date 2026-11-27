@@ -2,7 +2,7 @@ import type { FlagColor, TransactionDto } from '../../shared/api/transactions';
 import { formatMoney } from '../lib/format';
 import { cx } from '../ui/cx';
 import { CategoryNeededIcon, FlagIcon, LockIcon } from '../ui/icons';
-import { categoryLabel, needsCategory, payeeLabel } from './register-days';
+import { categoryLabel, needsCategory, payeeLabel, shownAmount } from './register-days';
 
 export const FLAG_CLASSES: Record<FlagColor, string> = {
   red: 'text-red-500',
@@ -61,12 +61,14 @@ export interface TransactionRowProps {
 
 /**
  * One Spending or register row: the payee ("Pending" beside it while the bank hasn't booked it), its category in a
- * chip ("Category Needed" in yellow, with a yellow edge, when a budget transaction has none) and the memo; the amount,
- * the status icons and the account.
+ * chip ("Category Needed" in yellow, with a yellow edge, when a budget transaction has none) and the memo; the amount
+ * (with its Revolut round-up, which a grey line names), the status icons and the account.
  */
 export function TransactionRow({ transaction, onBudget, showAccount }: TransactionRowProps) {
   const missing = needsCategory(transaction, onBudget);
   const label = categoryLabel(transaction, onBudget);
+  const amount = shownAmount(transaction);
+  const { roundUp } = transaction;
   return (
     <div className={cx('flex gap-3 border-l-4 py-3 pr-4 pl-3', missing ? 'border-yellow-400' : 'border-transparent')}>
       <span className="min-w-0 flex-1">
@@ -90,16 +92,16 @@ export function TransactionRow({ transaction, onBudget, showAccount }: Transacti
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1.5">
         <span className="flex items-center gap-1.5">
-          <span
-            className={cx(
-              'text-[17px] font-semibold whitespace-nowrap tabular-nums',
-              transaction.amount > 0 && 'text-lime',
-            )}
-          >
-            {formatMoney(transaction.amount, transaction.currency)}
+          <span className={cx('text-[17px] font-semibold whitespace-nowrap tabular-nums', amount > 0 && 'text-lime')}>
+            {formatMoney(amount, transaction.currency)}
           </span>
           <StatusIcons transaction={transaction} />
         </span>
+        {roundUp && (
+          <span className="text-xs whitespace-nowrap text-muted">
+            incl. {formatMoney(-roundUp.amount, transaction.currency)} round-up
+          </span>
+        )}
         {showAccount && <span className="max-w-36 truncate text-[15px] text-muted">{transaction.accountName}</span>}
       </span>
     </div>

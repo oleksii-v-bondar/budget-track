@@ -304,6 +304,8 @@ export interface TransactionDto {
   transfer: TransferDto | null;
   /** Live split lines in order; [] unless `isSplit`. */
   lines: SplitLineDto[];
+  /** The Revolut round-up of this purchase, in its category: the lists leave it out and show their sum. */
+  roundUp: { id: string; amount: number; amountBase: number } | null;
 }
 
 /**

@@ -214,6 +214,14 @@ Keep each plan to about 8–10 tasks. A task is one reviewable unit with its own
   payee's `last_category_id`. Imports keep the bank text in `transaction.imported_payee`; giving such a transaction
   another user or transfer payee (edit, bulk, review) upserts the alias in the same command, so undo removes it. Merging a payee
   re-points its aliases (and adds its name's key), renaming adds the old name's key, deleting drops its aliases.
+- Revolut round-ups (`transactions/round-ups.ts`): Revolut moves each card purchase's round-up to a whole 5 PLN
+  (`ROUNDUP_UNIT`) to a vault as its own transaction (bank text `To PLN MB:…`). The sync's last step, in its command,
+  `linkRoundUps` sets the round-up's `transaction.roundup_of` to its purchase (same account, ±1 day, the sum a multiple
+  of 5 PLN; the same date, then the closest `created_at`; a tie links nothing) and gives it the purchase's category
+  and approval; it unlinks a round-up whose purchase the sync deleted or paired. Edits keep it in step
+  (`followPurchase` in `updateTransaction`: category, approval; a transfer, split or move unlinks it), deleting the
+  purchase deletes it. The register queries leave round-ups out and give the purchase `roundUp`; the unapproved
+  counts leave them out; balances and the budget count both rows. The web rows show the sum with "incl. … round-up".
 - The session cookie is SameSite=Lax so the bank's redirect back to `/api/bank/callback` carries it; the callback
   checks the state cookie `/api/bank/connect` set. The web app reaches `/connect` with plain links (top-level
   navigations); the service worker never serves `/api/*`. Bank logos are not shown, so the CSP keeps no other origins.
