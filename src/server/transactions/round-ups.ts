@@ -31,7 +31,8 @@ const vaultText = (row: RoundUpCandidate) => row.text !== null && ROUNDUP_TEXT.t
  * Pairs round-ups with their purchases; returns round-up id → purchase id. A round-up has the vault's text and is an
  * outflow of at most `ROUNDUP_UNIT`. Its purchase is an outflow in the same account (not a move to a vault), dated
  * within a day, that adds up with it to a multiple of `ROUNDUP_UNIT`: the same date first, then the closest
- * `created_at`. A round-up whose best two purchases tie stays alone; a purchase takes one round-up.
+ * `created_at`, then the purchase's own order. A purchase takes one round-up. Ties are harmless: purchases that fit
+ * the same round-up need the same round-up amount, so either pairing gives the same totals.
  */
 export function matchRoundUps(rows: RoundUpCandidate[]): Map<string, string> {
   const roundUps = rows
@@ -50,9 +51,9 @@ export function matchRoundUps(rows: RoundUpCandidate[]): Map<string, string> {
           (x.amount + r.amount) % ROUNDUP_UNIT === 0,
       )
       .map((x) => ({ x, day: x.date === r.date ? 0 : 1, apart: Math.abs(x.createdAt.getTime() - r.createdAt.getTime()) }))
-      .sort((a, b) => a.day - b.day || a.apart - b.apart);
-    const [best, next] = ranked;
-    if (!best || (next && next.day === best.day && next.apart === best.apart)) continue;
+      .sort((a, b) => a.day - b.day || a.apart - b.apart || a.x.id.localeCompare(b.x.id));
+    const [best] = ranked;
+    if (!best) continue;
     taken.add(best.x.id);
     links.set(r.id, best.x.id);
   }

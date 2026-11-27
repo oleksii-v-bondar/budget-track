@@ -38,7 +38,7 @@ describe('matchRoundUps', () => {
     expect(matchRoundUps(rows)).toEqual(new Map());
   });
 
-  it('prefers the purchase of the same date, then the closest created; a tie links nothing', () => {
+  it('prefers the purchase of the same date, then the closest created; ties link in a stable order', () => {
     const at = (s: number) => new Date(Date.UTC(2026, 10, 18, 12, 0, s));
     const r = roundUp('R', -375, { createdAt: at(10) });
     expect(matchRoundUps([row('Day before', -1125, { date: '2026-11-17', createdAt: at(10) }), row('Same day', -2125, { createdAt: at(0) }), r])).toEqual(
@@ -47,6 +47,11 @@ describe('matchRoundUps', () => {
     expect(matchRoundUps([row('Far', -1125, { createdAt: at(0) }), row('Close', -2125, { createdAt: at(9) }), r])).toEqual(
       new Map([['R', 'Close']]),
     );
-    expect(matchRoundUps([row('A', -1125, { createdAt: at(10) }), row('B', -2125, { createdAt: at(10) }), r])).toEqual(new Map());
+    // Purchases that fit the same round-up need the same round-up amount, so either pairing gives the same totals:
+    // two such purchases imported together (same created_at) each take one of the two equal round-ups.
+    const r2 = roundUp('R2', -375, { createdAt: at(10) });
+    expect(matchRoundUps([row('A', -1125, { createdAt: at(10) }), row('B', -2125, { createdAt: at(10) }), r, r2])).toEqual(
+      new Map([['R', 'A'], ['R2', 'B']]),
+    );
   });
 });
